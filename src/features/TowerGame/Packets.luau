@@ -23,6 +23,17 @@ return ByteNet.defineNamespace("TowerGame", function()
 			reliabilityType = "reliable",
 		}),
 
+		-- Client -> Server: point the held piece at an absolute X on the play
+		-- plane (PC mouse aiming). Streamed while the mouse moves, throttled to
+		-- Constants.AIM_INTERVAL — only one player aims at a time, so this is a
+		-- handful of packets a second for the whole server.
+		Aim = ByteNet.definePacket({
+			value = ByteNet.struct({
+				x = ByteNet.float32,
+			}),
+			reliabilityType = "reliable",
+		}),
+
 		-- Client -> Server: rotate the held piece a quarter turn.
 		Spin = ByteNet.definePacket({
 			value = ByteNet.struct({
@@ -56,7 +67,10 @@ return ByteNet.defineNamespace("TowerGame", function()
 				blockCount = ByteNet.uint16,
 				shapeId = ByteNet.uint8,
 				nextShapeId = ByteNet.uint8,
-				queueCount = ByteNet.uint8,
+				-- Turn order as user ids, current holder first. The HUD's headshot
+				-- strip rotates this so the holder lands dead center; the entry at
+				-- the end is whoever played immediately before (the cycle wraps).
+				order = ByteNet.array(ByteNet.float64),
 				-- Storm stage: the height to beat, when the clock runs out (server
 				-- time, same deal as turnEndsAt), and how many checkpoint
 				-- platforms have been earned so far.

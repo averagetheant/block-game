@@ -26,7 +26,7 @@ export type State = {
 	blockCount: number,
 	shapeId: number,
 	nextShapeId: number,
-	queueCount: number,
+	order: { number },
 	targetHeight: number,
 	stormEndsAt: number,
 	checkpoints: number,
@@ -45,7 +45,7 @@ local data: State = {
 	blockCount = 0,
 	shapeId = 0,
 	nextShapeId = 0,
-	queueCount = 0,
+	order = {},
 	targetHeight = Constants.STORM_FIRST_TARGET,
 	stormEndsAt = 0,
 	checkpoints = 0,
@@ -98,6 +98,15 @@ function TowerController.nudge(dir: number)
 		-- server to hear the release.
 		Packets.Steer.send({ dir = 0 })
 	end)
+end
+
+-- Absolute placement: put the piece at this X on the play plane. The pointer
+-- controller streams these while the mouse moves; the server clamps.
+function TowerController.aim(x: number)
+	if not TowerController.isMyTurn() then
+		return
+	end
+	Packets.Aim.send({ x = x })
 end
 
 function TowerController.rotate(clockwise: boolean?)

@@ -7,9 +7,12 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
 local UIRegistry = require(ReplicatedStorage.Shared.Boil).UIRegistry
 local HealthSystem = require(ReplicatedStorage.Features.HealthSystem)
+local Constants = require(ReplicatedStorage.Features.HealthSystem.Constants)
 
 -- hp = 100 is the demo value the root previously passed inline; real health
 -- would come from a hook reading replicated state.
-UIRegistry.registerRoot("Health", React.createElement(HealthSystem.UI, { hp = 100 }))
+if Constants.Presentations.screen then
+	UIRegistry.registerRoot("Health", React.createElement(HealthSystem.UI, { hp = 100 }))
+end
 
 return {}

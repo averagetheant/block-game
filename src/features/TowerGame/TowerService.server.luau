@@ -74,15 +74,31 @@ local state = {
 	blockCount = 0,
 	shapeId = 0,
 	nextShapeId = nextShape.id,
-	queueCount = 0,
+	order = {},
 	targetHeight = Constants.STORM_FIRST_TARGET,
 	stormEndsAt = 0,
 	checkpoints = 0,
 }
 
+-- Turn order for the HUD: whoever holds the piece first, then the queue in the
+-- order they'll play. `queue` already rotates the holder to the back on their
+-- turn, so the tail of this list is the player who went immediately before.
+local function buildOrder(): { number }
+	local order = {}
+	if state.holderUserId ~= 0 then
+		table.insert(order, state.holderUserId)
+	end
+	for _, player in queue do
+		if player.UserId ~= state.holderUserId then
+			table.insert(order, player.UserId)
+		end
+	end
+	return order
+end
+
 local function broadcast()
 	state.blockCount = #blocks
-	state.queueCount = #queue
+	state.order = buildOrder()
 	lastBroadcast = os.clock()
 	Packets.State.sendToAll(state)
 end
@@ -216,6 +232,28 @@ local function stepHeld(deltaTime: number)
 	piece.model:PivotTo(piece.pivot)
 end
 
+-- Absolute placement (PC mouse aiming): put the piece where the player is
+-- pointing. Same authority as steering — the client proposes an X, the server
+-- clamps it to the legal range.
+function TowerService.aim(player: Player, x: number)
+	local piece = held
+	if piece == nil or piece.player ~= player or state.phase ~= PHASE.AIMING then
+		return
+	end
+	-- NaN survives math.clamp and would poison the pivot, so reject it here.
+	if x ~= x then
+		return
+	end
+
+	-- Pointing wins over holding; otherwise the two would fight every frame.
+	steerDir = 0
+
+	local position = piece.pivot.Position
+	local targetX = math.clamp(x, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X)
+	piece.pivot = CFrame.new(targetX, position.Y, Constants.PLANE_Z) * piece.pivot.Rotation
+	piece.model:PivotTo(piece.pivot)
+end
+
 function TowerService.spin(player: Player, clockwise: boolean)
 	local piece = held
 	if piece == nil or piece.player ~= player or state.phase ~= PHASE.AIMING then
@@ -311,6 +349,19 @@ local function clampToPlane()
 	end
 end
 
+-- Highest world-Y a part reaches, accounting for rotation: project each half
+-- extent onto the world up axis. Blocks tip in-plane, so their bounding box is
+-- rarely axis-aligned and `Position.Y + Size.Y / 2` would under-read a tilted
+-- piece.
+local function partTopY(part: BasePart): number
+	local cf = part.CFrame
+	local half = part.Size / 2
+	local reach = math.abs(cf.RightVector.Y) * half.X
+		+ math.abs(cf.UpVector.Y) * half.Y
+		+ math.abs(cf.LookVector.Y) * half.Z
+	return cf.Position.Y + reach
+end
+
 -- ---------------------------------------------------------------- the storm --
 --
 -- The pressure mechanic. Every stage names a height to beat before the clock
@@ -320,6 +371,25 @@ end
 -- Anchored checkpoint platforms, tracked separately from `blocks` because they
 -- have no physics but still count toward the tower's top.
 local platforms: { BasePart } = {}
+
+-- Everything the new platform replaces. The checkpoint spawns at the tower's
+-- highest point, so every settled block is underneath it — but a piece dropped
+-- a moment ago could still be falling *above* the line, and that one survives.
+local function clearBlocksBelow(cutoffY: number)
+	for index = #blocks, 1, -1 do
+		local block = blocks[index]
+		local highest = -math.huge
+		for _, part in block.model:GetChildren() do
+			if part:IsA("BasePart") then
+				highest = math.max(highest, partTopY(part))
+			end
+		end
+		if highest <= cutoffY then
+			block.model:Destroy()
+			table.remove(blocks, index)
+		end
+	end
+end
 
 local function spawnCheckpoint(topY: number)
 	local full = Constants.PLATFORM_SIZE
@@ -339,6 +409,12 @@ local function spawnCheckpoint(topY: number)
 	part.Position = Vector3.new(0, topY + full.Y / 2, Constants.PLANE_Z)
 	part.Parent = arena
 	table.insert(platforms, part)
+
+	-- The tower below is now scaffolding: the platform is the new ground, and
+	-- keeping a few hundred settled parts alive under it buys nothing but
+	-- physics cost. Height is measured off the platform's own top, so the
+	-- readout doesn't move when they go.
+	clearBlocksBelow(part.Position.Y - full.Y / 2)
 
 	local grow = TweenService:Create(
 		part,
@@ -395,19 +471,6 @@ local function updateStorm(height: number): boolean
 end
 
 -- --------------------------------------------------------------- the height --
-
--- Highest world-Y a part reaches, accounting for rotation: project each half
--- extent onto the world up axis. Blocks tip in-plane, so their bounding box is
--- rarely axis-aligned and `Position.Y + Size.Y / 2` would under-read a tilted
--- piece.
-local function partTopY(part: BasePart): number
-	local cf = part.CFrame
-	local half = part.Size / 2
-	local reach = math.abs(cf.RightVector.Y) * half.X
-		+ math.abs(cf.UpVector.Y) * half.Y
-		+ math.abs(cf.LookVector.Y) * half.Z
-	return cf.Position.Y + reach
-end
 
 local function updateHeight()
 	local top = baseTopY
@@ -557,6 +620,9 @@ function TowerService.Start()
 
 	Packets.Steer.listen(function(payload, player)
 		TowerService.setSteer(player, payload.dir)
+	end)
+	Packets.Aim.listen(function(payload, player)
+		TowerService.aim(player, payload.x)
 	end)
 	Packets.Spin.listen(function(payload, player)
 		TowerService.spin(player, payload.clockwise)

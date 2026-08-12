@@ -47,15 +47,36 @@ return {
 	-- A touch tap has no key-up, so the HUD buttons send a pulse of this length
 	-- instead: one tap ≈ STEER_SPEED * TOUCH_NUDGE_SECONDS studs of travel.
 	TOUCH_NUDGE_SECONDS = 0.16,
+	-- Mouse aiming (PC): how often a moving mouse streams a target X, and the
+	-- movement below which it isn't worth a packet.
+	AIM_INTERVAL = 1 / 20,
+	AIM_EPSILON = 0.05,
+
+	-- ------------------------------------------------------------------ hud --
+	-- Headshot strip: the current player sits dead center at the larger size,
+	-- everyone else shrinks and fades out either side of them.
+	AVATAR_SIZE = 64,
+	AVATAR_SIZE_INACTIVE = 44,
+	AVATAR_SPACING = 58,
+	AVATAR_FADE_INACTIVE = 0.45,
+	-- Cap on how many players the strip draws (centered on the current one).
+	AVATAR_MAX_SHOWN = 7,
+	-- The controls hint shows for this long, then fades out over its own tween.
+	HINT_SECONDS = 60,
+	HINT_FADE_SECONDS = 1.5,
 
 	-- ---------------------------------------------------------------- storm --
 	-- The pressure mechanic: reach the target height before the clock runs out
 	-- and the tower gains a permanent floor to build on.
-	STORM_SECONDS = 90,
+	--
+	-- Clearing a stage also *wipes the blocks below the new platform* — the
+	-- checkpoint becomes a clean foundation hanging in the air, which is what
+	-- keeps a long session from dragging a thousand physics parts behind it.
+	STORM_SECONDS = 300,
 	-- The first target, in studs above the base. Each cleared stage adds another
 	-- STORM_TARGET_STEP on top of the height that cleared it.
-	STORM_FIRST_TARGET = 32,
-	STORM_TARGET_STEP = 28,
+	STORM_FIRST_TARGET = 120,
+	STORM_TARGET_STEP = 120,
 	-- Checkpoint platform entrance: stretches out from a sliver, glowing white,
 	-- then cools to black.
 	PLATFORM_GROW_SECONDS = 0.45,
@@ -119,5 +140,7 @@ return {
 		hud = true,
 		camera = true,
 		input = true,
+		-- Mouse aiming + click-to-drop. PC only; ignored on touch.
+		pointer = true,
 	},
 }

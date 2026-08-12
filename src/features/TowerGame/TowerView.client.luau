@@ -15,6 +15,7 @@ local React = require(ReplicatedStorage.Packages.React)
 local Boil = require(ReplicatedStorage.Shared.Boil)
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+local ControlsHint = require(ReplicatedStorage.Features.TowerGame.ControlsHint)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
 local TowerHUD = require(ReplicatedStorage.Features.TowerGame.TowerHUD)
 
@@ -50,6 +51,17 @@ return function()
 
 	local holder = if state.holderUserId ~= 0 then Players:GetPlayerByUserId(state.holderUserId) else nil
 
+	-- Which control list the hint shows. Keyboard wins when several are
+	-- available (Studio emulation, a laptop with a touchscreen), because that's
+	-- what the player is most likely actually holding.
+	local touchOnly = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
+	local device: ControlsHint.Device = "pc"
+	if touchOnly then
+		device = "touch"
+	elseif UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
+		device = "gamepad"
+	end
+
 	return React.createElement(TowerHUD, {
 		height = state.height,
 		maxHeight = state.maxHeight,
@@ -57,6 +69,8 @@ return function()
 		phase = state.phase,
 		isMyTurn = TowerController.isMyTurn(),
 		holderName = if holder then holder.DisplayName else nil,
+		holderUserId = state.holderUserId,
+		order = state.order,
 		shapeName = Shapes.nameOf(state.shapeId),
 		nextShapeName = Shapes.nameOf(state.nextShapeId),
 		secondsLeft = clocks.turn,
@@ -65,9 +79,10 @@ return function()
 		stormSecondsLeft = clocks.storm,
 		stormSeconds = Constants.STORM_SECONDS,
 		checkpoints = state.checkpoints,
+		device = device,
 		-- Touch-only: keyboard and gamepad go through ContextActionService, so a
 		-- PC player would just be looking at buttons they never press.
-		showControls = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled,
+		showControls = touchOnly,
 		-- A tap has no release event, so touch steering is a timed pulse rather
 		-- than the press/release the other devices send.
 		onMoveLeft = function()

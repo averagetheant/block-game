@@ -8,7 +8,10 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local React = require(ReplicatedStorage.Packages.React)
 local UIRegistry = require(ReplicatedStorage.Shared.Boil).UIRegistry
 local UIShowcase = require(ReplicatedStorage.Features.UIShowcase)
+local Constants = require(ReplicatedStorage.Features.UIShowcase.Constants)
 
-UIRegistry.registerRoot("HUD", React.createElement(UIShowcase.HUD))
+if Constants.Presentations.screen then
+	UIRegistry.registerRoot("HUD", React.createElement(UIShowcase.HUD))
+end
 
 return {}

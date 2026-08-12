@@ -30,10 +30,12 @@ return {
 		maxHeight = UILabs.Slider(48, 0, 300, 0.5),
 		blockCount = UILabs.Slider(11, 0, 200, 1),
 		secondsLeft = UILabs.Slider(13, 0, Constants.TURN_SECONDS, 1),
-		targetHeight = UILabs.Slider(32, 0, 300, 1),
-		stormSecondsLeft = UILabs.Slider(48, 0, Constants.STORM_SECONDS, 1),
+		targetHeight = UILabs.Slider(120, 0, 600, 1),
+		stormSecondsLeft = UILabs.Slider(148, 0, Constants.STORM_SECONDS, 1),
 		checkpoints = UILabs.Slider(1, 0, 20, 1),
+		playerCount = UILabs.Slider(4, 1, 8, 1),
 		shapeName = UILabs.Choose({ "I", "O", "T", "S", "Z", "J", "L" }),
+		device = UILabs.Choose({ "pc", "touch", "gamepad" }),
 		showControls = true,
 	},
 
@@ -48,6 +50,14 @@ return {
 			phase = Constants.PHASE.IDLE
 		end
 
+		-- Real user ids so the strip pulls real headshots. Any ids would do; these
+		-- are the first few accounts ever created, which are guaranteed to exist.
+		local roster = { 1, 2, 3, 4, 5, 6, 7, 8 }
+		local order = {}
+		for index = 1, math.min(c.playerCount, #roster) do
+			table.insert(order, roster[index])
+		end
+
 		return React.createElement(TowerHUD, {
 			height = c.height,
 			maxHeight = c.maxHeight,
@@ -55,6 +65,9 @@ return {
 			phase = phase,
 			isMyTurn = selected == "aiming (yours)",
 			holderName = "BlockFan42",
+			holderUserId = if phase == Constants.PHASE.AIMING then order[1] or 0 else 0,
+			order = order,
+			device = c.device,
 			shapeName = c.shapeName,
 			nextShapeName = "T",
 			secondsLeft = c.secondsLeft,

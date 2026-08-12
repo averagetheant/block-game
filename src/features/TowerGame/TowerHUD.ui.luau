@@ -4,46 +4,47 @@
 -- controller store, and TowerHUD.story drives it from sliders in UI Labs.
 --
 -- Layout note: this is a full-screen gameplay HUD, not a window, so it hugs the
--- edges — readouts top-center, controls bottom-center — rather than following the
--- centered-by-default rule for feature UIs. Centering a height readout would sit
--- it directly on top of the tower the player is aiming at.
+-- edges rather than following the centered-by-default rule for feature UIs.
+-- Centering a height readout would sit it on top of the tower being aimed at.
 --
--- Everything at the top flows through one Stack rather than being positioned by
--- hand, so a row appearing or disappearing (the turn timer only exists while
--- someone is aiming) reflows the rest instead of leaving a hole.
+--   top center     turn strip → height/best → turn clock → storm clock
+--   bottom left    controls hint (fades out on its own)
+--   bottom center  touch controls (touch devices only)
 --
--- The controls row renders on touch devices only (TowerView decides). PC and
--- console are bound through ContextActionService in TowerInputController, so
--- every platform ends up calling the same intents.
+-- The top column flows through one Stack rather than being positioned by hand,
+-- so a row appearing or disappearing (the turn clock only exists while someone
+-- is aiming) reflows the rest instead of leaving a hole.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
 local Constants = require(script.Parent.Constants)
+local ControlsHint = require(script.Parent.ControlsHint)
+local TurnStrip = require(script.Parent.TurnStrip)
 
 local PHASE = Constants.PHASE
 
-local READOUT_WIDTH = 480
-local READOUT_HEIGHT = 84
-local STATUS_HEIGHT = 44
-local BAR_HEIGHT = 30
-local STAT_TEXT_SIZE = 34
-local STATUS_TEXT_SIZE = 32
-local TOP_MARGIN = 14
-local STACK_GAP = 8
+local COLUMN_WIDTH = 420
+local STATS_HEIGHT = 62
+local STATUS_HEIGHT = 34
+local BAR_HEIGHT = 26
+local STAT_TEXT_SIZE = 30
+local STATUS_TEXT_SIZE = 26
+local TOP_MARGIN = 10
+local STACK_GAP = 6
 
-local BUTTON_SIZE = UDim2.fromOffset(120, 96)
-local DROP_SIZE = UDim2.fromOffset(180, 96)
-local CONTROL_GAP = 14
-local BOTTOM_MARGIN = 24
-local CONTROL_ROW_HEIGHT = 96
-local CONTROL_ROW_WIDTH = 120 * 3 + 180 + CONTROL_GAP * 3
+local BUTTON_SIZE = UDim2.fromOffset(110, 88)
+local DROP_SIZE = UDim2.fromOffset(160, 88)
+local CONTROL_GAP = 12
+local EDGE_MARGIN = 20
+local CONTROL_ROW_HEIGHT = 88
+local CONTROL_ROW_WIDTH = 110 * 3 + 160 + CONTROL_GAP * 3
 
--- Under this many seconds the turn timer bar turns red.
+-- Under this many seconds the turn clock turns red.
 local URGENT_SECONDS = 5
--- Under this many seconds the storm bar turns red.
-local STORM_URGENT_SECONDS = 15
+-- Under this many seconds the storm clock turns red.
+local STORM_URGENT_SECONDS = 30
 
 export type Props = {
 	height: number,
@@ -53,6 +54,9 @@ export type Props = {
 	isMyTurn: boolean,
 	-- Display name of whoever holds the piece; nil when nobody does.
 	holderName: string?,
+	holderUserId: number,
+	-- Turn order as user ids, current holder first.
+	order: { number },
 	shapeName: string,
 	nextShapeName: string,
 	secondsLeft: number,
@@ -62,7 +66,9 @@ export type Props = {
 	stormSecondsLeft: number,
 	stormSeconds: number,
 	checkpoints: number,
+	device: ControlsHint.Device,
 	showControls: boolean?,
+	showHint: boolean?,
 	onMoveLeft: (() -> ())?,
 	onMoveRight: (() -> ())?,
 	onRotate: (() -> ())?,
@@ -74,19 +80,6 @@ local function clock(seconds: number): string
 	return string.format("%d:%02d", whole // 60, whole % 60)
 end
 
-local function stat(layoutOrder: number, label: string, value: string): any
-	return React.createElement(ui.Text, {
-		text = `{label}\n{value}`,
-		textSize = STAT_TEXT_SIZE,
-		weight = Enum.FontWeight.Heavy,
-		shadow = true,
-		xAlignment = Enum.TextXAlignment.Center,
-		yAlignment = Enum.TextYAlignment.Center,
-		size = UDim2.new(1 / 3, 0, 1, 0),
-		layoutOrder = layoutOrder,
-	})
-end
-
 local function statusLine(props: Props): string
 	if props.phase == PHASE.IDLE then
 		return "Waiting for players…"
@@ -95,35 +88,47 @@ local function statusLine(props: Props): string
 		return "Settling…"
 	end
 	if props.isMyTurn then
-		return `Your turn — drop the {props.shapeName}`
+		return `Your turn — {props.shapeName} piece`
 	end
 	return `{props.holderName or "Someone"} is placing the {props.shapeName}`
 end
 
-local function stormLine(props: Props): string
-	local remaining = math.max(props.targetHeight - props.height, 0)
-	if props.checkpoints > 0 then
-		return `STORM {clock(props.stormSecondsLeft)} — {string.format("%.1f", remaining)} to go — {props.checkpoints} floor{if props.checkpoints == 1 then "" else "s"}`
-	end
-	return `STORM {clock(props.stormSecondsLeft)} — {string.format("%.1f", remaining)} to go`
-end
-
 return function(props: Props)
 	local aiming = props.phase == PHASE.AIMING
-	local urgent = aiming and props.secondsLeft <= URGENT_SECONDS
 	local canAct = aiming and props.isMyTurn
+	local toGo = math.max(props.targetHeight - props.height, 0)
 
-	local readouts: { [string]: any } = {
-		Stats = React.createElement(ui.Panel, {
-			size = UDim2.new(1, 0, 0, READOUT_HEIGHT),
+	local column: { [string]: any } = {
+		Turns = React.createElement(TurnStrip, {
+			order = props.order,
+			holderUserId = props.holderUserId,
 			layoutOrder = 1,
+		}),
+
+		-- Height is the score, so it gets the weight; best sits alongside it at
+		-- the same size but dimmer, and the block count moved to the leaderboard.
+		Stats = React.createElement(ui.Panel, {
+			size = UDim2.new(1, 0, 0, STATS_HEIGHT),
+			layoutOrder = 2,
 		}, {
-			Row = React.createElement(ui.Row, {
-				size = UDim2.fromScale(1, 1),
-			}, {
-				Height = stat(1, "HEIGHT", string.format("%.1f", props.height)),
-				Best = stat(2, "BEST", string.format("%.1f", props.maxHeight)),
-				Blocks = stat(3, "BLOCKS", tostring(props.blockCount)),
+			Row = React.createElement(ui.Row, { size = UDim2.fromScale(1, 1) }, {
+				Height = React.createElement(ui.Text, {
+					text = `{string.format("%.1f", props.height)} studs`,
+					textSize = STAT_TEXT_SIZE,
+					weight = Enum.FontWeight.Heavy,
+					shadow = true,
+					xAlignment = Enum.TextXAlignment.Center,
+					size = UDim2.new(0.55, 0, 1, 0),
+					layoutOrder = 1,
+				}),
+				Best = React.createElement(ui.Text, {
+					text = `best {string.format("%.1f", props.maxHeight)}`,
+					textSize = STAT_TEXT_SIZE - 6,
+					color = Color3.fromRGB(184, 192, 214),
+					xAlignment = Enum.TextXAlignment.Center,
+					size = UDim2.new(0.45, 0, 1, 0),
+					layoutOrder = 2,
+				}),
 			}),
 		}),
 
@@ -134,47 +139,55 @@ return function(props: Props)
 			shadow = true,
 			xAlignment = Enum.TextXAlignment.Center,
 			size = UDim2.new(1, 0, 0, STATUS_HEIGHT),
-			layoutOrder = 2,
+			layoutOrder = 3,
 		}),
 
 		Storm = React.createElement(ui.ProgressBar, {
 			progress = math.clamp(props.stormSecondsLeft / math.max(props.stormSeconds, 1), 0, 1),
 			variant = if props.stormSecondsLeft <= STORM_URGENT_SECONDS then "red" else "purple",
-			text = stormLine(props),
+			text = `STORM {clock(props.stormSecondsLeft)} — {string.format("%.0f", toGo)} to go`,
 			showText = true,
 			size = UDim2.new(1, 0, 0, BAR_HEIGHT),
-			layoutOrder = 4,
+			layoutOrder = 5,
 		}),
 	}
 
 	-- The turn clock only exists while someone is aiming, so the bar comes and
 	-- goes with the phase rather than sitting at 0 between turns.
 	if aiming then
-		readouts.Timer = React.createElement(ui.ProgressBar, {
+		column.Timer = React.createElement(ui.ProgressBar, {
 			progress = math.clamp(props.secondsLeft / math.max(props.turnSeconds, 1), 0, 1),
-			variant = if urgent then "red" else "green",
+			variant = if props.secondsLeft <= URGENT_SECONDS then "red" else "green",
 			text = `{math.ceil(props.secondsLeft)}s`,
 			showText = true,
 			size = UDim2.new(1, 0, 0, BAR_HEIGHT),
-			layoutOrder = 3,
+			layoutOrder = 4,
 		})
 	end
 
 	local children: { [string]: any } = {
-		Readouts = React.createElement(ui.Stack, {
+		Column = React.createElement(ui.Stack, {
 			gap = STACK_GAP,
-			size = UDim2.fromOffset(READOUT_WIDTH, 0),
+			size = UDim2.fromOffset(COLUMN_WIDTH, 0),
 			automaticSize = Enum.AutomaticSize.Y,
 			position = UDim2.new(0.5, 0, 0, TOP_MARGIN),
 			anchorPoint = Vector2.new(0.5, 0),
-		}, readouts),
+		}, column),
 	}
+
+	if props.showHint ~= false then
+		children.Hint = React.createElement(ControlsHint, {
+			device = props.device,
+			position = UDim2.new(0, EDGE_MARGIN, 1, -EDGE_MARGIN),
+			anchorPoint = Vector2.new(0, 1),
+		})
+	end
 
 	if props.showControls then
 		children.Controls = React.createElement(ui.Row, {
 			gap = CONTROL_GAP,
 			size = UDim2.fromOffset(CONTROL_ROW_WIDTH, CONTROL_ROW_HEIGHT),
-			position = UDim2.new(0.5, 0, 1, -BOTTOM_MARGIN),
+			position = UDim2.new(0.5, 0, 1, -EDGE_MARGIN),
 			anchorPoint = Vector2.new(0.5, 1),
 		}, {
 			Left = React.createElement(ui.Button, {

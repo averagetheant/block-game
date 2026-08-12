@@ -33,7 +33,8 @@ maximum.
 
 The pressure mechanic, running independently of whose turn it is.
 
-- Each stage names a `targetHeight` and a `STORM_SECONDS` (90) clock.
+- Each stage names a `targetHeight` and a `STORM_SECONDS` (300) clock. Stages are
+  `STORM_TARGET_STEP` (120 studs) apart — roughly 30 blocks of climbing.
 - **Cleared** — the moment the tower reaches the target, a checkpoint platform is
   welded onto the tower at exactly that altitude, the floor count goes up, and the
   next target is set to *the height they actually reached* plus
@@ -48,16 +49,39 @@ line while glowing white (Neon), then cools from white to near-black before
 dropping back to SmoothPlastic. Because the part is anchored, tweening `Size`
 grows it evenly about its center instead of dragging one face.
 
+**Clearing a stage wipes the tower underneath it.** Every block whose highest
+point is at or below the new platform is destroyed, so the checkpoint becomes a
+clean foundation hanging in the air rather than the cap on a growing pile. That's
+what keeps a long session from dragging hundreds of physics parts behind it, and
+the height readout doesn't flinch because the platform's own top is what the
+measurement lands on. A piece still falling *above* the line survives.
+
 Checkpoints are tracked in their own list, separate from `blocks` — they have no
-physics but still count toward the tower's top.
+physics but still count toward the tower's top. Earlier platforms are left where
+they are, so the floors you've cleared stay visible below.
 
 ## Steering
 
-Movement is **continuous, not stepped**. A client sends the direction it's
-*holding* (-1 / 0 / 1) and the server integrates the position at `STEER_SPEED`
-studs per second inside its Heartbeat, clamped to ±`STEER_LIMIT_X`. Two packets
-per swipe, no matter how far the piece travels, and the server stays the only
-thing that decides where a piece is.
+There are two ways to place a piece, and both are live at once.
+
+**Holding a direction** (all devices). Movement is continuous, not stepped: a
+client sends the direction it's *holding* (-1 / 0 / 1) and the server integrates
+the position at `STEER_SPEED` studs per second inside its Heartbeat, clamped to
+±`STEER_LIMIT_X`. Two packets per swipe, no matter how far the piece travels, and
+the server stays the only thing that decides where a piece is.
+
+**Pointing** (PC). `TowerPointerController` casts the mouse into the world each
+frame, solves for where the ray crosses `Z = PLANE_Z`, and streams that X at
+`AIM_INTERVAL`. Click to drop. The two schemes don't fight, by construction:
+
+- the pointer only speaks while the mouse is *actually moving*, so a keyboard
+  player who never touches the mouse is never overridden;
+- the baseline resets when the turn isn't ours, so a piece doesn't snap to a stale
+  pointer position the instant a turn arrives;
+- server-side, an incoming aim clears the held steer direction.
+
+Click-to-drop checks `gameProcessed`, so clicking the HUD's own buttons doesn't
+also release the piece.
 
 Three edge cases the input controller handles, all of which come from "held" being
 a state rather than an event:
@@ -131,12 +155,17 @@ Flip it to `false` if you want walking players; nothing else depends on it.
 Every surface calls the same four `TowerController` intents, so adding an input
 device is additive.
 
-| Intent | Keyboard | Gamepad | Touch |
-| ------ | -------- | ------- | ----- |
+| Intent | Keyboard / mouse | Gamepad | Touch |
+| ------ | ---------------- | ------- | ----- |
 | `setSteer(-1)` | hold A / ← | DPadLeft | **LEFT** button (pulse) |
 | `setSteer(1)` | hold D / → | DPadRight | **RIGHT** button (pulse) |
+| `aim(x)` | move the mouse | — | — |
 | `rotate` | W / ↑ / R | ButtonY | **TURN** button |
-| `drop` | Space / S / ↓ | ButtonA | **DROP** button |
+| `drop` | Space / S / ↓ / left click | ButtonA | **DROP** button |
+
+The HUD shows the matching list in the bottom-left corner for `HINT_SECONDS`
+(60), then fades it out — new players get told once, everyone else gets their
+screen back.
 
 Keyboard and gamepad are bound in `TowerInputController` through
 ContextActionService (one bind covers both). Touch buttons are real skinned
@@ -150,17 +179,44 @@ devices.
 | ---- | ----- | ---- |
 | `Constants.luau` | shared | Every tunable + `Presentations` gating |
 | `Shapes.luau` | shared | The seven tetrominoes as grid cells (ids are wire-stable) |
-| `Packets.luau` | shared | ByteNet: `Steer`, `Spin`, `Release`, `State` |
+| `Packets.luau` | shared | ByteNet: `Steer`, `Aim`, `Spin`, `Release`, `State` |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
 | `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
-| `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the four intents |
+| `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the intents |
 | `TowerInputController.client.luau` | client | Keyboard + gamepad binds |
+| `TowerPointerController.client.luau` | client | Mouse aiming + click-to-drop (PC) |
 | `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude |
-| `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the countdown |
-| `TowerHUD.ui.luau` | shared | Dumb HUD (height / best / blocks, status, timer, touch controls) |
-| `TowerHUD.story.luau` | shared | UI Labs story — every prop on a slider, including the clock |
+| `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the clocks, picks the device |
+| `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls) |
+| `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
+| `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
+| `TowerHUD.story.luau` | shared | UI Labs story — every prop on a slider, including both clocks |
 | `TowerPresentation.client.luau` | client | Registers the HUD as a UIRegistry **root** |
+
+## The HUD
+
+```
+                    ( o ) (O) ( o )      turn strip — current player centered
+                  [  24.5 studs  best 60.0  ]
+                       Your turn — T piece
+                  [======== 14s ==========]  turn clock (aiming only)
+                  [== STORM 3:42 — 95 to go ==]
+  Move — A / D…                                    [LEFT][TURN][RIGHT][DROP]
+  (fades after 60s)                                     (touch only)
+```
+
+The turn strip positions each headshot by its offset from the current player
+rather than through a layout, so the row *slides* around the current player as
+turns cycle instead of re-flowing. `order` arrives current-player-first and the
+strip rotates it so the holder lands mid-list — which puts whoever just played on
+the left and the upcoming queue on the right.
+
+Boil's demo surfaces are switched off rather than deleted, via each feature's own
+`Presentations` flag: `UIShowcase` (the left sidebar and the window frames it
+hosts, including the Notes and Settings windows) and `HealthSystem` (the HP
+badge). Flip either flag back on to get them back; their UI Labs stories still
+work regardless.
 
 ## Packets
 
@@ -182,8 +238,10 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `SETTLE_SECONDS` | Pause between turns |
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `SPAWN_CLEARANCE` | Drop height above the tower top |
-| `STORM_SECONDS` | The stage clock (90) |
-| `STORM_FIRST_TARGET`, `STORM_TARGET_STEP` | The first bar, and how much each cleared stage adds |
+| `STORM_SECONDS` | The stage clock (300) |
+| `STORM_FIRST_TARGET`, `STORM_TARGET_STEP` | The first bar, and how much each cleared stage adds (both 120) |
+| `AVATAR_*` | Turn-strip sizing, spacing and fade |
+| `HINT_SECONDS`, `HINT_FADE_SECONDS` | How long the controls list stays, and how fast it goes |
 | `PLATFORM_SIZE` | Size of the base *and* every checkpoint — they're the same slab |
 | `PLATFORM_GROW_SECONDS`, `PLATFORM_FADE_SECONDS` | The checkpoint entrance tween |
 | `BLOCK_PHYSICS` | Friction / density / bounce of every block |

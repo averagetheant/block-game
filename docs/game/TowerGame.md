@@ -288,20 +288,13 @@ devices.
   (fades after 60s)                            $ 1,250   (touch only)
 ```
 
-The **turn clock is a ring** (`RadialTimer`), sitting beside the height panel and
-only existing while someone is aiming — the panel tweens wider to fill the gap
-between turns. The ring is drawn by a `UIStroke` on a hollow circle, so the
-middle of the dial stays see-through and the gradient cut applies to the ring
-itself rather than to a fill that isn't there.
-
-Roblox has no radial fill, and the obvious way to fake one does not work:
-**`ClipsDescendants` is ignored on anything inside a rotated ancestor**, so
-clipping a circle with a rotated frame silently does nothing and you get a full
-circle back. The fix is to put the rotation somewhere that isn't a frame — a
-`UIGradient` whose alpha steps hard from opaque to invisible at its midpoint cuts
-the disc along a diameter at any angle while every frame stays unrotated. Two
-such half-discs, each inside an ordinary (working) half-width clip, intersect
-into the wedge. Nothing animates per frame; two gradient rotations change.
+The **turn clock is a plain circle** (`RadialTimer`), sitting beside the height
+panel and only existing while someone is aiming — the panel tweens wider to fill
+the gap between turns. Two radial-fill treatments were tried first — a filling
+pie and a hollow ring, both built from `UIGradient` hacks to fake a radial sweep
+since Roblox has no native one — and neither read well in practice, so the dial
+is a solid circle with the seconds label on top; its colour still shifts red
+under `URGENT_SECONDS`.
 
 The **progress line** (`ProgressLine`) measures *this leg of the climb only* —
 from `zoneBaseHeight` (where the current zone started) to `targetHeight` — so a

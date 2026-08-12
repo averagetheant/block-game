@@ -4,10 +4,12 @@
 -- place (Agus_Fellini2), so the ids here are the ones that kit actually ships —
 -- don't invent new ones without checking they resolve, or a skin goes silent.
 --
--- Note the skins change *material and color only*, never geometry. The ASMR kit's
--- meshes (a squishy Needoh, a stick of butter) are lovely but they're not cubes,
--- and a tetromino cell has to be a cube for the stacking to read honestly. The
--- squish is carried by the sound.
+-- Note the skins change *material and sound only*, never geometry and no longer
+-- colour — every piece rolls its own random hue (see TowerService.randomColor),
+-- so `color` here is only a fallback for anything that renders a skin outside
+-- the game, like a story. The ASMR kit's meshes (a squishy Needoh, a stick of
+-- butter) are lovely but they're not cubes, and a tetromino cell has to be a
+-- cube for the stacking to read honestly. The squish is carried by the sound.
 --
 -- `id` goes over the wire and is what the HUD would look up, so ids are stable —
 -- append, don't renumber.

@@ -192,18 +192,25 @@ local function attachSound(part: BasePart, name: string, soundId: string, volume
 	return sound
 end
 
+-- A fresh colour per piece. Random hue at a fixed saturation and value, rather
+-- than a random RGB triple, so every block is vivid and none come out muddy or
+-- washed out against the sky.
+local function randomColor(): Color3
+	return Color3.fromHSV(math.random(), 0.68, 0.98)
+end
+
 local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType: BlockTypes.BlockType?): (Model, BasePart)
 	local model = Instance.new("Model")
 	model.Name = `Piece_{shape.name}`
+	-- The skin keeps its material and its sounds; only the colour is rolled.
+	local color = randomColor()
 
 	local root: BasePart? = nil
 	for index, cell in shape.cells do
 		local part = Instance.new("Part")
 		part.Name = `Cell{index}`
 		part.Size = Vector3.new(Constants.BLOCK_SIZE, Constants.BLOCK_SIZE, Constants.BLOCK_DEPTH)
-		-- The skin owns the look; the shape's own color is only a fallback tint
-		-- blended out entirely here. Shape is read from silhouette, not color.
-		part.Color = skin.color
+		part.Color = color
 		part.Material = skin.material
 		part.Transparency = skin.transparency or 0
 		part.TopSurface = Enum.SurfaceType.Smooth

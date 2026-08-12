@@ -26,6 +26,8 @@ export type Props = {
 	color: Color3,
 	trackColor: Color3?,
 	size: number,
+	-- Ring width. Defaults to a fraction of `size` so the dial scales as one.
+	thickness: number?,
 	layoutOrder: number?,
 	-- Rendered in the middle of the dial.
 	label: string?,
@@ -41,7 +43,7 @@ local HALF_CUT = NumberSequence.new({
 })
 
 -- One half of the dial. `degrees` is how much of this half's 180° shows.
-local function halfDisc(side: "left" | "right", degrees: number, color: Color3): any
+local function halfDisc(side: "left" | "right", degrees: number, color: Color3, thickness: number): any
 	local isRight = side == "right"
 	-- The gradient's cut line starts along the vertical (twelve o'clock) and
 	-- turns with the sweep. The right half sweeps down from the top; the left
@@ -58,16 +60,25 @@ local function halfDisc(side: "left" | "right", degrees: number, color: Color3):
 	}, {
 		Disc = React.createElement("Frame", {
 			-- Full circle, positioned so its centre sits on the clip's inner edge
-			-- (the middle of the dial).
+			-- (the middle of the dial). Transparent inside: the ring is drawn by
+			-- the stroke, so the middle of the dial stays see-through.
 			Size = UDim2.fromScale(2, 1),
 			Position = UDim2.fromScale(if isRight then 0 else -1, 0),
-			BackgroundColor3 = color,
+			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, {
 			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-			Cut = React.createElement("UIGradient", {
-				Rotation = rotation,
-				Transparency = HALF_CUT,
+			Ring = React.createElement("UIStroke", {
+				Thickness = thickness,
+				Color = color,
+				ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+			}, {
+				-- The gradient lives on the stroke, so the cut applies to the ring
+				-- itself rather than to a fill that isn't there.
+				Cut = React.createElement("UIGradient", {
+					Rotation = rotation,
+					Transparency = HALF_CUT,
+				}),
 			}),
 		}),
 	})
@@ -76,6 +87,7 @@ end
 return function(props: Props)
 	local progress = math.clamp(props.progress, 0, 1)
 	local sweep = progress * 360
+	local thickness = props.thickness or math.max(math.floor(props.size * 0.16), 3)
 
 	return React.createElement("Frame", {
 		Size = UDim2.fromOffset(props.size, props.size),
@@ -83,31 +95,23 @@ return function(props: Props)
 		BorderSizePixel = 0,
 		LayoutOrder = props.layoutOrder,
 	}, {
-		-- The unfilled remainder, so an empty dial still reads as a dial.
+		-- The unspent part of the ring, so an empty dial still reads as a dial.
 		Track = React.createElement("Frame", {
-			Size = UDim2.fromScale(1, 1),
-			BackgroundColor3 = props.trackColor or Color3.fromRGB(28, 30, 40),
-			BackgroundTransparency = 0.35,
-			BorderSizePixel = 0,
-		}, {
-			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-		}),
-
-		Right = halfDisc("right", math.min(sweep, 180), props.color),
-		Left = halfDisc("left", math.max(sweep - 180, 0), props.color),
-
-		Ring = React.createElement("Frame", {
 			Size = UDim2.fromScale(1, 1),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			ZIndex = 2,
 		}, {
 			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
 			Stroke = React.createElement("UIStroke", {
-				Thickness = ui.theme.thinStrokeThickness,
-				Color = Color3.fromRGB(12, 12, 18),
+				Thickness = thickness,
+				Color = props.trackColor or Color3.fromRGB(28, 30, 40),
+				Transparency = 0.45,
+				ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 			}),
 		}),
+
+		Right = halfDisc("right", math.min(sweep, 180), props.color, thickness),
+		Left = halfDisc("left", math.max(sweep - 180, 0), props.color, thickness),
 
 		Label = if props.label
 			then React.createElement(ui.Text, {

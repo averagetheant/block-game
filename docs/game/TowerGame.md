@@ -118,8 +118,12 @@ feel" never becomes "the client owns the game".
 
 Every piece rolls two independent things at spawn.
 
-**Skins** (`BlockSkins.luau`) are pure flavour — a color, a material, and the
-sounds it makes. They come from the ASMR kit in the place, so the asset ids there
+Colour is **not** one of them: every piece rolls its own random hue at a fixed
+saturation and value, so blocks are vivid and varied without any coming out
+muddy. Shape is read from silhouette, not colour.
+
+**Skins** (`BlockSkins.luau`) are pure flavour — a material and the sounds it
+makes. They come from the ASMR kit in the place, so the asset ids there
 are ones that kit actually ships; don't invent new ones without checking they
 resolve, or a skin goes silent.
 
@@ -284,9 +288,11 @@ devices.
   (fades after 60s)                            $ 1,250   (touch only)
 ```
 
-The **turn clock is a pie** (`RadialTimer`), sitting beside the height panel and
+The **turn clock is a ring** (`RadialTimer`), sitting beside the height panel and
 only existing while someone is aiming — the panel tweens wider to fill the gap
-between turns.
+between turns. The ring is drawn by a `UIStroke` on a hollow circle, so the
+middle of the dial stays see-through and the gradient cut applies to the ring
+itself rather than to a fill that isn't there.
 
 Roblox has no radial fill, and the obvious way to fake one does not work:
 **`ClipsDescendants` is ignored on anything inside a rotated ancestor**, so

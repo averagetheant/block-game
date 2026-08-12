@@ -99,6 +99,7 @@ local state = {
 	nextShapeId = nextShape.id,
 	order = {},
 	targetHeight = Constants.STORM_FIRST_TARGET,
+	zoneBaseHeight = 0,
 	stormEndsAt = 0,
 	checkpoints = 0,
 	zoneId = Zones.DEFAULT_ID,
@@ -406,6 +407,9 @@ local function detonateBlock(block: Block)
 	explosion.DestroyJointRadiusPercent = 0
 	explosion.Parent = workspace
 
+	-- On a throwaway marker rather than the block: the block is about to be
+	-- destroyed, and a sound parented to it would go with it.
+	Sfx.playAtPosition("Explosion", explosion.Position)
 	block.model:Destroy()
 end
 
@@ -701,6 +705,7 @@ local function resetRun()
 	stormGap = Constants.STORM_FIRST_TARGET
 	state.checkpoints = 0
 	state.height = 0
+	state.zoneBaseHeight = 0
 	state.targetHeight = Constants.STORM_FIRST_TARGET
 	-- Back to clear skies; a fresh run shouldn't inherit the last one's weather.
 	state.zoneId = Zones.DEFAULT_ID
@@ -736,7 +741,9 @@ local function updateStorm(height: number): boolean
 		stormGap += Constants.STORM_GAP_GROWTH
 		-- The next bar is measured from what they actually reached, not from the
 		-- target they just cleared, so overshooting doesn't make the next stage
-		-- trivial.
+		-- trivial. That reached height is also where the progress line now
+		-- starts from.
+		state.zoneBaseHeight = height
 		state.targetHeight = height + stormGap
 		state.stormEndsAt = now + Constants.STORM_SECONDS
 		return true

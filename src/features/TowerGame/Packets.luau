@@ -62,6 +62,10 @@ return ByteNet.defineNamespace("TowerGame", function()
 				-- time, same deal as turnEndsAt), and how many checkpoint
 				-- platforms have been earned so far.
 				targetHeight = ByteNet.float32,
+				-- Height the current stage started from. The progress line runs
+				-- from here to targetHeight, so it measures *this leg* of the
+				-- climb rather than the whole tower.
+				zoneBaseHeight = ByteNet.float32,
 				stormEndsAt = ByteNet.float64,
 				checkpoints = ByteNet.uint8,
 				-- Current zone (see Zones.luau) plus which of the normal skies is

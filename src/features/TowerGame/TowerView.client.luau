@@ -104,6 +104,7 @@ return function()
 		secondsLeft = clocks.turn,
 		turnSeconds = Constants.TURN_SECONDS,
 		targetHeight = state.targetHeight,
+		zoneBaseHeight = state.zoneBaseHeight,
 		stormSecondsLeft = clocks.storm,
 		stormSeconds = Constants.STORM_SECONDS,
 		checkpoints = state.checkpoints,

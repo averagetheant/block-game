@@ -276,14 +276,31 @@ devices.
 ## The HUD
 
 ```
-                    ( o ) (O) ( o )      turn strip — current player centered
-                  [  24.5 studs  best 60.0  ]
-                       Your turn — T piece
-                  [======== 14s ==========]  turn clock (aiming only)
-                  [== STORM 3:42 — 95 to go ==]
-  Move — A / D…                                    [LEFT][TURN][RIGHT][DROP]
-  (fades after 60s)                                     (touch only)
+                 ( o ) (O) ( o )           turn strip — current player centered
+              [ 24.5 studs  best 60.0 ] (◕) height, with the turn clock beside it
+              ●────────●────────────○      progress: start, tower, next zone
+                   3:42 until storm!
+  Move — A / D…        Your turn — T piece            [LEFT][TURN][RIGHT][DROP]
+  (fades after 60s)                            $ 1,250   (touch only)
 ```
+
+The **turn clock is a pie** (`RadialTimer`), sitting beside the height panel and
+only existing while someone is aiming — the panel widens to fill the gap between
+turns. Roblox has no radial fill, so it's the standard two-halves construction:
+the circle is split down the middle into clipping frames, each holding a
+half-disc that pivots about the centre. A rotated circle looks identical to an
+unrotated one, so the rotation has to be applied to a *half* disc, and cutting
+one without an image asset means clipping a whole one — hence four nested frames
+per side. Nothing animates per frame; two Rotation numbers change.
+
+The **progress line** (`ProgressLine`) measures *this leg of the climb only* —
+from `zoneBaseHeight` (where the current zone started) to `targetHeight` — so a
+run always begins at the left dot no matter how tall the tower already is. The
+tower is a dot for now; it's a separate element rather than a bar fill precisely
+so it can grow into a little stack later.
+
+The status line lives at the **bottom**, where the player is already looking when
+they're about to place, and lifts clear of the touch controls when those show.
 
 The turn strip positions each headshot by its offset from the current player
 rather than through a layout, so the row *slides* around the current player as
@@ -390,6 +407,7 @@ bills are plain instances handed to TweenService that clean up after themselves.
 | `YourTurn` | just you | `TowerFeedbackController` |
 | `ZoneReached` | just you | `TowerZoneController` |
 | `CashSound` | just you | on the cash value rising |
+| `Explosion` | everyone, positionally | on a throwaway marker, since the block is about to be destroyed |
 
 `Sfx.luau` clones from `Assets.Sounds` rather than referencing raw asset ids, so
 re-tuning a cue's volume or pitch is a Studio edit and not a code change. A
@@ -429,8 +447,8 @@ game, not the history.
 - **A very short keyboard tap moves nothing.** Steering is a held state, so a press
   and release inside a single frame nets zero movement. Human taps (50 ms+) move
   about a stud; it only shows up with synthetic input.
-- **No explosion sound.** The ASMR kit has nothing that fits and inventing an asset
-  id gets you silence, so the detonation is currently seen and not heard.
+- **The tower marker is a plain dot.** `ProgressLine` is built so it can become a
+  little stack without touching anything else.
 - **Special zones are implemented but unobserved.** Two checkpoints in a row rolled
   normal during testing (a 4-in-10 shot each), so retro / snowy / stormy have not
   been seen end-to-end in a real run. The assets they name all exist and the code

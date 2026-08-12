@@ -22,6 +22,8 @@ local ui = require(ReplicatedStorage.Shared.Boil).ui
 local CashFly = require(script.Parent.CashFly)
 local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
+local ProgressLine = require(script.Parent.ProgressLine)
+local RadialTimer = require(script.Parent.RadialTimer)
 local TurnStrip = require(script.Parent.TurnStrip)
 local Zones = require(script.Parent.Zones)
 
@@ -30,7 +32,6 @@ local PHASE = Constants.PHASE
 local COLUMN_WIDTH = 420
 local STATS_HEIGHT = 62
 local STATUS_HEIGHT = 34
-local BAR_HEIGHT = 26
 local STAT_TEXT_SIZE = 30
 local STATUS_TEXT_SIZE = 26
 local TOP_MARGIN = 10
@@ -45,6 +46,7 @@ local CONTROL_ROW_WIDTH = 110 * 3 + 160 + CONTROL_GAP * 3
 
 local STORM_LABEL_HEIGHT = 24
 local STORM_LABEL_TEXT_SIZE = 22
+local PROGRESS_HEIGHT = 26
 local CASH_WIDTH = 190
 local CASH_HEIGHT = 54
 local CASH_TEXT_SIZE = 28
@@ -77,6 +79,8 @@ export type Props = {
 	turnSeconds: number,
 	-- Storm stage: the height to beat, the clock, and floors earned so far.
 	targetHeight: number,
+	-- Height this leg of the climb started at; the progress line runs from here.
+	zoneBaseHeight: number,
 	stormSecondsLeft: number,
 	stormSeconds: number,
 	checkpoints: number,
@@ -115,7 +119,6 @@ end
 return function(props: Props)
 	local aiming = props.phase == PHASE.AIMING
 	local canAct = aiming and props.isMyTurn
-	local toGo = math.max(props.targetHeight - props.height, 0)
 
 	local column: { [string]: any } = {
 		Turns = React.createElement(TurnStrip, {
@@ -124,57 +127,63 @@ return function(props: Props)
 			layoutOrder = 1,
 		}),
 
-		-- Height is the score, so it gets the weight; best sits alongside it at
-		-- the same size but dimmer, and the block count moved to the leaderboard.
-		Stats = React.createElement(ui.Panel, {
+		-- Height, with the turn clock beside it. The dial only exists while
+		-- someone is aiming, so between turns the panel takes the full width.
+		HeightRow = React.createElement(ui.Row, {
+			gap = 10,
 			size = UDim2.new(1, 0, 0, STATS_HEIGHT),
 			layoutOrder = 2,
 		}, {
-			Row = React.createElement(ui.Row, { size = UDim2.fromScale(1, 1) }, {
-				Height = React.createElement(ui.Text, {
-					text = `{string.format("%.1f", props.height)} studs`,
-					textSize = STAT_TEXT_SIZE,
-					weight = Enum.FontWeight.Heavy,
-					shadow = true,
-					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(0.55, 0, 1, 0),
-					layoutOrder = 1,
-				}),
-				Best = React.createElement(ui.Text, {
-					text = `best {string.format("%.1f", props.maxHeight)}`,
-					textSize = STAT_TEXT_SIZE - 6,
-					color = Color3.fromRGB(184, 192, 214),
-					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(0.45, 0, 1, 0),
-					layoutOrder = 2,
+			Stats = React.createElement(ui.Panel, {
+				size = UDim2.new(1, if aiming then -(STATS_HEIGHT + 10) else 0, 0, STATS_HEIGHT),
+				layoutOrder = 1,
+			}, {
+				Row = React.createElement(ui.Row, { size = UDim2.fromScale(1, 1) }, {
+					Height = React.createElement(ui.Text, {
+						text = `{string.format("%.1f", props.height)} studs`,
+						textSize = STAT_TEXT_SIZE,
+						weight = Enum.FontWeight.Heavy,
+						shadow = true,
+						xAlignment = Enum.TextXAlignment.Center,
+						size = UDim2.new(0.55, 0, 1, 0),
+						layoutOrder = 1,
+					}),
+					Best = React.createElement(ui.Text, {
+						text = `best {string.format("%.1f", props.maxHeight)}`,
+						textSize = STAT_TEXT_SIZE - 6,
+						color = Color3.fromRGB(184, 192, 214),
+						xAlignment = Enum.TextXAlignment.Center,
+						size = UDim2.new(0.45, 0, 1, 0),
+						layoutOrder = 2,
+					}),
 				}),
 			}),
+
+			Timer = if aiming
+				then React.createElement(RadialTimer, {
+					progress = props.secondsLeft / math.max(props.turnSeconds, 1),
+					color = if props.secondsLeft <= URGENT_SECONDS
+						then Color3.fromRGB(232, 96, 96)
+						else Color3.fromRGB(112, 214, 122),
+					size = STATS_HEIGHT,
+					label = tostring(math.ceil(props.secondsLeft)),
+					layoutOrder = 2,
+				})
+				else nil,
 		}),
 
-		Status = React.createElement(ui.Text, {
-			text = statusLine(props),
-			textSize = STATUS_TEXT_SIZE,
-			weight = Enum.FontWeight.Bold,
-			shadow = true,
-			xAlignment = Enum.TextXAlignment.Center,
-			size = UDim2.new(1, 0, 0, STATUS_HEIGHT),
-			layoutOrder = 3,
-		}),
-
-		-- The bar is *progress toward the next checkpoint*, not time. Height is
-		-- the thing the player controls, so that's what fills; the clock is the
-		-- pressure, so it sits underneath as a plain countdown.
+		-- The climb to the next checkpoint, as a journey between two dots rather
+		-- than a bar: it measures this leg only, so every zone starts at the left.
 		Storm = React.createElement(ui.Stack, {
 			gap = 2,
-			size = UDim2.new(1, 0, 0, BAR_HEIGHT + STORM_LABEL_HEIGHT + 2),
-			layoutOrder = 5,
+			size = UDim2.new(1, 0, 0, PROGRESS_HEIGHT + STORM_LABEL_HEIGHT + 2),
+			layoutOrder = 3,
 		}, {
-			Bar = React.createElement(ui.ProgressBar, {
-				progress = math.clamp(props.height / math.max(props.targetHeight, 1), 0, 1),
-				variant = if props.stormSecondsLeft <= STORM_URGENT_SECONDS then "red" else "green",
-				text = `{string.format("%.0f", props.height)} / {string.format("%.0f", props.targetHeight)}`,
-				showText = true,
-				size = UDim2.new(1, 0, 0, BAR_HEIGHT),
+			Line = React.createElement(ProgressLine, {
+				from = props.zoneBaseHeight,
+				current = props.height,
+				to = props.targetHeight,
+				size = UDim2.new(1, 0, 0, PROGRESS_HEIGHT),
 				layoutOrder = 1,
 			}),
 			Countdown = React.createElement(ui.Text, {
@@ -192,19 +201,6 @@ return function(props: Props)
 		}),
 	}
 
-	-- The turn clock only exists while someone is aiming, so the bar comes and
-	-- goes with the phase rather than sitting at 0 between turns.
-	if aiming then
-		column.Timer = React.createElement(ui.ProgressBar, {
-			progress = math.clamp(props.secondsLeft / math.max(props.turnSeconds, 1), 0, 1),
-			variant = if props.secondsLeft <= URGENT_SECONDS then "red" else "green",
-			text = `{math.ceil(props.secondsLeft)}s`,
-			showText = true,
-			size = UDim2.new(1, 0, 0, BAR_HEIGHT),
-			layoutOrder = 4,
-		})
-	end
-
 	local children: { [string]: any } = {
 		Column = React.createElement(ui.Stack, {
 			gap = STACK_GAP,
@@ -213,6 +209,20 @@ return function(props: Props)
 			position = UDim2.new(0.5, 0, 0, TOP_MARGIN),
 			anchorPoint = Vector2.new(0.5, 0),
 		}, column),
+
+		-- Whose turn it is, and what they're holding — down at the bottom where
+		-- the player's attention already is when they're about to place.
+		Status = React.createElement(ui.Text, {
+			text = statusLine(props),
+			textSize = STATUS_TEXT_SIZE,
+			weight = Enum.FontWeight.Bold,
+			shadow = true,
+			xAlignment = Enum.TextXAlignment.Center,
+			size = UDim2.new(0, COLUMN_WIDTH, 0, STATUS_HEIGHT),
+			-- Clears the touch control row when there is one.
+			position = UDim2.new(0.5, 0, 1, -(if props.showControls then CONTROL_ROW_HEIGHT + EDGE_MARGIN * 2 else EDGE_MARGIN)),
+			anchorPoint = Vector2.new(0.5, 1),
+		}),
 	}
 
 	-- Bottom-right, opposite the controls hint. The bills fly here.

@@ -79,4 +79,39 @@ function Sfx.playAt(name: string, part: BasePart, volumeScale: number?)
 	end)
 end
 
+-- Positional one-shot that outlives whatever caused it. Parents the sound to a
+-- throwaway anchored marker, so a blast still sounds from where it happened even
+-- though the block that exploded is already gone.
+function Sfx.playAtPosition(name: string, position: Vector3, volumeScale: number?)
+	local source = template(name)
+	if source == nil then
+		return
+	end
+
+	local marker = Instance.new("Part")
+	marker.Name = "SfxMarker"
+	marker.Anchored = true
+	marker.CanCollide = false
+	marker.CanQuery = false
+	marker.CanTouch = false
+	marker.Transparency = 1
+	marker.Size = Vector3.one
+	marker.Position = position
+	marker.Parent = workspace
+
+	local sound = source:Clone()
+	sound.Volume = source.Volume * (volumeScale or 1)
+	sound.RollOffMaxDistance = Constants.SOUND_RANGE
+	sound.RollOffMode = Enum.RollOffMode.InverseTapered
+	sound.Parent = marker
+	sound:Play()
+
+	sound.Ended:Once(function()
+		marker:Destroy()
+	end)
+	task.delay(15, function()
+		marker:Destroy()
+	end)
+end
+
 return Sfx

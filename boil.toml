@@ -1,0 +1,6 @@
+[project]
+name = "block-game"
+boil = "0.1.0"
+
+[registries]
+default = "https://github.com/averagetheant/boil-index"

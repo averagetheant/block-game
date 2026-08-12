@@ -76,51 +76,23 @@ function TowerController.stormSecondsLeft(): number
 	return math.max(0, data.stormEndsAt - workspace:GetServerTimeNow())
 end
 
--- Steering is a held direction, not a step: -1, 0 or 1. The server integrates
--- the movement, so this fires twice per swipe (press and release) rather than
--- once per stud.
-function TowerController.setSteer(dir: number)
+-- Report where the holder has the piece. TowerAimController owns the numbers and
+-- the cadence; this is just the wire. The server clamps whatever arrives.
+function TowerController.place(x: number, turns: number)
 	if not TowerController.isMyTurn() then
 		return
 	end
-	Packets.Steer.send({ dir = dir })
+	Packets.Place.send({ x = x, turns = turns })
 end
 
--- Touch has no key-up, so a tap sends a fixed-length pulse instead. One tap is
--- worth STEER_SPEED × TOUCH_NUDGE_SECONDS studs of glide.
-function TowerController.nudge(dir: number)
+-- Drop it, at this placement. Carrying the placement with the drop is what makes
+-- the piece land where the holder saw it rather than where the last stream
+-- update happened to reach.
+function TowerController.release(x: number, turns: number)
 	if not TowerController.isMyTurn() then
 		return
 	end
-	Packets.Steer.send({ dir = dir })
-	task.delay(Constants.TOUCH_NUDGE_SECONDS, function()
-		-- Not gated on isMyTurn: if the turn ended mid-pulse we still want the
-		-- server to hear the release.
-		Packets.Steer.send({ dir = 0 })
-	end)
-end
-
--- Absolute placement: put the piece at this X on the play plane. The pointer
--- controller streams these while the mouse moves; the server clamps.
-function TowerController.aim(x: number)
-	if not TowerController.isMyTurn() then
-		return
-	end
-	Packets.Aim.send({ x = x })
-end
-
-function TowerController.rotate(clockwise: boolean?)
-	if not TowerController.isMyTurn() then
-		return
-	end
-	Packets.Spin.send({ clockwise = clockwise ~= false })
-end
-
-function TowerController.drop()
-	if not TowerController.isMyTurn() then
-		return
-	end
-	Packets.Release.send({ instant = true })
+	Packets.Release.send({ x = x, turns = turns })
 end
 
 function TowerController.Start()

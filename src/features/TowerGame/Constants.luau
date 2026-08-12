@@ -26,6 +26,10 @@ return {
 	-- camera needs that number and can't get it from BASE_TAG: tags applied at
 	-- runtime on the server do NOT replicate, while attributes do.
 	BASE_TOP_ATTRIBUTE = "BaseTopY",
+	-- Attribute the server stamps on the held piece with its owner's user id. The
+	-- holder's client uses it to find the piece it should hide and shadow with a
+	-- local preview; everyone else just watches the real thing.
+	HELD_ATTRIBUTE = "HolderUserId",
 	-- Nobody walks around in a stationary-camera stacking game, so characters are
 	-- off by default. Flip to false to get avatars back (they spawn at the world
 	-- origin and are unrelated to the tower).
@@ -47,10 +51,28 @@ return {
 	-- A touch tap has no key-up, so the HUD buttons send a pulse of this length
 	-- instead: one tap ≈ STEER_SPEED * TOUCH_NUDGE_SECONDS studs of travel.
 	TOUCH_NUDGE_SECONDS = 0.16,
-	-- Mouse aiming (PC): how often a moving mouse streams a target X, and the
-	-- movement below which it isn't worth a packet.
-	AIM_INTERVAL = 1 / 20,
+	-- Placement streaming: the holder's client owns the *feel* of aiming and
+	-- reports where the piece is. This is how often that report goes out (the
+	-- rate spectators see the piece move at) and the movement below which it
+	-- isn't worth a packet.
+	AIM_INTERVAL = 1 / 30,
 	AIM_EPSILON = 0.05,
+
+	-- ----------------------------------------------------------------- blocks --
+	-- Impact sounds: below this speed a collision is a nudge, not a landing.
+	IMPACT_MIN_SPEED = 12,
+	-- Speed at which an impact is at full volume.
+	IMPACT_LOUD_SPEED = 70,
+	-- One impact sound per block per this many seconds, so a piece skittering
+	-- down a tower doesn't machine-gun the kit.
+	IMPACT_COOLDOWN = 0.25,
+	-- Rolloff for block sounds, in studs.
+	SOUND_RANGE = 140,
+	-- Explosion blocks.
+	EXPLOSION_RADIUS = 22,
+	EXPLOSION_PRESSURE = 260000,
+	-- Glue blocks: how far a contact can be and still get welded.
+	GLUE_RADIUS = 6,
 
 	-- ------------------------------------------------------------------ hud --
 	-- Headshot strip: the current player sits dead center at the larger size,
@@ -67,16 +89,25 @@ return {
 
 	-- ---------------------------------------------------------------- storm --
 	-- The pressure mechanic: reach the target height before the clock runs out
-	-- and the tower gains a permanent floor to build on.
+	-- and the tower gains a permanent floor to build on. Miss it and the storm
+	-- takes the whole tower — see STORM_BLAST_* below.
 	--
 	-- Clearing a stage also *wipes the blocks below the new platform* — the
 	-- checkpoint becomes a clean foundation hanging in the air, which is what
 	-- keeps a long session from dragging a thousand physics parts behind it.
 	STORM_SECONDS = 300,
-	-- The first target, in studs above the base. Each cleared stage adds another
-	-- STORM_TARGET_STEP on top of the height that cleared it.
-	STORM_FIRST_TARGET = 120,
-	STORM_TARGET_STEP = 120,
+	-- Distance to the first checkpoint, in studs above the base.
+	STORM_FIRST_TARGET = 60,
+	-- Every cleared stage puts the next checkpoint this much further out than
+	-- the last gap: 60, then 65, then 70…
+	STORM_GAP_GROWTH = 5,
+	-- When the clock runs out the tower is thrown apart rather than quietly
+	-- deleted. Random horizontal shove + upward kick, then cleanup.
+	STORM_BLAST_HORIZONTAL = 90,
+	STORM_BLAST_UP = 55,
+	STORM_BLAST_SPIN = 12,
+	-- How long the debris is left flying before it's cleared and the run resets.
+	STORM_BLAST_SECONDS = 2.5,
 	-- Checkpoint platform entrance: stretches out from a sliver, glowing white,
 	-- then cools to black.
 	PLATFORM_GROW_SECONDS = 0.45,

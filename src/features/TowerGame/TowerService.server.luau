@@ -6,10 +6,11 @@
 -- server-owned Model, so its movement replicates for free and every player
 -- watches the same aim.
 --
--- Steering is continuous: a client sends the direction it's *holding* and this
--- file integrates the position each frame. That keeps the wire cost at two
--- packets per swipe no matter how far the piece travels, and it keeps the
--- server the only thing that ever decides where a piece is.
+-- Aiming is split: the holder's client owns how it *feels* (it renders its own
+-- preview and moves it at frame rate) and reports the resulting placement; this
+-- file decides whether that placement is legal, and moves the real piece so
+-- spectators see it. A placement is fully described by an X and a quarter-turn
+-- count, so there is no "move left" — just "the piece is here now".
 --
 -- The whole game runs on one Z slice (Constants.PLANE_Z). Roblox has no 2D
 -- physics mode, so `clampToPlane` zeroes out-of-plane velocity every frame and
@@ -22,6 +23,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
+local BlockSkins = require(ReplicatedStorage.Features.TowerGame.BlockSkins)
+local BlockTypes = require(ReplicatedStorage.Features.TowerGame.BlockTypes)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
@@ -35,12 +38,24 @@ type Block = {
 	-- Only settled blocks count toward the height, so a piece still falling
 	-- through the air can't spike the readout.
 	settled: boolean,
+	skin: BlockSkins.Skin,
+	blockType: BlockTypes.BlockType?,
+	impactSound: Sound?,
+	settleSound: Sound?,
+	-- Speed carried into the current frame. Sampled before physics damps it, so
+	-- a Touched handler can tell a landing from a nudge.
+	speed: number,
+	-- One-shot latch for the block type's effect.
+	resolved: boolean,
+	lastImpactAt: number,
 }
 
 type Held = {
 	model: Model,
 	root: BasePart,
 	shape: Shapes.Shape,
+	skin: BlockSkins.Skin,
+	blockType: BlockTypes.BlockType?,
 	pivot: CFrame,
 	player: Player,
 }
@@ -59,8 +74,9 @@ local baseTopY = 0
 local queue: { Player } = {}
 local blocks: { Block } = {}
 local held: Held? = nil
--- The direction the holder is currently holding: -1, 0, or 1.
-local steerDir = 0
+-- Distance to the next checkpoint. Grows by STORM_GAP_GROWTH every time one is
+-- cleared, so each floor is a little further than the last.
+local stormGap = Constants.STORM_FIRST_TARGET
 local nextShape: Shapes.Shape = Shapes.random()
 local lastBroadcast = 0
 
@@ -79,6 +95,7 @@ local state = {
 	stormEndsAt = 0,
 	checkpoints = 0,
 }
+
 
 -- Turn order for the HUD: whoever holds the piece first, then the queue in the
 -- order they'll play. `queue` already rotates the holder to the back on their
@@ -145,7 +162,20 @@ end
 
 -- --------------------------------------------------------------- the pieces --
 
-local function buildPiece(shape: Shapes.Shape): (Model, BasePart)
+-- Sounds live on the piece itself so they're positional and replicate with it —
+-- the server calls :Play() and every client hears it from the right place.
+local function attachSound(part: BasePart, name: string, soundId: string, volume: number): Sound
+	local sound = Instance.new("Sound")
+	sound.Name = name
+	sound.SoundId = soundId
+	sound.Volume = volume
+	sound.RollOffMaxDistance = Constants.SOUND_RANGE
+	sound.RollOffMode = Enum.RollOffMode.InverseTapered
+	sound.Parent = part
+	return sound
+end
+
+local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType: BlockTypes.BlockType?): (Model, BasePart)
 	local model = Instance.new("Model")
 	model.Name = `Piece_{shape.name}`
 
@@ -154,8 +184,11 @@ local function buildPiece(shape: Shapes.Shape): (Model, BasePart)
 		local part = Instance.new("Part")
 		part.Name = `Cell{index}`
 		part.Size = Vector3.new(Constants.BLOCK_SIZE, Constants.BLOCK_SIZE, Constants.BLOCK_DEPTH)
-		part.Color = shape.color
-		part.Material = Enum.Material.SmoothPlastic
+		-- The skin owns the look; the shape's own color is only a fallback tint
+		-- blended out entirely here. Shape is read from silhouette, not color.
+		part.Color = skin.color
+		part.Material = skin.material
+		part.Transparency = skin.transparency or 0
 		part.TopSurface = Enum.SurfaceType.Smooth
 		part.BottomSurface = Enum.SurfaceType.Smooth
 		part.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
@@ -181,6 +214,20 @@ local function buildPiece(shape: Shapes.Shape): (Model, BasePart)
 		weld.Parent = rootPart
 	end
 
+	-- A special block has to be readable at a glance, and it can't repaint the
+	-- piece to say so — the skin already owns the color. A Highlight sits on top
+	-- of whatever look the skin picked.
+	if blockType then
+		local highlight = Instance.new("Highlight")
+		highlight.Name = "TypeTell"
+		highlight.FillColor = blockType.tell
+		highlight.OutlineColor = blockType.tell
+		highlight.FillTransparency = 0.65
+		highlight.OutlineTransparency = 0
+		highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+		highlight.Parent = model
+	end
+
 	-- Pivot at the bounding-box center so a quarter turn spins in place instead
 	-- of swinging the piece around its first cell. Deliberately NO PrimaryPart:
 	-- when one is set, `GetPivot`/`PivotTo` use that part's CFrame and ignore
@@ -194,48 +241,14 @@ local function spawnPivot(): CFrame
 	return CFrame.new(0, baseTopY + math.max(state.height, 0) + Constants.SPAWN_CLEARANCE, Constants.PLANE_Z)
 end
 
--- ------------------------------------------------------------- the intents --
+-- ------------------------------------------------------------ the placement --
 --
--- Every presentation (HUD buttons, keyboard, gamepad) funnels into these three.
--- They are the only writers of `held`.
+-- One entry point. The holder's client says where the piece is; this decides
+-- whether that's allowed. Everything a client can influence about a piece is
+-- these two numbers, both clamped here, so "the client owns the feel" never
+-- becomes "the client owns the game".
 
--- Set the direction the holder is holding. The move itself happens in
--- `stepHeld`, so this is just a validated write of a sign.
-function TowerService.setSteer(player: Player, dir: number)
-	local piece = held
-	if piece == nil or piece.player ~= player or state.phase ~= PHASE.AIMING then
-		return
-	end
-	-- Direction is a sign, not a distance — a client can't ask for a 50-stud step
-	-- or a 10x speed multiplier.
-	steerDir = if dir > 0 then 1 elseif dir < 0 then -1 else 0
-end
-
--- Continuous horizontal motion, integrated per frame.
-local function stepHeld(deltaTime: number)
-	local piece = held
-	if piece == nil or steerDir == 0 or state.phase ~= PHASE.AIMING then
-		return
-	end
-
-	local position = piece.pivot.Position
-	local targetX = math.clamp(
-		position.X + steerDir * Constants.STEER_SPEED * deltaTime,
-		-Constants.STEER_LIMIT_X,
-		Constants.STEER_LIMIT_X
-	)
-	if targetX == position.X then
-		return
-	end
-
-	piece.pivot = CFrame.new(targetX, position.Y, Constants.PLANE_Z) * piece.pivot.Rotation
-	piece.model:PivotTo(piece.pivot)
-end
-
--- Absolute placement (PC mouse aiming): put the piece where the player is
--- pointing. Same authority as steering — the client proposes an X, the server
--- clamps it to the legal range.
-function TowerService.aim(player: Player, x: number)
+function TowerService.applyPlacement(player: Player, x: number, turns: number)
 	local piece = held
 	if piece == nil or piece.player ~= player or state.phase ~= PHASE.AIMING then
 		return
@@ -245,24 +258,105 @@ function TowerService.aim(player: Player, x: number)
 		return
 	end
 
-	-- Pointing wins over holding; otherwise the two would fight every frame.
-	steerDir = 0
+	local clampedX = math.clamp(x, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X)
+	local quarter = math.floor(turns) % 4
 
-	local position = piece.pivot.Position
-	local targetX = math.clamp(x, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X)
-	piece.pivot = CFrame.new(targetX, position.Y, Constants.PLANE_Z) * piece.pivot.Rotation
+	piece.pivot = CFrame.new(clampedX, piece.pivot.Position.Y, Constants.PLANE_Z)
+		* CFrame.Angles(0, 0, -quarter * math.pi / 2)
 	piece.model:PivotTo(piece.pivot)
 end
 
-function TowerService.spin(player: Player, clockwise: boolean)
-	local piece = held
-	if piece == nil or piece.player ~= player or state.phase ~= PHASE.AIMING then
+-- -------------------------------------------------------------- the landing --
+
+local function playImpact(block: Block, speed: number)
+	local sound = block.impactSound
+	if sound == nil then
 		return
 	end
 
-	local turn = if clockwise then -math.pi / 2 else math.pi / 2
-	piece.pivot = piece.pivot * CFrame.Angles(0, 0, turn)
-	piece.model:PivotTo(piece.pivot)
+	local now = os.clock()
+	if now - block.lastImpactAt < Constants.IMPACT_COOLDOWN then
+		return
+	end
+	block.lastImpactAt = now
+
+	-- A gentle settle and a 60-stud drop should not sound the same.
+	local loudness = math.clamp(
+		(speed - Constants.IMPACT_MIN_SPEED) / (Constants.IMPACT_LOUD_SPEED - Constants.IMPACT_MIN_SPEED),
+		0,
+		1
+	)
+	local range = block.skin.pitchRange
+	sound.Volume = block.skin.volume * (0.35 + 0.65 * loudness)
+	sound.PlaybackSpeed = range[1] + math.random() * (range[2] - range[1])
+	sound:Play()
+end
+
+-- Weld the block to everything it's resting against. Welding to an anchored
+-- platform effectively anchors it, which is exactly what glue should feel like.
+--
+-- Fired when the block *settles*, not when it first touches something. At the
+-- moment of impact a block is often still mid-bounce with nothing but the part
+-- it just clipped nearby, so welding then glues it to whatever it happened to
+-- graze on the way down. Waiting until it stops means the contacts we find are
+-- the ones it's actually resting on.
+local function glueBlock(block: Block)
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { block.model }
+
+	for _, part in block.model:GetChildren() do
+		if not part:IsA("BasePart") then
+			continue
+		end
+		local reach = part.Size + Vector3.one * Constants.GLUE_RADIUS
+		for _, other in workspace:GetPartBoundsInBox(part.CFrame, reach, params) do
+			local weld = Instance.new("WeldConstraint")
+			weld.Part0 = part
+			weld.Part1 = other
+			weld.Parent = part
+		end
+	end
+end
+
+local function detonateBlock(block: Block)
+	local explosion = Instance.new("Explosion")
+	explosion.Position = block.root.Position
+	explosion.BlastRadius = Constants.EXPLOSION_RADIUS
+	explosion.BlastPressure = Constants.EXPLOSION_PRESSURE
+	-- Our pieces are held together by WeldConstraints, which an Explosion doesn't
+	-- break — so this throws blocks around without dissolving them into cells.
+	explosion.DestroyJointRadiusPercent = 0
+	explosion.Parent = workspace
+
+	block.model:Destroy()
+end
+
+-- Wire up what a block does when it hits something. Both the sound and the
+-- block type fire from the same signal, because "it landed" is one event.
+local function watchLanding(block: Block)
+	local function onTouched()
+		local speed = block.speed
+		if speed < Constants.IMPACT_MIN_SPEED then
+			return
+		end
+
+		playImpact(block, speed)
+
+		-- Only explosions resolve on impact; glue waits for the block to settle
+		-- (see glueBlock), which is handled in the height poll.
+		if block.resolved or block.blockType == nil or block.blockType.kind ~= "explosion" then
+			return
+		end
+		block.resolved = true
+		detonateBlock(block)
+	end
+
+	for _, part in block.model:GetChildren() do
+		if part:IsA("BasePart") then
+			part.Touched:Connect(onTouched)
+		end
+	end
 end
 
 -- Hand the piece to physics. Called by the holder, and by the turn loop when the
@@ -273,14 +367,30 @@ function TowerService.release()
 		return
 	end
 	held = nil
-	steerDir = 0
 
 	for _, part in piece.model:GetChildren() do
 		if part:IsA("BasePart") then
 			part.Anchored = false
 		end
 	end
-	table.insert(blocks, { model = piece.model, root = piece.root, settled = false })
+
+	local skin = piece.skin
+	local block: Block = {
+		model = piece.model,
+		root = piece.root,
+		settled = false,
+		skin = skin,
+		blockType = piece.blockType,
+		impactSound = attachSound(piece.root, "Impact", skin.impactSound, skin.volume),
+		settleSound = if skin.settleSound
+			then attachSound(piece.root, "Settle", skin.settleSound, skin.volume * 0.6)
+			else nil,
+		speed = 0,
+		resolved = false,
+		lastImpactAt = 0,
+	}
+	table.insert(blocks, block)
+	watchLanding(block)
 	TowerStatsService.recordBlockPlaced(piece.player)
 
 	state.phase = PHASE.SETTLING
@@ -294,15 +404,28 @@ local function beginTurn(player: Player)
 	local shape = nextShape
 	nextShape = Shapes.random()
 
-	local model, root = buildPiece(shape)
+	-- Rolled per piece. Skin is pure flavour; type is the hazard, and it gets
+	-- likelier the more floors the run has cleared.
+	local skin = BlockSkins.random()
+	local blockType = BlockTypes.roll(state.checkpoints)
+
+	local model, root = buildPiece(shape, skin, blockType)
 	local pivot = spawnPivot()
 	model:PivotTo(pivot)
+	-- Tells the holder's client "this one is yours" so it can hide the real piece
+	-- and drive a local preview instead.
+	model:SetAttribute(Constants.HELD_ATTRIBUTE, player.UserId)
 	model.Parent = arena
 
-	held = { model = model, root = root, shape = shape, pivot = pivot, player = player }
-	-- A key still held from the previous turn must not carry over to the next
-	-- player's piece.
-	steerDir = 0
+	held = {
+		model = model,
+		root = root,
+		shape = shape,
+		skin = skin,
+		blockType = blockType,
+		pivot = pivot,
+		player = player,
+	}
 
 	state.phase = PHASE.AIMING
 	state.holderUserId = player.UserId
@@ -323,6 +446,12 @@ local function clampToPlane()
 
 		local velocity = root.AssemblyLinearVelocity
 		local spin = root.AssemblyAngularVelocity
+
+		-- Sampled before the collision damps it: Touched fires *after* physics has
+		-- resolved the hit, so reading velocity there would report a block that has
+		-- already stopped. This is the speed the impact sound is scaled by.
+		block.speed = velocity.Magnitude
+
 		-- Skip assemblies that have gone to sleep; writing velocity to a resting
 		-- part would wake it up every frame.
 		if velocity.Magnitude < 0.05 and spin.Magnitude < 0.05 then
@@ -438,6 +567,59 @@ local function spawnCheckpoint(topY: number)
 	end)
 end
 
+-- The storm arrives. Everything the players built gets thrown off the plane and
+-- the run starts over from the base — no checkpoints, first target, fresh clock.
+--
+-- The debris is left to fly for a moment before cleanup rather than blinking
+-- out, because the tower coming apart is the whole point of the deadline.
+local function breakTower()
+	local debris = blocks
+	blocks = {}
+
+	for _, block in debris do
+		local root = block.root
+		if root.Parent == nil then
+			continue
+		end
+		-- Out of the play plane on purpose: this is the one moment the game stops
+		-- being 2D, so the wreck scatters instead of sliding sideways.
+		local shove = Vector3.new(
+			(math.random() * 2 - 1) * Constants.STORM_BLAST_HORIZONTAL,
+			Constants.STORM_BLAST_UP * (0.6 + math.random() * 0.8),
+			(math.random() * 2 - 1) * Constants.STORM_BLAST_HORIZONTAL * 0.5
+		)
+		root.AssemblyLinearVelocity = shove
+		root.AssemblyAngularVelocity = Vector3.new(
+			(math.random() * 2 - 1) * Constants.STORM_BLAST_SPIN,
+			(math.random() * 2 - 1) * Constants.STORM_BLAST_SPIN,
+			(math.random() * 2 - 1) * Constants.STORM_BLAST_SPIN
+		)
+	end
+
+	for _, platform in platforms do
+		platform:Destroy()
+	end
+	table.clear(platforms)
+
+	task.delay(Constants.STORM_BLAST_SECONDS, function()
+		for _, block in debris do
+			block.model:Destroy()
+		end
+	end)
+end
+
+local function resetRun()
+	breakTower()
+
+	stormGap = Constants.STORM_FIRST_TARGET
+	state.checkpoints = 0
+	state.height = 0
+	state.targetHeight = Constants.STORM_FIRST_TARGET
+	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
+	-- maxHeight deliberately survives: it's the server's best-ever record, not
+	-- part of the run, and TowerStatsService has already banked it per player.
+end
+
 -- Returns true when the stage changed and clients need to hear about it.
 local function updateStorm(height: number): boolean
 	local now = workspace:GetServerTimeNow()
@@ -452,18 +634,18 @@ local function updateStorm(height: number): boolean
 	if height >= state.targetHeight then
 		spawnCheckpoint(baseTopY + height)
 		state.checkpoints += 1
+		-- Each floor is a little further out than the last.
+		stormGap += Constants.STORM_GAP_GROWTH
 		-- The next bar is measured from what they actually reached, not from the
 		-- target they just cleared, so overshooting doesn't make the next stage
 		-- trivial.
-		state.targetHeight = height + Constants.STORM_TARGET_STEP
+		state.targetHeight = height + stormGap
 		state.stormEndsAt = now + Constants.STORM_SECONDS
 		return true
 	end
 
 	if now >= state.stormEndsAt then
-		-- Ran out of time. For now the stage just restarts — see "Open design
-		-- question" in docs/game/TowerGame.md before adding a punishment.
-		state.stormEndsAt = now + Constants.STORM_SECONDS
+		resetRun()
 		return true
 	end
 
@@ -490,6 +672,16 @@ local function updateHeight()
 
 		if not block.settled and block.root.AssemblyLinearVelocity.Magnitude < Constants.SETTLED_SPEED then
 			block.settled = true
+			-- The squishy skins get a second beat as they come to rest — the
+			-- release half of the ASMR kit's press/release pair.
+			if block.settleSound then
+				block.settleSound:Play()
+			end
+			-- Glue sets where the block ends up, not where it first grazed.
+			if not block.resolved and block.blockType and block.blockType.kind == "glue" then
+				block.resolved = true
+				glueBlock(block)
+			end
 		end
 		if not block.settled then
 			continue
@@ -618,20 +810,17 @@ function TowerService.Start()
 	buildArena()
 	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
 
-	Packets.Steer.listen(function(payload, player)
-		TowerService.setSteer(player, payload.dir)
+	Packets.Place.listen(function(payload, player)
+		TowerService.applyPlacement(player, payload.x, payload.turns)
 	end)
-	Packets.Aim.listen(function(payload, player)
-		TowerService.aim(player, payload.x)
-	end)
-	Packets.Spin.listen(function(payload, player)
-		TowerService.spin(player, payload.clockwise)
-	end)
-	Packets.Release.listen(function(_payload, player)
+	Packets.Release.listen(function(payload, player)
 		local piece = held
 		if piece == nil or piece.player ~= player then
 			return
 		end
+		-- The drop carries its own placement so the piece falls exactly where the
+		-- holder saw it, even if their last Place packet is still in flight.
+		TowerService.applyPlacement(player, payload.x, payload.turns)
 		TowerService.release()
 	end)
 
@@ -641,10 +830,7 @@ function TowerService.Start()
 	Players.PlayerAdded:Connect(addPlayer)
 	Players.PlayerRemoving:Connect(removePlayer)
 
-	RunService.Heartbeat:Connect(function(deltaTime)
-		stepHeld(deltaTime)
-		clampToPlane()
-	end)
+	RunService.Heartbeat:Connect(clampToPlane)
 
 	task.spawn(function()
 		while true do

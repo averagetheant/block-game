@@ -19,7 +19,8 @@ local ControlsHint = require(ReplicatedStorage.Features.TowerGame.ControlsHint)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
 local TowerHUD = require(ReplicatedStorage.Features.TowerGame.TowerHUD)
 
--- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
+-- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
+local TowerAimController = require(script.Parent.TowerAimController)
 local TowerController = require(script.Parent.TowerController)
 
 return function()
@@ -83,17 +84,15 @@ return function()
 		-- Touch-only: keyboard and gamepad go through ContextActionService, so a
 		-- PC player would just be looking at buttons they never press.
 		showControls = touchOnly,
-		-- A tap has no release event, so touch steering is a timed pulse rather
-		-- than the press/release the other devices send.
+		-- A tap has no release event, so touch steering moves a fixed distance
+		-- rather than starting and stopping a glide.
 		onMoveLeft = function()
-			TowerController.nudge(-1)
+			TowerAimController.nudge(-1)
 		end,
 		onMoveRight = function()
-			TowerController.nudge(1)
+			TowerAimController.nudge(1)
 		end,
-		onRotate = function()
-			TowerController.rotate(true)
-		end,
-		onDrop = TowerController.drop,
+		onRotate = TowerAimController.rotate,
+		onDrop = TowerAimController.drop,
 	})
 end

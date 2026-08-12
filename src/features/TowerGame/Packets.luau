@@ -3,51 +3,38 @@
 --
 -- Plain .luau file => splitter routes to ReplicatedStorage.Features.TowerGame.Packets.
 --
--- Note what is *not* here: the piece's position. The active piece is a Model the
--- server owns in Workspace, so Roblox replicates its movement for us — steering
--- packets are three bytes of intent, not a transform stream.
+-- The split of responsibility: the holder's client owns how aiming *feels* and
+-- reports where the piece is; the server owns whether that's allowed (it clamps
+-- every value) and everything that happens after the drop. So there's no
+-- "move left" packet — a placement is fully described by an X on the play plane
+-- and a number of quarter turns, and that's what gets sent.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ByteNet = require(ReplicatedStorage.Packages.ByteNet)
 
 return ByteNet.defineNamespace("TowerGame", function()
 	return {
-		-- Client -> Server: the direction currently *held* — -1 left, 1 right, 0
-		-- released. Sent on key down and key up rather than per movement step;
-		-- the server integrates the position from there, so a held key costs two
-		-- packets no matter how far the piece travels.
-		Steer = ByteNet.definePacket({
-			value = ByteNet.struct({
-				dir = ByteNet.int8,
-			}),
-			reliabilityType = "reliable",
-		}),
-
-		-- Client -> Server: point the held piece at an absolute X on the play
-		-- plane (PC mouse aiming). Streamed while the mouse moves, throttled to
-		-- Constants.AIM_INTERVAL — only one player aims at a time, so this is a
-		-- handful of packets a second for the whole server.
-		Aim = ByteNet.definePacket({
+		-- Client -> Server: where the holder currently has the piece. Streamed
+		-- while it's moving, throttled to Constants.AIM_INTERVAL. Only one player
+		-- aims at a time, so this is a few packets a second for the whole server.
+		-- Dropping one costs nothing: the next carries the full placement, and
+		-- Release carries the final word.
+		Place = ByteNet.definePacket({
 			value = ByteNet.struct({
 				x = ByteNet.float32,
+				-- Quarter turns clockwise, 0-3.
+				turns = ByteNet.uint8,
 			}),
 			reliabilityType = "reliable",
 		}),
 
-		-- Client -> Server: rotate the held piece a quarter turn.
-		Spin = ByteNet.definePacket({
-			value = ByteNet.struct({
-				clockwise = ByteNet.bool,
-			}),
-			reliabilityType = "reliable",
-		}),
-
-		-- Client -> Server: release the held piece to physics.
+		-- Client -> Server: drop it, here. Carries the placement rather than
+		-- relying on the last Place having landed, so the piece falls exactly
+		-- where the holder saw it.
 		Release = ByteNet.definePacket({
 			value = ByteNet.struct({
-				-- Reserved for a future "slam" variant; the server ignores it today
-				-- but the field keeps the schema stable when it lands.
-				instant = ByteNet.bool,
+				x = ByteNet.float32,
+				turns = ByteNet.uint8,
 			}),
 			reliabilityType = "reliable",
 		}),

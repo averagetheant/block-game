@@ -12,7 +12,8 @@ local UserInputService = game:GetService("UserInputService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 
--- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
+-- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
+local TowerAimController = require(script.Parent.TowerAimController)
 local TowerController = require(script.Parent.TowerController)
 
 local TowerInputController = {}
@@ -29,7 +30,7 @@ local function sendHeld()
 	if pressed[1] then
 		dir += 1
 	end
-	TowerController.setSteer(dir)
+	TowerAimController.setSteer(dir)
 end
 
 -- Movement is a held direction: press starts the glide, release stops it.
@@ -75,9 +76,19 @@ function TowerInputController.Start()
 		sendHeld()
 	end)
 
+	bind("TowerRotate", TowerAimController.rotate, Enum.KeyCode.W, Enum.KeyCode.Up, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
+	bind(
+		"TowerDrop",
+		TowerAimController.drop,
+		Enum.KeyCode.Space,
+		Enum.KeyCode.S,
+		Enum.KeyCode.Down,
+		Enum.KeyCode.ButtonA
+	)
+
 	-- A player can already be holding a direction when their turn starts — they
 	-- were waiting on the previous player. No input event fires for a key that
-	-- never moved, and the server clears the steer direction on every new turn,
+	-- never moved, and the aim controller resets its direction on every new turn,
 	-- so re-assert what's held the moment the piece becomes ours.
 	local wasMyTurn = false
 	TowerController.DataChanged:Connect(function()
@@ -87,17 +98,6 @@ function TowerInputController.Start()
 		end
 		wasMyTurn = isMyTurn
 	end)
-	bind("TowerRotate", function()
-		TowerController.rotate(true)
-	end, Enum.KeyCode.W, Enum.KeyCode.Up, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
-	bind(
-		"TowerDrop",
-		TowerController.drop,
-		Enum.KeyCode.Space,
-		Enum.KeyCode.S,
-		Enum.KeyCode.Down,
-		Enum.KeyCode.ButtonA
-	)
 end
 
 return TowerInputController

@@ -33,14 +33,15 @@ maximum.
 
 The pressure mechanic, running independently of whose turn it is.
 
-- Each stage names a `targetHeight` and a `STORM_SECONDS` (300) clock. Stages are
-  `STORM_TARGET_STEP` (120 studs) apart — roughly 30 blocks of climbing.
+- Each stage names a `targetHeight` and a `STORM_SECONDS` (300) clock. The first
+  checkpoint is `STORM_FIRST_TARGET` (60 studs) up, and every cleared stage puts
+  the next one `STORM_GAP_GROWTH` (5) studs further than the last gap — 60, 65,
+  70, and so on.
 - **Cleared** — the moment the tower reaches the target, a checkpoint platform is
   welded onto the tower at exactly that altitude, the floor count goes up, and the
-  next target is set to *the height they actually reached* plus
-  `STORM_TARGET_STEP`. Overshooting doesn't make the next stage free.
-- **Expired** — the stage restarts with the same target. See
-  [Open design question](#open-design-question).
+  next target is set to *the height they actually reached* plus the new gap.
+  Overshooting doesn't make the next stage free.
+- **Expired** — the storm takes everything. See [When the storm lands](#when-the-storm-lands).
 - On an empty server the clock is held rather than ticking down to nothing.
 
 A checkpoint platform is the same `PLATFORM_SIZE` as the starting base, anchored,
@@ -60,28 +61,93 @@ Checkpoints are tracked in their own list, separate from `blocks` — they have 
 physics but still count toward the tower's top. Earlier platforms are left where
 they are, so the floors you've cleared stay visible below.
 
-## Steering
+## Aiming
 
-There are two ways to place a piece, and both are live at once.
+Aiming is **client-owned and server-validated**. The holder's client runs the
+whole feel of it; the server decides whether the result is legal.
 
-**Holding a direction** (all devices). Movement is continuous, not stepped: a
-client sends the direction it's *holding* (-1 / 0 / 1) and the server integrates
-the position at `STEER_SPEED` studs per second inside its Heartbeat, clamped to
-±`STEER_LIMIT_X`. Two packets per swipe, no matter how far the piece travels, and
-the server stays the only thing that decides where a piece is.
+The problem this solves: the piece is a server-owned Model, so moving it means a
+round trip and the holder watches their own input arrive late. The fix is the
+standard one — `TowerAimController` renders a **local preview clone** that follows
+input at frame rate and hides the real piece for that one client:
 
-**Pointing** (PC). `TowerPointerController` casts the mouse into the world each
-frame, solves for where the ray crosses `Z = PLANE_Z`, and streams that X at
-`AIM_INTERVAL`. Click to drop. The two schemes don't fight, by construction:
+| Who | Sees | Updated |
+| --- | ---- | ------- |
+| holder | local preview clone | every frame |
+| everyone else | the real server piece | `AIM_INTERVAL` (30/s) |
+| server | the real piece | on each `Place`, clamped |
 
-- the pointer only speaks while the mouse is *actually moving*, so a keyboard
-  player who never touches the mouse is never overridden;
-- the baseline resets when the turn isn't ours, so a piece doesn't snap to a stale
-  pointer position the instant a turn arrives;
-- server-side, an incoming aim clears the held steer direction.
+Hiding uses `LocalTransparencyModifier`, which is render-side (the server never
+sees it) — but the engine **resets it every frame** for anything that isn't the
+local character, so it's re-applied from the render loop rather than set once.
+That reset is load-bearing: the moment the controller stops re-applying, the piece
+reappears on its own, so a released block can't get stuck invisible.
+
+A placement is fully described by an X and a quarter-turn count, so there's no
+"move left" packet. `Release` carries the final placement with it, which is what
+makes the drop land exactly where the holder saw it rather than wherever the last
+stream update reached.
+
+Two input schemes feed the same local state and don't fight:
+
+- **Holding a direction** (all devices) — integrated locally at `STEER_SPEED`.
+- **Pointing** (PC) — `TowerPointerController` casts the mouse onto the play plane
+  every frame the mouse moves, with no throttle (it only writes a local number;
+  the aim controller decides how often the *server* hears). It only speaks while
+  the mouse is actually moving, so a keyboard player is never overridden, and its
+  baseline resets between turns so a piece never snaps to a stale cursor.
 
 Click-to-drop checks `gameProcessed`, so clicking the HUD's own buttons doesn't
 also release the piece.
+
+Nothing here is authoritative. `TowerService.applyPlacement` clamps X to
+±`STEER_LIMIT_X` and turns to `% 4` on every message, so "the client owns the
+feel" never becomes "the client owns the game".
+
+## Blocks: skins and types
+
+Every piece rolls two independent things at spawn.
+
+**Skins** (`BlockSkins.luau`) are pure flavour — a color, a material, and the
+sounds it makes. They come from the ASMR kit in the place, so the asset ids there
+are ones that kit actually ships; don't invent new ones without checking they
+resolve, or a skin goes silent.
+
+| Skin | Look | Lands like |
+| ---- | ---- | ---------- |
+| Classic | Concrete, grey | a dry knock |
+| Needoh | Glass, pink | squish, plus a release beat as it settles |
+| Butter | SmoothPlastic, yellow | softer squish, same settle beat |
+| Glow | Neon, cyan | a bubble pop |
+
+Skins change **material and color only, never geometry**. The kit's meshes are
+lovely but they aren't cubes, and a tetromino cell has to be a cube for the
+stacking to read honestly — the squish is carried entirely by the sound. Impact
+volume scales with the speed the block was travelling, sampled *before* the
+collision damps it (a `Touched` handler reading velocity would report a block
+that has already stopped), and pitch is randomized per hit so a tower of one skin
+doesn't sound like a machine.
+
+**Types** (`BlockTypes.luau`) are the hazard, and they get likelier the further a
+run has gone:
+
+```
+chance = min(BASE_CHANCE + PER_CHECKPOINT × checkpoints, MAX_CHANCE)
+       = min(0.08 + 0.06 × checkpoints, 0.45)
+```
+
+- **Explosive** — detonates on impact and consumes itself. Pieces are held
+  together by `WeldConstraint`s, which an `Explosion` doesn't break, so it throws
+  the tower around without dissolving blocks into loose cells.
+- **Glue** — welds to everything it's resting against when it **settles**, not
+  when it first touches something. That distinction is the whole mechanic: at the
+  moment of impact a block is often still mid-bounce with nothing but the part it
+  just grazed nearby, so welding then glues it to the wrong thing (or to nothing).
+  Welding to an anchored platform effectively anchors it, which is what glue
+  should feel like.
+
+A special block is marked with a `Highlight` in its type's color rather than by
+repainting it — the skin already owns the color.
 
 Three edge cases the input controller handles, all of which come from "held" being
 a state rather than an event:
@@ -179,11 +245,14 @@ devices.
 | ---- | ----- | ---- |
 | `Constants.luau` | shared | Every tunable + `Presentations` gating |
 | `Shapes.luau` | shared | The seven tetrominoes as grid cells (ids are wire-stable) |
-| `Packets.luau` | shared | ByteNet: `Steer`, `Aim`, `Spin`, `Release`, `State` |
+| `Packets.luau` | shared | ByteNet: `Place`, `Release`, `State` |
+| `BlockSkins.luau` | shared | Look + sounds per skin, with rarity weights |
+| `BlockTypes.luau` | shared | Explosive / glue, and the odds curve |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
 | `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
-| `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the intents |
+| `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the wire |
+| `TowerAimController.client.luau` | client | The local preview and everything that makes aiming feel instant |
 | `TowerInputController.client.luau` | client | Keyboard + gamepad binds |
 | `TowerPointerController.client.luau` | client | Mouse aiming + click-to-drop (PC) |
 | `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude |
@@ -239,7 +308,10 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `SPAWN_CLEARANCE` | Drop height above the tower top |
 | `STORM_SECONDS` | The stage clock (300) |
-| `STORM_FIRST_TARGET`, `STORM_TARGET_STEP` | The first bar, and how much each cleared stage adds (both 120) |
+| `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 60 studs, each next gap 5 further |
+| `STORM_BLAST_*` | How hard the storm throws the tower, and how long the debris flies |
+| `BlockTypes.BASE_CHANCE` / `PER_CHECKPOINT` / `MAX_CHANCE` | How often a block is special. **Note the cap** — raising `BASE_CHANCE` alone does nothing past `MAX_CHANCE` |
+| `IMPACT_MIN_SPEED`, `IMPACT_LOUD_SPEED` | What counts as a landing, and what counts as a hard one |
 | `AVATAR_*` | Turn-strip sizing, spacing and fade |
 | `HINT_SECONDS`, `HINT_FADE_SECONDS` | How long the controls list stays, and how fast it goes |
 | `PLATFORM_SIZE` | Size of the base *and* every checkpoint — they're the same slab |
@@ -252,13 +324,22 @@ The HUD is a full-screen gameplay surface, so it hugs the top and bottom edges
 rather than following the centered-by-default rule for feature UIs — centering a
 height readout would put it on top of the tower the player is aiming at.
 
-## Open design question
+## When the storm lands
 
-**Nothing happens when the storm clock expires** — the stage just restarts with the
-same target. The name implies a consequence (weather rolling in, blocks getting
-shoved, the bottom of the tower crumbling) but a punishment mechanic wasn't
-specified, and guessing wrong there changes how the whole game feels. The hook is
-one branch in `updateStorm`; decide the consequence and it goes there.
+Running out of time ends the run, and it ends it loudly. `breakTower` throws every
+block off the play plane — a random horizontal shove, an upward kick, and a
+tumbling spin — which is the one moment the game deliberately stops being 2D, so
+the wreck scatters instead of sliding sideways. The debris is left flying for
+`STORM_BLAST_SECONDS` before it's cleared, because the tower coming apart *is* the
+deadline.
+
+Then `resetRun` puts everything back to the start: checkpoints destroyed, floor
+count zeroed, gap back to 60, fresh clock.
+
+One thing deliberately survives: **`maxHeight`**. It's the server's best-ever
+record rather than part of the run, and `TowerStatsService` has already banked it
+into each player's profile. The HUD's "best" is a record; the storm resets the
+game, not the history.
 
 ## Not built yet
 
@@ -271,3 +352,8 @@ one branch in `updateStorm`; decide the consequence and it goes there.
 - **A very short keyboard tap moves nothing.** Steering is a held state, so a press
   and release inside a single frame nets zero movement. Human taps (50 ms+) move
   about a stud; it only shows up with synthetic input.
+- **No explosion sound.** The ASMR kit has nothing that fits and inventing an asset
+  id gets you silence, so the detonation is currently seen and not heard.
+- **Skins are colour and material only.** Making a block actually *look* like a
+  Needoh means squash-and-stretch on impact, which is a deformation problem the
+  cube geometry doesn't allow. The sound carries it for now.

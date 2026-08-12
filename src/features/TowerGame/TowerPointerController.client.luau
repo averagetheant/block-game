@@ -14,7 +14,8 @@ local UserInputService = game:GetService("UserInputService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 
--- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
+-- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
+local TowerAimController = require(script.Parent.TowerAimController)
 local TowerController = require(script.Parent.TowerController)
 
 local TowerPointerController = {}
@@ -55,15 +56,15 @@ function TowerPointerController.Start()
 
 	local mouse = Players.LocalPlayer:GetMouse()
 	local lastScreen: Vector2? = nil
-	local lastSentAt = 0
-	local lastX: number? = nil
 
+	-- Every frame the mouse moves, no throttle: this only writes a local number,
+	-- and the aim controller is what decides how often the server hears about it.
+	-- Throttling here would put the steppiness back into the thing we're smoothing.
 	RunService.RenderStepped:Connect(function()
 		if not TowerController.isMyTurn() then
 			-- Re-baseline while we wait, so the piece doesn't snap to a stale
 			-- pointer position the instant the turn arrives.
 			lastScreen = nil
-			lastX = nil
 			return
 		end
 
@@ -80,22 +81,11 @@ function TowerPointerController.Start()
 		end
 		lastScreen = screen
 
-		local now = os.clock()
-		if now - lastSentAt < Constants.AIM_INTERVAL then
-			return
-		end
-
 		local x = pointerPlaneX(mouse)
 		if x == nil then
 			return
 		end
-		if lastX ~= nil and math.abs(x - lastX) < Constants.AIM_EPSILON then
-			return
-		end
-
-		lastSentAt = now
-		lastX = x
-		TowerController.aim(x)
+		TowerAimController.pointAt(x)
 	end)
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
@@ -107,7 +97,7 @@ function TowerPointerController.Start()
 		if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
 			return
 		end
-		TowerController.drop()
+		TowerAimController.drop()
 	end)
 end
 

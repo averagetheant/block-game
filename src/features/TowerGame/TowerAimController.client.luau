@@ -50,21 +50,23 @@ local function pieceCFrame(): CFrame
 	return CFrame.new(aimX, baseY, Constants.PLANE_Z) * CFrame.Angles(0, 0, -aimTurns * math.pi / 2)
 end
 
--- Hide the authoritative piece for this client only. LocalTransparencyModifier is
--- render-side, so the server never sees it and no other player is affected — but
--- the engine resets it every frame for anything that isn't the local character,
--- so this has to be re-applied from the render loop rather than set once.
+-- Hide/show the authoritative piece for this client only.
+-- LocalTransparencyModifier is render-side, so the server never sees it and no
+-- other player is affected.
 --
--- That reset is a feature here: the moment we stop calling this the piece
--- reappears on its own, so a released block can't get stuck invisible.
-local function hideServerPiece()
+-- Two things learned the hard way about this property:
+--   * it doesn't stick — something resets it, so hiding has to be re-applied
+--     from the render loop rather than set once;
+--   * it doesn't reliably reset *itself* either, so the hide must be explicitly
+--     undone. Skipping that is what left the first block permanently invisible.
+local function setServerPieceHidden(hidden: boolean)
 	local model = serverPiece
 	if model == nil then
 		return
 	end
 	for _, part in model:GetChildren() do
 		if part:IsA("BasePart") then
-			part.LocalTransparencyModifier = 1
+			part.LocalTransparencyModifier = if hidden then 1 else 0
 		end
 	end
 end
@@ -75,8 +77,9 @@ local function teardown()
 		preview:Destroy()
 		preview = nil
 	end
-	-- No un-hide needed: dropping `serverPiece` stops the per-frame re-apply and
-	-- the engine restores the part on its own next frame.
+	-- Give the piece back before letting go of it, or it stays invisible for the
+	-- rest of the round.
+	setServerPieceHidden(false)
 	serverPiece = nil
 	steerDir = 0
 	lastSentX = math.huge
@@ -84,13 +87,21 @@ local function teardown()
 end
 
 -- The piece the server just handed us, found by the attribute it stamps on it.
+--
+-- The anchored check is belt-and-braces: a held piece is always anchored, so even
+-- if the attribute were ever left on a released block, we can't mistake a live
+-- physics block for our piece and start puppeting it.
 local function findOwnPiece(): Model?
 	local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
 	if arena == nil then
 		return nil
 	end
 	for _, child in arena:GetChildren() do
-		if child:IsA("Model") and child:GetAttribute(Constants.HELD_ATTRIBUTE) == Players.LocalPlayer.UserId then
+		if not child:IsA("Model") or child:GetAttribute(Constants.HELD_ATTRIBUTE) ~= Players.LocalPlayer.UserId then
+			continue
+		end
+		local part = child:FindFirstChildWhichIsA("BasePart")
+		if part and part.Anchored then
 			return child
 		end
 	end
@@ -202,7 +213,7 @@ local function step(deltaTime: number)
 
 	-- The preview moves every frame regardless of the network, and the real piece
 	-- stays hidden behind it.
-	hideServerPiece()
+	setServerPieceHidden(true)
 	if preview then
 		preview:PivotTo(pieceCFrame())
 	end

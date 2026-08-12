@@ -368,6 +368,12 @@ function TowerService.release()
 	end
 	held = nil
 
+	-- Stop advertising this piece as held. The holder's client finds "its" piece
+	-- by this attribute, so leaving it set means every later turn re-finds this
+	-- block instead of the new piece — it stays hidden and gets shadowed by the
+	-- preview forever.
+	piece.model:SetAttribute(Constants.HELD_ATTRIBUTE, nil)
+
 	for _, part in piece.model:GetChildren() do
 		if part:IsA("BasePart") then
 			part.Anchored = false

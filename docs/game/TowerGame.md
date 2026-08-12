@@ -77,11 +77,21 @@ input at frame rate and hides the real piece for that one client:
 | everyone else | the real server piece | `AIM_INTERVAL` (30/s) |
 | server | the real piece | on each `Place`, clamped |
 
-Hiding uses `LocalTransparencyModifier`, which is render-side (the server never
-sees it) — but the engine **resets it every frame** for anything that isn't the
-local character, so it's re-applied from the render loop rather than set once.
-That reset is load-bearing: the moment the controller stops re-applying, the piece
-reappears on its own, so a released block can't get stuck invisible.
+Hiding uses `LocalTransparencyModifier`, which is render-side — the server never
+sees it and no other player is affected. Two things about that property cost real
+debugging time, so don't "simplify" either away:
+
+- **It doesn't stick.** Something resets it, so the hide is re-applied from the
+  render loop rather than set once.
+- **It doesn't reset itself either.** The hide has to be explicitly undone in
+  `teardown`. Relying on an automatic reset is what once left the first block of
+  every round permanently invisible.
+
+The other half of that same bug: the server **clears `HELD_ATTRIBUTE` on release**.
+The holder's client finds "its" piece by that attribute, so a released block that
+still carried it got re-adopted on the next turn — hidden, and puppeted by the
+preview for the rest of the round. `findOwnPiece` additionally requires the model
+to be anchored, since a held piece always is and a live physics block never is.
 
 A placement is fully described by an X and a quarter-turn count, so there's no
 "move left" packet. `Release` carries the final placement with it, which is what

@@ -9,5 +9,7 @@ return function(PlayerData)
 		BlocksPlaced = 0,
 		-- The tallest the shared tower has ever been while they were in it.
 		BiggestHeight = 0,
+		-- Earned by reaching zones and by time played. See CashService.
+		Cash = 0,
 	})
 end

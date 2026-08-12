@@ -16,10 +16,16 @@
 -- primitive worth adding to the contract.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
 local Constants = require(script.Parent.Constants)
+
+-- How long a chip takes to grow into (or out of) the active slot.
+local CHIP_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+-- Sliding sideways is a different motion to swelling, and reads better linear-ish.
+local SLIDE_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 export type Props = {
 	-- User ids in turn order, current holder first. Empty between turns.
@@ -56,6 +62,72 @@ local function centerOn(order: { number }, currentIndex: number): ({ number }, n
 	return rotated, slot
 end
 
+-- One headshot. Size, fade and slot are all tweened rather than set, so a turn
+-- change *moves* the strip instead of cutting to the next arrangement — the
+-- current player swells and clears as the others shrink back and slide along.
+--
+-- Tweened on the instance rather than through React state: these animate every
+-- turn change, and re-rendering the whole HUD for each frame of that would be a
+-- lot of work to move a few images.
+local function AvatarChip(props: {
+	userId: number,
+	isCurrent: boolean,
+	offset: number,
+	layoutOrder: number,
+})
+	local ref = React.useRef(nil :: ImageLabel?)
+	local size = if props.isCurrent then Constants.AVATAR_SIZE else Constants.AVATAR_SIZE_INACTIVE
+	local fade = if props.isCurrent then 0 else Constants.AVATAR_FADE_INACTIVE
+	local position = UDim2.new(0.5, props.offset * Constants.AVATAR_SPACING, 0.5, 0)
+
+	React.useEffect(function()
+		local chip = ref.current
+		if chip == nil then
+			return
+		end
+
+		local grow = TweenService:Create(chip, CHIP_TWEEN, {
+			Size = UDim2.fromOffset(size, size),
+			ImageTransparency = fade,
+			BackgroundTransparency = if props.isCurrent then 0.15 else 0.5,
+		})
+		local slide = TweenService:Create(chip, SLIDE_TWEEN, { Position = position })
+		grow:Play()
+		slide:Play()
+
+		return function()
+			grow:Cancel()
+			slide:Cancel()
+			grow:Destroy()
+			slide:Destroy()
+		end
+	end, { size, fade, position, props.isCurrent } :: { any })
+
+	return React.createElement("ImageLabel", {
+		ref = ref,
+		Image = headshot(props.userId),
+		BackgroundColor3 = Color3.fromRGB(24, 26, 34),
+		BackgroundTransparency = 0.5,
+		BorderSizePixel = 0,
+		ImageTransparency = Constants.AVATAR_FADE_INACTIVE,
+		-- Rendered at the inactive values; the effect above tweens to the real
+		-- ones on mount, so a chip appearing eases in rather than popping.
+		Size = UDim2.fromOffset(Constants.AVATAR_SIZE_INACTIVE, Constants.AVATAR_SIZE_INACTIVE),
+		Position = position,
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		ZIndex = if props.isCurrent then 2 else 1,
+		LayoutOrder = props.layoutOrder,
+	}, {
+		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
+		Stroke = React.createElement("UIStroke", {
+			Thickness = if props.isCurrent then ui.theme.thinStrokeThickness else 1,
+			Color = if props.isCurrent then Color3.fromRGB(255, 255, 255) else Color3.fromRGB(160, 165, 185),
+			Transparency = if props.isCurrent then 0 else 0.5,
+			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+		}),
+	})
+end
+
 return function(props: Props)
 	local order = props.order
 	if #order == 0 then
@@ -75,26 +147,14 @@ return function(props: Props)
 			continue
 		end
 
-		local size = if isCurrent then Constants.AVATAR_SIZE else Constants.AVATAR_SIZE_INACTIVE
-
-		children[`Player{userId}`] = React.createElement("ImageLabel", {
-			Image = headshot(userId),
-			BackgroundColor3 = Color3.fromRGB(24, 26, 34),
-			BackgroundTransparency = if isCurrent then 0.15 else 0.5,
-			BorderSizePixel = 0,
-			ImageTransparency = if isCurrent then 0 else Constants.AVATAR_FADE_INACTIVE,
-			Size = UDim2.fromOffset(size, size),
-			Position = UDim2.new(0.5, offset * Constants.AVATAR_SPACING, 0.5, 0),
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			ZIndex = if isCurrent then 2 else 1,
-		}, {
-			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-			Stroke = React.createElement("UIStroke", {
-				Thickness = if isCurrent then ui.theme.thinStrokeThickness else 1,
-				Color = if isCurrent then Color3.fromRGB(255, 255, 255) else Color3.fromRGB(160, 165, 185),
-				Transparency = if isCurrent then 0 else 0.5,
-				ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
-			}),
+		-- Keyed by user id, not slot, so React keeps the same instance as a player
+		-- moves along the strip — which is what lets the chip tween between slots
+		-- instead of being torn down and rebuilt in the new one.
+		children[`Player{userId}`] = React.createElement(AvatarChip, {
+			userId = userId,
+			isCurrent = isCurrent,
+			offset = offset,
+			layoutOrder = index,
 		})
 	end
 

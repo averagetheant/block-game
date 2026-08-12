@@ -19,9 +19,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
+local CashFly = require(script.Parent.CashFly)
 local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
 local TurnStrip = require(script.Parent.TurnStrip)
+local Zones = require(script.Parent.Zones)
 
 local PHASE = Constants.PHASE
 
@@ -41,10 +43,22 @@ local EDGE_MARGIN = 20
 local CONTROL_ROW_HEIGHT = 88
 local CONTROL_ROW_WIDTH = 110 * 3 + 160 + CONTROL_GAP * 3
 
+local STORM_LABEL_HEIGHT = 24
+local STORM_LABEL_TEXT_SIZE = 22
+local CASH_WIDTH = 190
+local CASH_HEIGHT = 54
+local CASH_TEXT_SIZE = 28
+local CASH_ICON = 34
+local WARNING_WIDTH = 460
+local WARNING_HEIGHT = 96
+
 -- Under this many seconds the turn clock turns red.
 local URGENT_SECONDS = 5
 -- Under this many seconds the storm clock turns red.
 local STORM_URGENT_SECONDS = 30
+
+-- Where the bills land. Kept in step with the counter's own anchor below.
+local CASH_TARGET = UDim2.new(1, -(EDGE_MARGIN + CASH_WIDTH / 2), 1, -(EDGE_MARGIN + CASH_HEIGHT / 2))
 
 export type Props = {
 	height: number,
@@ -67,6 +81,11 @@ export type Props = {
 	stormSeconds: number,
 	checkpoints: number,
 	device: ControlsHint.Device,
+	cash: number,
+	-- Signal firing with an amount whenever cash arrives; drives the bill burst.
+	cashAwarded: any,
+	-- Zone to warn about, or nil when there's nothing to shout about.
+	zoneWarning: Zones.Zone?,
 	showControls: boolean?,
 	showHint: boolean?,
 	onMoveLeft: (() -> ())?,
@@ -142,13 +161,34 @@ return function(props: Props)
 			layoutOrder = 3,
 		}),
 
-		Storm = React.createElement(ui.ProgressBar, {
-			progress = math.clamp(props.stormSecondsLeft / math.max(props.stormSeconds, 1), 0, 1),
-			variant = if props.stormSecondsLeft <= STORM_URGENT_SECONDS then "red" else "purple",
-			text = `STORM {clock(props.stormSecondsLeft)} — {string.format("%.0f", toGo)} to go`,
-			showText = true,
-			size = UDim2.new(1, 0, 0, BAR_HEIGHT),
+		-- The bar is *progress toward the next checkpoint*, not time. Height is
+		-- the thing the player controls, so that's what fills; the clock is the
+		-- pressure, so it sits underneath as a plain countdown.
+		Storm = React.createElement(ui.Stack, {
+			gap = 2,
+			size = UDim2.new(1, 0, 0, BAR_HEIGHT + STORM_LABEL_HEIGHT + 2),
 			layoutOrder = 5,
+		}, {
+			Bar = React.createElement(ui.ProgressBar, {
+				progress = math.clamp(props.height / math.max(props.targetHeight, 1), 0, 1),
+				variant = if props.stormSecondsLeft <= STORM_URGENT_SECONDS then "red" else "green",
+				text = `{string.format("%.0f", props.height)} / {string.format("%.0f", props.targetHeight)}`,
+				showText = true,
+				size = UDim2.new(1, 0, 0, BAR_HEIGHT),
+				layoutOrder = 1,
+			}),
+			Countdown = React.createElement(ui.Text, {
+				text = `{clock(props.stormSecondsLeft)} until storm!`,
+				textSize = STORM_LABEL_TEXT_SIZE,
+				weight = Enum.FontWeight.Bold,
+				shadow = true,
+				color = if props.stormSecondsLeft <= STORM_URGENT_SECONDS
+					then Color3.fromRGB(255, 138, 122)
+					else Color3.fromRGB(226, 230, 245),
+				xAlignment = Enum.TextXAlignment.Center,
+				size = UDim2.new(1, 0, 0, STORM_LABEL_HEIGHT),
+				layoutOrder = 2,
+			}),
 		}),
 	}
 
@@ -174,6 +214,68 @@ return function(props: Props)
 			anchorPoint = Vector2.new(0.5, 0),
 		}, column),
 	}
+
+	-- Bottom-right, opposite the controls hint. The bills fly here.
+	children.Cash = React.createElement(ui.Panel, {
+		size = UDim2.fromOffset(CASH_WIDTH, CASH_HEIGHT),
+		position = UDim2.new(1, -EDGE_MARGIN, 1, -EDGE_MARGIN),
+		anchorPoint = Vector2.new(1, 1),
+	}, {
+		Row = React.createElement(ui.Row, { gap = 8, size = UDim2.fromScale(1, 1) }, {
+			Icon = React.createElement("ImageLabel", {
+				Image = Constants.CASH_IMAGE,
+				BackgroundTransparency = 1,
+				Size = UDim2.fromOffset(CASH_ICON, CASH_ICON),
+				LayoutOrder = 1,
+			}),
+			Amount = React.createElement(ui.Text, {
+				text = tostring(props.cash),
+				textSize = CASH_TEXT_SIZE,
+				weight = Enum.FontWeight.Heavy,
+				shadow = true,
+				xAlignment = Enum.TextXAlignment.Left,
+				size = UDim2.fromOffset(CASH_WIDTH - CASH_ICON - 34, CASH_HEIGHT),
+				layoutOrder = 2,
+			}),
+		}),
+	})
+
+	children.CashFly = React.createElement(CashFly, {
+		awarded = props.cashAwarded,
+		target = CASH_TARGET,
+	})
+
+	-- Only special zones announce themselves; a normal zone is just a new sky.
+	if props.zoneWarning then
+		children.ZoneWarning = React.createElement(ui.Panel, {
+			size = UDim2.fromOffset(WARNING_WIDTH, WARNING_HEIGHT),
+			position = UDim2.fromScale(0.5, 0.34),
+			anchorPoint = Vector2.new(0.5, 0.5),
+			zIndex = 5,
+		}, {
+			Stack = React.createElement(ui.Stack, { gap = 2, padding = 8 }, {
+				Title = React.createElement(ui.Text, {
+					text = props.zoneWarning.name,
+					textSize = 34,
+					weight = Enum.FontWeight.Heavy,
+					shadow = true,
+					color = props.zoneWarning.tint,
+					xAlignment = Enum.TextXAlignment.Center,
+					size = UDim2.new(1, 0, 0, 42),
+					layoutOrder = 1,
+				}),
+				Detail = React.createElement(ui.Text, {
+					text = props.zoneWarning.warning or "",
+					textSize = 24,
+					weight = Enum.FontWeight.Bold,
+					shadow = true,
+					xAlignment = Enum.TextXAlignment.Center,
+					size = UDim2.new(1, 0, 0, 30),
+					layoutOrder = 2,
+				}),
+			}),
+		})
+	end
 
 	if props.showHint ~= false then
 		children.Hint = React.createElement(ControlsHint, {

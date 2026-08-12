@@ -33,6 +33,13 @@ local function applyState()
 end
 
 function MusicController.Start()
+	-- Switched off at the feature level (see Constants.ENABLED) while TowerGame
+	-- runs its own playlist. Bailing here rather than deleting the feature keeps
+	-- the music.enabled setting and its Settings row intact.
+	if not Constants.ENABLED then
+		return
+	end
+
 	-- React to every replica change. SettingsController.get reads PlayerData
 	-- under the hood, so flipping music.enabled inside PlayerData.Settings
 	-- flows through here on the next replica diff.

@@ -64,6 +64,10 @@ return ByteNet.defineNamespace("TowerGame", function()
 				targetHeight = ByteNet.float32,
 				stormEndsAt = ByteNet.float64,
 				checkpoints = ByteNet.uint8,
+				-- Current zone (see Zones.luau) plus which of the normal skies is
+				-- up, so every client paints the same world.
+				zoneId = ByteNet.uint8,
+				zoneSky = ByteNet.uint8,
 			}),
 			reliabilityType = "reliable",
 		}),

@@ -334,6 +334,73 @@ The HUD is a full-screen gameplay surface, so it hugs the top and bottom edges
 rather than following the centered-by-default rule for feature UIs — centering a
 height readout would put it on top of the tower the player is aiming at.
 
+## Zones
+
+Clearing a checkpoint moves the run into a new zone. The server picks it and
+broadcasts the id; the server owns the half that can't be faked (how blocks
+*feel*), the client owns the look. Both read the same `Zones.luau` table.
+
+| Zone | Blocks | Weather |
+| ---- | ------ | ------- |
+| Clear Skies | unchanged | a random sky from `Assets.Zones.Normal` |
+| Retro | old stud look (Plastic + Studs/Inlet) | — |
+| Snowy | slippery (friction 0.05) | snowfall |
+| Stormy | unchanged | rain, plus a wind that leans the tower |
+
+Only special zones announce themselves — a normal zone is just a new sky. The
+banner clears itself after `ZONE_WARNING_SECONDS`.
+
+Two details worth keeping:
+
+- **Glow blocks are exempt from Retro.** Their whole point is the material, and
+  studding them over just makes them grey.
+- **The server sends an arbitrary number for the sky, not an index.** It has no
+  idea how many skies exist — that's a Studio asset it can't see — so the client
+  takes it modulo the folder count. Adding a sky in Studio needs no code change.
+
+The wind is applied as a mass-scaled impulse rather than a velocity write, so
+every block leans by the same acceleration and sleeping assemblies wake up and
+join in instead of standing rigid through a gale.
+
+All the zone assets live under `ReplicatedStorage.Assets` and are **Studio-
+authored — Rojo doesn't sync them**. Every lookup degrades to "leave it as it
+was": a missing skybox costs you a nice sky, not the game.
+
+## Cash
+
+50 per zone reached, and 10 every five minutes. Both go to everyone in the
+server, because both are things the room did together — one tower, one clock.
+
+There's no cash packet. It's persisted on the profile, so the replica diff *is*
+the event: `TowerFeedbackController` watches the value, and an increase becomes
+the sound plus a signal the HUD animates from. One source of truth, so the
+counter and the flying bills can't disagree about how much arrived.
+
+The bills themselves aren't React-driven — a dozen images moved through state
+would re-render the HUD every frame of the burst. React owns the host frame; the
+bills are plain instances handed to TweenService that clean up after themselves.
+
+## Sound
+
+| Cue | Who hears it | Where it's fired |
+| --- | ------------ | ---------------- |
+| `Drop` | everyone, positionally | server, on the released piece |
+| `Drop2` | just the dropper | client, in `TowerAimController.drop` |
+| `NormalBlockCollision` | everyone | the Classic skin's impact sound |
+| `YourTurn` | just you | `TowerFeedbackController` |
+| `ZoneReached` | just you | `TowerZoneController` |
+| `CashSound` | just you | on the cash value rising |
+
+`Sfx.luau` clones from `Assets.Sounds` rather than referencing raw asset ids, so
+re-tuning a cue's volume or pitch is a Studio edit and not a code change. A
+missing sound warns once and is otherwise a no-op — audio going quiet should
+never take gameplay down with it.
+
+Music cycles `Assets.Music`, shuffled and reshuffled each time the list is
+exhausted, client-side so each player drives their own playlist. Boil's own Music
+feature is switched off (`Music/Constants.ENABLED`) so the two don't fight over
+the mix.
+
 ## When the storm lands
 
 Running out of time ends the run, and it ends it loudly. `breakTower` throws every
@@ -364,6 +431,11 @@ game, not the history.
   about a stud; it only shows up with synthetic input.
 - **No explosion sound.** The ASMR kit has nothing that fits and inventing an asset
   id gets you silence, so the detonation is currently seen and not heard.
+- **Special zones are implemented but unobserved.** Two checkpoints in a row rolled
+  normal during testing (a 4-in-10 shot each), so retro / snowy / stormy have not
+  been seen end-to-end in a real run. The assets they name all exist and the code
+  paths are short, but they haven't been watched. Temporarily zeroing the normal
+  zone's `weight` in `Zones.luau` is the quickest way to force one.
 - **Skins are colour and material only.** Making a block actually *look* like a
   Needoh means squash-and-stretch on impact, which is a deformation problem the
   cube geometry doesn't allow. The sound carries it for now.

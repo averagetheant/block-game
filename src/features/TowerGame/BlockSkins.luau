@@ -41,7 +41,9 @@ BlockSkins.List = {
 		name = "Classic",
 		color = Color3.fromRGB(96, 100, 112),
 		material = Enum.Material.Concrete,
-		impactSound = "rbxassetid://83673675473754",
+		-- Assets.Sounds.NormalBlockCollision — the plain, weighty knock the rest
+		-- of the skins are flavoured against.
+		impactSound = "rbxassetid://120925282182940",
 		volume = 0.55,
 		pitchRange = { 0.85, 1.1 },
 		weight = 4,

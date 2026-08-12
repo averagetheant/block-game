@@ -30,6 +30,8 @@ export type State = {
 	targetHeight: number,
 	stormEndsAt: number,
 	checkpoints: number,
+	zoneId: number,
+	zoneSky: number,
 }
 
 local TowerController = {}
@@ -49,6 +51,8 @@ local data: State = {
 	targetHeight = Constants.STORM_FIRST_TARGET,
 	stormEndsAt = 0,
 	checkpoints = 0,
+	zoneId = 1,
+	zoneSky = 1,
 }
 
 function TowerController.GetData(): State

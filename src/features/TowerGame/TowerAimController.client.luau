@@ -20,6 +20,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 
 -- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
 local TowerController = require(script.Parent.TowerController)
@@ -184,6 +185,9 @@ function TowerAimController.drop()
 	-- Send the placement with the drop so the piece lands where it's being shown,
 	-- not where the last stream update got to.
 	TowerController.release(aimX, aimTurns)
+	-- The dropper's own confirmation cue. Everyone else hears the world-space
+	-- "Drop" the server plays on the piece.
+	Sfx.play("Drop2")
 	teardown()
 end
 

@@ -14,4 +14,9 @@ return {
 	-- The persisted setting id. Registered as a toggle under the "audio"
 	-- category in Settings.luau.
 	SETTING_ID = "music.enabled",
+
+	-- Off for TowerGame: that feature cycles its own playlist out of
+	-- Assets.Music, and two music systems would just fight over the mix. Flip
+	-- back on if you drop TowerGame's music controller.
+	ENABLED = false,
 }

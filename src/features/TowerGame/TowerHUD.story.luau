@@ -13,11 +13,30 @@ local React = require(ReplicatedStorage.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Packages.ReactRoblox)
 local UILabs = require(ReplicatedStorage.Packages.UILabs)
 
+local Signal = require(ReplicatedStorage.Packages.Signal)
+
 local TowerGame = Features:WaitForChild("TowerGame")
 local Constants = require(TowerGame:WaitForChild("Constants"))
 local TowerHUD = require(TowerGame:WaitForChild("TowerHUD"))
+local Zones = require(TowerGame:WaitForChild("Zones"))
 
 local PHASE_NAMES = { "aiming (yours)", "aiming (someone else)", "settling", "idle" }
+
+-- Stands in for TowerFeedbackController.CashAwarded. The story fires it on a
+-- timer so the bill burst plays on a loop while you tune it.
+local fakeAward = Signal.new()
+
+local function zoneByName(name: string): Zones.Zone?
+	if name == "none" then
+		return nil
+	end
+	for _, zone in Zones.List do
+		if zone.name == name then
+			return zone
+		end
+	end
+	return nil
+end
 
 return {
 	summary = "TowerGame HUD driven by controls. Phase picks the status line; the timer slider drives the countdown bar (red under 5s). No server needed.",
@@ -34,14 +53,32 @@ return {
 		stormSecondsLeft = UILabs.Slider(148, 0, Constants.STORM_SECONDS, 1),
 		checkpoints = UILabs.Slider(1, 0, 20, 1),
 		playerCount = UILabs.Slider(4, 1, 8, 1),
+		cash = UILabs.Slider(1250, 0, 100000, 10),
 		shapeName = UILabs.Choose({ "I", "O", "T", "S", "Z", "J", "L" }),
 		device = UILabs.Choose({ "pc", "touch", "gamepad" }),
+		zoneWarning = UILabs.Choose({ "none", "Retro Zone", "Snowy Zone", "Stormy Zone" }),
 		showControls = true,
 	},
 
 	story = function(props)
 		local c = props.controls
 		local selected = c.phase
+		local warningZone = zoneByName(c.zoneWarning)
+
+		-- Fire a payout every couple of seconds so the burst is always visible
+		-- while the story is open.
+		React.useEffect(function()
+			local running = true
+			task.spawn(function()
+				while running do
+					task.wait(2)
+					fakeAward:Fire(50)
+				end
+			end)
+			return function()
+				running = false
+			end
+		end, {})
 
 		local phase = Constants.PHASE.AIMING
 		if selected == "settling" then
@@ -68,6 +105,11 @@ return {
 			holderUserId = if phase == Constants.PHASE.AIMING then order[1] or 0 else 0,
 			order = order,
 			device = c.device,
+			cash = c.cash,
+			-- A stand-in for the controller's signal: the story fires it from the
+			-- button below so the bill burst can be watched without a server.
+			cashAwarded = fakeAward,
+			zoneWarning = warningZone,
 			shapeName = c.shapeName,
 			nextShapeName = "T",
 			secondsLeft = c.secondsLeft,

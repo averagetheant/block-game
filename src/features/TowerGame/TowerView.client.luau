@@ -18,10 +18,14 @@ local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local ControlsHint = require(ReplicatedStorage.Features.TowerGame.ControlsHint)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
 local TowerHUD = require(ReplicatedStorage.Features.TowerGame.TowerHUD)
+local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
--- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
+-- Client-realm siblings (StarterPlayerScripts.Features.*).
+local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
 local TowerAimController = require(script.Parent.TowerAimController)
 local TowerController = require(script.Parent.TowerController)
+local TowerFeedbackController = require(script.Parent.TowerFeedbackController)
+local TowerZoneController = require(script.Parent.TowerZoneController)
 
 return function()
 	local state = Boil.useReplica(TowerController)
@@ -45,6 +49,29 @@ return function()
 			connection:Disconnect()
 		end
 	end, {})
+
+	-- The zone banner is a transient: it shows for a few seconds when a special
+	-- zone starts, then clears itself.
+	local zoneWarning, setZoneWarning = React.useState(nil :: Zones.Zone?)
+
+	React.useEffect(function()
+		local alive = true
+		local connection = TowerZoneController.ZoneWarned:Connect(function(zone: Zones.Zone)
+			setZoneWarning(zone)
+			task.delay(Constants.ZONE_WARNING_SECONDS, function()
+				if alive then
+					setZoneWarning(nil)
+				end
+			end)
+		end)
+
+		return function()
+			alive = false
+			connection:Disconnect()
+		end
+	end, {})
+
+	local profile = Boil.useReplica(PlayerDataController, Constants.PROFILE_KEY)
 
 	if state == nil then
 		return nil
@@ -81,6 +108,9 @@ return function()
 		stormSeconds = Constants.STORM_SECONDS,
 		checkpoints = state.checkpoints,
 		device = device,
+		cash = if profile then profile.Cash or 0 else 0,
+		cashAwarded = TowerFeedbackController.CashAwarded,
+		zoneWarning = zoneWarning,
 		-- Touch-only: keyboard and gamepad go through ContextActionService, so a
 		-- PC player would just be looking at buttons they never press.
 		showControls = touchOnly,

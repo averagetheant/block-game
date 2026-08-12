@@ -1,5 +1,9 @@
 -- Authoritative core for TowerGame.
 --
+-- Note on reading this file: the sections are ordered by dependency, not by
+-- importance. Luau locals are only visible below their definition, so anything
+-- `beginTurn` or `release` calls has to appear above them.
+--
 -- Owns: the arena, the turn queue, the held piece, the dropped blocks, the
 -- tower's height, and the storm stage. Clients send *intent* (steer / spin /
 -- release) and this file decides whether it happens — the held piece is a
@@ -27,9 +31,12 @@ local BlockSkins = require(ReplicatedStorage.Features.TowerGame.BlockSkins)
 local BlockTypes = require(ReplicatedStorage.Features.TowerGame.BlockTypes)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
+local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
+local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
--- Server-realm sibling (ServerScriptService.Features.TowerGame.TowerStatsService).
+-- Server-realm siblings (ServerScriptService.Features.TowerGame.*).
+local CashService = require(script.Parent.CashService)
 local TowerStatsService = require(script.Parent.TowerStatsService)
 
 type Block = {
@@ -94,7 +101,13 @@ local state = {
 	targetHeight = Constants.STORM_FIRST_TARGET,
 	stormEndsAt = 0,
 	checkpoints = 0,
+	zoneId = Zones.DEFAULT_ID,
+	zoneSky = 1,
 }
+
+-- Direction the storm-zone wind is currently leaning, and when it next drifts.
+local windDirection = 1
+local windChangeAt = 0
 
 
 -- Turn order for the HUD: whoever holds the piece first, then the queue in the
@@ -239,6 +252,70 @@ end
 -- Where a fresh piece appears: clear of whatever has been built so far.
 local function spawnPivot(): CFrame
 	return CFrame.new(0, baseTopY + math.max(state.height, 0) + Constants.SPAWN_CLEARANCE, Constants.PLANE_Z)
+end
+
+-- ---------------------------------------------------------------- the zones --
+--
+-- The server owns the half of a zone that can't be faked client-side: how blocks
+-- feel. The look (sky, weather particles, the warning) is TowerZoneController's
+-- job — it reads the same zone id off the state packet.
+
+-- Retro dresses blocks in the old stud look. Glow blocks are exempt: their whole
+-- point is the material, and studding them over would just make them grey.
+local function applyZoneLook(model: Model, skin: BlockSkins.Skin)
+	local zone = Zones.get(state.zoneId)
+	local retro = zone.kind == "retro" and skin.name ~= "Glow"
+
+	for _, part in model:GetChildren() do
+		if not part:IsA("BasePart") then
+			continue
+		end
+		if retro then
+			part.Material = Enum.Material.Plastic
+			part.TopSurface = Enum.SurfaceType.Studs
+			part.BottomSurface = Enum.SurfaceType.Inlet
+		end
+		if zone.kind == "snowy" then
+			part.CustomPhysicalProperties = Constants.SNOWY_PHYSICS
+		end
+	end
+end
+
+-- Re-dress everything already standing when the zone changes, so a zone is a
+-- property of the world rather than of whatever happened to spawn during it.
+local function applyZoneToTower()
+	for _, block in blocks do
+		applyZoneLook(block.model, block.skin)
+	end
+	local piece = held
+	if piece then
+		applyZoneLook(piece.model, piece.skin)
+	end
+end
+
+-- A steady lean rather than a gale: enough to make a tall stack argue with
+-- itself, not enough to sweep it off the platform. Applied as an impulse scaled
+-- by mass so every block leans by the same acceleration regardless of size, and
+-- so sleeping assemblies wake up and join in.
+local function applyWind(deltaTime: number)
+	if Zones.get(state.zoneId).kind ~= "stormy" then
+		return
+	end
+
+	local now = os.clock()
+	if now >= windChangeAt then
+		windChangeAt = now + Constants.STORM_GUST_SECONDS
+		windDirection = if math.random() < 0.5 then -1 else 1
+	end
+
+	local push = windDirection * Constants.STORM_WIND * deltaTime
+	for _, block in blocks do
+		local root = block.root
+		if root.Parent == nil then
+			continue
+		end
+		root:ApplyImpulse(Vector3.new(push * root.AssemblyMass, 0, 0))
+	end
 end
 
 -- ------------------------------------------------------------ the placement --
@@ -397,6 +474,9 @@ function TowerService.release()
 	}
 	table.insert(blocks, block)
 	watchLanding(block)
+	-- Everyone hears the drop from where it happened. The holder also gets their
+	-- own confirmation cue locally (Drop2, played client-side).
+	Sfx.playAt("Drop", piece.root)
 	TowerStatsService.recordBlockPlaced(piece.player)
 
 	state.phase = PHASE.SETTLING
@@ -416,6 +496,7 @@ local function beginTurn(player: Player)
 	local blockType = BlockTypes.roll(state.checkpoints)
 
 	local model, root = buildPiece(shape, skin, blockType)
+	applyZoneLook(model, skin)
 	local pivot = spawnPivot()
 	model:PivotTo(pivot)
 	-- Tells the holder's client "this one is yours" so it can hide the real piece
@@ -621,6 +702,9 @@ local function resetRun()
 	state.checkpoints = 0
 	state.height = 0
 	state.targetHeight = Constants.STORM_FIRST_TARGET
+	-- Back to clear skies; a fresh run shouldn't inherit the last one's weather.
+	state.zoneId = Zones.DEFAULT_ID
+	state.zoneSky = math.random(1, 255)
 	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
 	-- maxHeight deliberately survives: it's the server's best-ever record, not
 	-- part of the run, and TowerStatsService has already banked it per player.
@@ -640,6 +724,14 @@ local function updateStorm(height: number): boolean
 	if height >= state.targetHeight then
 		spawnCheckpoint(baseTopY + height)
 		state.checkpoints += 1
+
+		-- Clearing a checkpoint is what moves the run into a new zone.
+		local zone = Zones.random(state.zoneId)
+		state.zoneId = zone.id
+		state.zoneSky = math.random(1, 255)
+		applyZoneToTower()
+		CashService.awardZone()
+
 		-- Each floor is a little further out than the last.
 		stormGap += Constants.STORM_GAP_GROWTH
 		-- The next bar is measured from what they actually reached, not from the
@@ -836,7 +928,10 @@ function TowerService.Start()
 	Players.PlayerAdded:Connect(addPlayer)
 	Players.PlayerRemoving:Connect(removePlayer)
 
-	RunService.Heartbeat:Connect(clampToPlane)
+	RunService.Heartbeat:Connect(function(deltaTime)
+		applyWind(deltaTime)
+		clampToPlane()
+	end)
 
 	task.spawn(function()
 		while true do

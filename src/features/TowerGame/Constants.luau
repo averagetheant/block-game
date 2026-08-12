@@ -74,6 +74,31 @@ return {
 	-- Glue blocks: how far a contact can be and still get welded.
 	GLUE_RADIUS = 6,
 
+	-- ------------------------------------------------------------------ zones --
+	-- Studio-authored asset folders (Rojo doesn't sync these; see docs).
+	ASSETS_FOLDER = "Assets",
+	-- Snowy: friction drops through the floor, everything slides.
+	SNOWY_PHYSICS = PhysicalProperties.new(0.8, 0.05, 0, 1, 1),
+	-- Stormy: a constant sideways nudge, in studs/second² of acceleration. Small
+	-- enough to lean a tower rather than sweep it away.
+	STORM_WIND = 5.5,
+	-- How long the wind holds one direction before drifting to a new one.
+	STORM_GUST_SECONDS = 4,
+	-- How long the "special zone" banner stays up.
+	ZONE_WARNING_SECONDS = 4.5,
+	-- Height above the tower top that weather effects are parented at, so the
+	-- particles fall through the play area rather than starting inside it.
+	WEATHER_HEIGHT = 90,
+
+	-- ------------------------------------------------------------------- cash --
+	CASH_PER_ZONE = 50,
+	CASH_PER_INTERVAL = 10,
+	CASH_INTERVAL_SECONDS = 300,
+	-- How many bills fly to the counter per award, and how long they take.
+	CASH_FLY_COUNT = 12,
+	CASH_FLY_SECONDS = 0.75,
+	CASH_IMAGE = "rbxassetid://73395222638222",
+
 	-- ------------------------------------------------------------------ hud --
 	-- Headshot strip: the current player sits dead center at the larger size,
 	-- everyone else shrinks and fades out either side of them.

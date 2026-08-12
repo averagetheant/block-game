@@ -23,18 +23,19 @@ local TowerController = require(script.Parent.TowerController)
 
 return function()
 	local state = Boil.useReplica(TowerController)
-	local secondsLeft, setSecondsLeft = React.useState(0)
+	local clocks, setClocks = React.useState({ turn = 0, storm = 0 })
 
 	React.useEffect(function()
 		local connection = RunService.Heartbeat:Connect(function()
-			local remaining = TowerController.secondsLeft()
-			-- Only re-render when the *displayed* second changes; returning the
-			-- previous value makes React bail out of the update entirely.
-			setSecondsLeft(function(previous: number)
-				if math.ceil(previous) == math.ceil(remaining) then
+			local turn = TowerController.secondsLeft()
+			local storm = TowerController.stormSecondsLeft()
+			-- Only re-render when a *displayed* second changes; returning the
+			-- previous table makes React bail out of the update entirely.
+			setClocks(function(previous)
+				if math.ceil(previous.turn) == math.ceil(turn) and math.ceil(previous.storm) == math.ceil(storm) then
 					return previous
 				end
-				return remaining
+				return { turn = turn, storm = storm }
 			end)
 		end)
 
@@ -58,13 +59,23 @@ return function()
 		holderName = if holder then holder.DisplayName else nil,
 		shapeName = Shapes.nameOf(state.shapeId),
 		nextShapeName = Shapes.nameOf(state.nextShapeId),
-		secondsLeft = secondsLeft,
+		secondsLeft = clocks.turn,
 		turnSeconds = Constants.TURN_SECONDS,
+		targetHeight = state.targetHeight,
+		stormSecondsLeft = clocks.storm,
+		stormSeconds = Constants.STORM_SECONDS,
+		checkpoints = state.checkpoints,
 		-- Touch-only: keyboard and gamepad go through ContextActionService, so a
 		-- PC player would just be looking at buttons they never press.
 		showControls = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled,
-		onMoveLeft = TowerController.moveLeft,
-		onMoveRight = TowerController.moveRight,
+		-- A tap has no release event, so touch steering is a timed pulse rather
+		-- than the press/release the other devices send.
+		onMoveLeft = function()
+			TowerController.nudge(-1)
+		end,
+		onMoveRight = function()
+			TowerController.nudge(1)
+		end,
 		onRotate = function()
 			TowerController.rotate(true)
 		end,

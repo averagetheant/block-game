@@ -27,6 +27,9 @@ export type State = {
 	shapeId: number,
 	nextShapeId: number,
 	queueCount: number,
+	targetHeight: number,
+	stormEndsAt: number,
+	checkpoints: number,
 }
 
 local TowerController = {}
@@ -43,6 +46,9 @@ local data: State = {
 	shapeId = 0,
 	nextShapeId = 0,
 	queueCount = 0,
+	targetHeight = Constants.STORM_FIRST_TARGET,
+	stormEndsAt = 0,
+	checkpoints = 0,
 }
 
 function TowerController.GetData(): State
@@ -62,18 +68,36 @@ function TowerController.secondsLeft(): number
 	return math.max(0, data.turnEndsAt - workspace:GetServerTimeNow())
 end
 
-function TowerController.moveLeft()
-	if not TowerController.isMyTurn() then
-		return
+-- Seconds left before the storm closes the current stage.
+function TowerController.stormSecondsLeft(): number
+	if data.stormEndsAt <= 0 then
+		return 0
 	end
-	Packets.Steer.send({ dir = -1 })
+	return math.max(0, data.stormEndsAt - workspace:GetServerTimeNow())
 end
 
-function TowerController.moveRight()
+-- Steering is a held direction, not a step: -1, 0 or 1. The server integrates
+-- the movement, so this fires twice per swipe (press and release) rather than
+-- once per stud.
+function TowerController.setSteer(dir: number)
 	if not TowerController.isMyTurn() then
 		return
 	end
-	Packets.Steer.send({ dir = 1 })
+	Packets.Steer.send({ dir = dir })
+end
+
+-- Touch has no key-up, so a tap sends a fixed-length pulse instead. One tap is
+-- worth STEER_SPEED × TOUCH_NUDGE_SECONDS studs of glide.
+function TowerController.nudge(dir: number)
+	if not TowerController.isMyTurn() then
+		return
+	end
+	Packets.Steer.send({ dir = dir })
+	task.delay(Constants.TOUCH_NUDGE_SECONDS, function()
+		-- Not gated on isMyTurn: if the turn ended mid-pulse we still want the
+		-- server to hear the release.
+		Packets.Steer.send({ dir = 0 })
+	end)
 end
 
 function TowerController.rotate(clockwise: boolean?)

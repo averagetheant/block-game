@@ -2,13 +2,14 @@
 
 A Tricky Towers-style co-op stacker. Everyone plays **one shared tower**: players
 take turns, each turn hands the holder a tetromino they can slide and rotate, and
-a 20-second clock drops it for them if they dither. The camera never orbits — it
-rides the tower's altitude. The HUD tracks current height and the best height the
-tower has ever reached.
+a 20-second clock drops it for them if they dither. Over the top of that runs the
+**storm** — a stage clock demanding a target height, which pays out a permanent
+floor when the players make it. The camera never orbits; it rides the tower's
+altitude.
 
-Prototype status: the loop, the physics, the turn queue and the height tracking
-all work end-to-end. There's no win/lose state, no scoring, and no persistence
-yet (see [Not built yet](#not-built-yet)).
+Prototype status: the turn loop, the physics, the storm stages, the height
+tracking and the saved leaderstats all work end-to-end. There's no win/lose state
+and no scoring (see [Not built yet](#not-built-yet)).
 
 ## The loop
 
@@ -16,16 +17,81 @@ yet (see [Not built yet](#not-built-yet)).
 2. Players enter a round-robin `queue` on join.
 3. **Turn** — the holder gets a piece spawned `SPAWN_CLEARANCE` studs above the
    current tower top, and `TURN_SECONDS` (20) on the clock.
-4. The holder steers (one cell left/right) and spins (quarter turns). The piece is
-   an *anchored, server-owned Model*, so every player watches the same aim with no
-   transform packets involved.
+4. The holder steers (continuous left/right) and spins (quarter turns). The piece
+   is an *anchored, server-owned Model*, so every player watches the same aim with
+   no transform packets involved.
 5. **Drop** — on the holder's release, or when the clock expires, or if the holder
    leaves, the piece is unanchored and physics takes it.
 6. `SETTLE_SECONDS` later the next player is up.
 
 Height is recomputed every `POLL_INTERVAL` from every **settled** block (a block
 counts once its assembly is slower than `SETTLED_SPEED`, so a piece mid-fall can't
-spike the readout). `maxHeight` is the running maximum.
+spike the readout) plus every checkpoint platform. `maxHeight` is the running
+maximum.
+
+## The storm
+
+The pressure mechanic, running independently of whose turn it is.
+
+- Each stage names a `targetHeight` and a `STORM_SECONDS` (90) clock.
+- **Cleared** — the moment the tower reaches the target, a checkpoint platform is
+  welded onto the tower at exactly that altitude, the floor count goes up, and the
+  next target is set to *the height they actually reached* plus
+  `STORM_TARGET_STEP`. Overshooting doesn't make the next stage free.
+- **Expired** — the stage restarts with the same target. See
+  [Open design question](#open-design-question).
+- On an empty server the clock is held rather than ticking down to nothing.
+
+A checkpoint platform is the same `PLATFORM_SIZE` as the starting base, anchored,
+and enters with a two-part tween: it stretches out from a sliver at the center
+line while glowing white (Neon), then cools from white to near-black before
+dropping back to SmoothPlastic. Because the part is anchored, tweening `Size`
+grows it evenly about its center instead of dragging one face.
+
+Checkpoints are tracked in their own list, separate from `blocks` — they have no
+physics but still count toward the tower's top.
+
+## Steering
+
+Movement is **continuous, not stepped**. A client sends the direction it's
+*holding* (-1 / 0 / 1) and the server integrates the position at `STEER_SPEED`
+studs per second inside its Heartbeat, clamped to ±`STEER_LIMIT_X`. Two packets
+per swipe, no matter how far the piece travels, and the server stays the only
+thing that decides where a piece is.
+
+Three edge cases the input controller handles, all of which come from "held" being
+a state rather than an event:
+
+- **Two keys at once** — releasing one resumes the other, rather than stopping dead.
+- **Lost key-up** (alt-tab mid-glide, gamepad unplugged) — `WindowFocusReleased`
+  force-releases, otherwise the piece would slide to the travel limit.
+- **Already holding when the turn starts** — no input event fires for a key that
+  never moved, and the server clears the steer direction on every new turn, so the
+  controller re-asserts what's held when the piece becomes ours.
+
+Touch is the exception: a tap has no key-up, so the HUD buttons send a fixed
+`TOUCH_NUDGE_SECONDS` pulse — one tap is worth about
+`STEER_SPEED × TOUCH_NUDGE_SECONDS` studs of glide.
+
+## Stats and saving
+
+`Blocks Placed` and `Biggest Height` show on the in-game leaderboard and persist
+across sessions.
+
+- `PlayerData.luau` registers the `TowerGame` profile slice through the standard
+  discovery convention — PlayerData never mentions this feature.
+- `TowerStatsService` owns the reads and writes and mirrors them into a
+  `leaderstats` folder. The profile is the truth; the leaderstats values are
+  display mirrors (the height column is floored to an integer, the profile keeps
+  the decimals).
+- Every write goes through `PlayerDataService.SetValue`, so it lands in the replica
+  *and* the next autosave.
+- `Biggest Height` credits **everyone in the server** when the tower sets a
+  record — it's one shared tower, so it's a shared achievement.
+
+Note: in Studio, ProfileStore reports "Roblox API services unavailable - data will
+not be saved" unless you enable *Studio Access to API Services* in Game Settings.
+The stats still count in-session; they just don't persist.
 
 ## Why it plays in 2D
 
@@ -67,8 +133,8 @@ device is additive.
 
 | Intent | Keyboard | Gamepad | Touch |
 | ------ | -------- | ------- | ----- |
-| `moveLeft` | A / ← | DPadLeft | **LEFT** button |
-| `moveRight` | D / → | DPadRight | **RIGHT** button |
+| `setSteer(-1)` | hold A / ← | DPadLeft | **LEFT** button (pulse) |
+| `setSteer(1)` | hold D / → | DPadRight | **RIGHT** button (pulse) |
 | `rotate` | W / ↑ / R | ButtonY | **TURN** button |
 | `drop` | Space / S / ↓ | ButtonA | **DROP** button |
 
@@ -85,7 +151,9 @@ devices.
 | `Constants.luau` | shared | Every tunable + `Presentations` gating |
 | `Shapes.luau` | shared | The seven tetrominoes as grid cells (ids are wire-stable) |
 | `Packets.luau` | shared | ByteNet: `Steer`, `Spin`, `Release`, `State` |
-| `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height — the whole authority |
+| `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
+| `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
+| `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
 | `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the four intents |
 | `TowerInputController.client.luau` | client | Keyboard + gamepad binds |
 | `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude |
@@ -112,8 +180,12 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | -------- | ------ |
 | `TURN_SECONDS` | The drop clock (20) |
 | `SETTLE_SECONDS` | Pause between turns |
-| `STEER_LIMIT_X` | How far off-center a piece can travel |
+| `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `SPAWN_CLEARANCE` | Drop height above the tower top |
+| `STORM_SECONDS` | The stage clock (90) |
+| `STORM_FIRST_TARGET`, `STORM_TARGET_STEP` | The first bar, and how much each cleared stage adds |
+| `PLATFORM_SIZE` | Size of the base *and* every checkpoint — they're the same slab |
+| `PLATFORM_GROW_SECONDS`, `PLATFORM_FADE_SECONDS` | The checkpoint entrance tween |
 | `BLOCK_PHYSICS` | Friction / density / bounce of every block |
 | `CAMERA_DISTANCE`, `CAMERA_AIM_LIFT`, `CAMERA_LERP` | Framing and follow feel |
 | `DESPAWN_BELOW` | How far under the platform a fallen block is cleaned up |
@@ -122,12 +194,22 @@ The HUD is a full-screen gameplay surface, so it hugs the top and bottom edges
 rather than following the centered-by-default rule for feature UIs — centering a
 height readout would put it on top of the tower the player is aiming at.
 
+## Open design question
+
+**Nothing happens when the storm clock expires** — the stage just restarts with the
+same target. The name implies a consequence (weather rolling in, blocks getting
+shoved, the bottom of the tower crumbling) but a punishment mechanic wasn't
+specified, and guessing wrong there changes how the whole game feels. The hook is
+one branch in `updateStorm`; decide the consequence and it goes there.
+
 ## Not built yet
 
 - **No win/lose or scoring.** The tower just grows; collapsing costs nothing.
-- **`maxHeight` is per-server-session** and in memory. An all-time record needs a
-  DataStore (it's global, so it doesn't belong in per-player PlayerData).
+- **The tower's `maxHeight` is per-server-session** and in memory. Per-*player*
+  bests do persist (see [Stats and saving](#stats-and-saving)); a global all-time
+  record would need its own DataStore, since it isn't per-player data.
 - **No next-piece preview in the HUD.** `nextShapeName` is already plumbed through
   to the component — it just isn't rendered.
-- **No "your piece is about to drop" feedback** beyond the timer bar turning red
-  under 5 seconds.
+- **A very short keyboard tap moves nothing.** Steering is a held state, so a press
+  and release inside a single frame nets zero movement. Human taps (50 ms+) move
+  about a stud; it only shows up with synthetic input.

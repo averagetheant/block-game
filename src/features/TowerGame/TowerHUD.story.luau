@@ -30,6 +30,9 @@ return {
 		maxHeight = UILabs.Slider(48, 0, 300, 0.5),
 		blockCount = UILabs.Slider(11, 0, 200, 1),
 		secondsLeft = UILabs.Slider(13, 0, Constants.TURN_SECONDS, 1),
+		targetHeight = UILabs.Slider(32, 0, 300, 1),
+		stormSecondsLeft = UILabs.Slider(48, 0, Constants.STORM_SECONDS, 1),
+		checkpoints = UILabs.Slider(1, 0, 20, 1),
 		shapeName = UILabs.Choose({ "I", "O", "T", "S", "Z", "J", "L" }),
 		showControls = true,
 	},
@@ -56,6 +59,10 @@ return {
 			nextShapeName = "T",
 			secondsLeft = c.secondsLeft,
 			turnSeconds = Constants.TURN_SECONDS,
+			targetHeight = c.targetHeight,
+			stormSecondsLeft = c.stormSecondsLeft,
+			stormSeconds = Constants.STORM_SECONDS,
+			checkpoints = c.checkpoints,
 			showControls = c.showControls,
 			onMoveLeft = function()
 				print("[TowerHUD.story] move left")

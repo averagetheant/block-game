@@ -1,9 +1,15 @@
 -- Authoritative core for TowerGame.
 --
--- Owns: the arena, the turn queue, the held piece, the dropped blocks, and the
--- tower's height. Clients send *intent* (steer / spin / release) and this file
--- decides whether it happens — the held piece is a server-owned Model, so its
--- movement replicates for free and every player watches the same aim.
+-- Owns: the arena, the turn queue, the held piece, the dropped blocks, the
+-- tower's height, and the storm stage. Clients send *intent* (steer / spin /
+-- release) and this file decides whether it happens — the held piece is a
+-- server-owned Model, so its movement replicates for free and every player
+-- watches the same aim.
+--
+-- Steering is continuous: a client sends the direction it's *holding* and this
+-- file integrates the position each frame. That keeps the wire cost at two
+-- packets per swipe no matter how far the piece travels, and it keeps the
+-- server the only thing that ever decides where a piece is.
 --
 -- The whole game runs on one Z slice (Constants.PLANE_Z). Roblox has no 2D
 -- physics mode, so `clampToPlane` zeroes out-of-plane velocity every frame and
@@ -14,10 +20,14 @@ local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
+
+-- Server-realm sibling (ServerScriptService.Features.TowerGame.TowerStatsService).
+local TowerStatsService = require(script.Parent.TowerStatsService)
 
 type Block = {
 	model: Model,
@@ -49,6 +59,8 @@ local baseTopY = 0
 local queue: { Player } = {}
 local blocks: { Block } = {}
 local held: Held? = nil
+-- The direction the holder is currently holding: -1, 0, or 1.
+local steerDir = 0
 local nextShape: Shapes.Shape = Shapes.random()
 local lastBroadcast = 0
 
@@ -63,6 +75,9 @@ local state = {
 	shapeId = 0,
 	nextShapeId = nextShape.id,
 	queueCount = 0,
+	targetHeight = Constants.STORM_FIRST_TARGET,
+	stormEndsAt = 0,
+	checkpoints = 0,
 }
 
 local function broadcast()
@@ -86,7 +101,7 @@ local function findOrBuildBase(): BasePart
 	local part = Instance.new("Part")
 	part.Name = "Base"
 	part.Anchored = true
-	part.Size = Constants.BASE_SIZE
+	part.Size = Constants.PLATFORM_SIZE
 	part.Position = Constants.BASE_POSITION
 	part.Color = Constants.BASE_COLOR
 	part.Material = Enum.Material.SmoothPlastic
@@ -168,19 +183,36 @@ end
 -- Every presentation (HUD buttons, keyboard, gamepad) funnels into these three.
 -- They are the only writers of `held`.
 
-function TowerService.steer(player: Player, dir: number)
+-- Set the direction the holder is holding. The move itself happens in
+-- `stepHeld`, so this is just a validated write of a sign.
+function TowerService.setSteer(player: Player, dir: number)
 	local piece = held
 	if piece == nil or piece.player ~= player or state.phase ~= PHASE.AIMING then
 		return
 	end
-	-- Direction is a sign, not a distance — a client can't ask for a 50-stud step.
-	local step = if dir < 0 then -Constants.BLOCK_SIZE else Constants.BLOCK_SIZE
-	local targetX = piece.pivot.Position.X + step
-	if math.abs(targetX) > Constants.STEER_LIMIT_X then
+	-- Direction is a sign, not a distance — a client can't ask for a 50-stud step
+	-- or a 10x speed multiplier.
+	steerDir = if dir > 0 then 1 elseif dir < 0 then -1 else 0
+end
+
+-- Continuous horizontal motion, integrated per frame.
+local function stepHeld(deltaTime: number)
+	local piece = held
+	if piece == nil or steerDir == 0 or state.phase ~= PHASE.AIMING then
 		return
 	end
 
-	piece.pivot = CFrame.new(targetX, piece.pivot.Position.Y, Constants.PLANE_Z) * piece.pivot.Rotation
+	local position = piece.pivot.Position
+	local targetX = math.clamp(
+		position.X + steerDir * Constants.STEER_SPEED * deltaTime,
+		-Constants.STEER_LIMIT_X,
+		Constants.STEER_LIMIT_X
+	)
+	if targetX == position.X then
+		return
+	end
+
+	piece.pivot = CFrame.new(targetX, position.Y, Constants.PLANE_Z) * piece.pivot.Rotation
 	piece.model:PivotTo(piece.pivot)
 end
 
@@ -203,6 +235,7 @@ function TowerService.release()
 		return
 	end
 	held = nil
+	steerDir = 0
 
 	for _, part in piece.model:GetChildren() do
 		if part:IsA("BasePart") then
@@ -210,6 +243,7 @@ function TowerService.release()
 		end
 	end
 	table.insert(blocks, { model = piece.model, root = piece.root, settled = false })
+	TowerStatsService.recordBlockPlaced(piece.player)
 
 	state.phase = PHASE.SETTLING
 	state.holderUserId = 0
@@ -228,6 +262,9 @@ local function beginTurn(player: Player)
 	model.Parent = arena
 
 	held = { model = model, root = root, shape = shape, pivot = pivot, player = player }
+	-- A key still held from the previous turn must not carry over to the next
+	-- player's piece.
+	steerDir = 0
 
 	state.phase = PHASE.AIMING
 	state.holderUserId = player.UserId
@@ -272,6 +309,89 @@ local function clampToPlane()
 			root.CFrame = root.CFrame - Vector3.new(0, 0, drift)
 		end
 	end
+end
+
+-- ---------------------------------------------------------------- the storm --
+--
+-- The pressure mechanic. Every stage names a height to beat before the clock
+-- runs out; clearing it welds a permanent floor onto the tower at whatever
+-- altitude the players got to, and sets a higher bar.
+
+-- Anchored checkpoint platforms, tracked separately from `blocks` because they
+-- have no physics but still count toward the tower's top.
+local platforms: { BasePart } = {}
+
+local function spawnCheckpoint(topY: number)
+	local full = Constants.PLATFORM_SIZE
+
+	local part = Instance.new("Part")
+	part.Name = `Checkpoint{#platforms + 1}`
+	part.Anchored = true
+	part.Material = Enum.Material.Neon
+	part.Color = Constants.PLATFORM_SPAWN_COLOR
+	part.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	-- Enters as a sliver at the center line and stretches outward to full width;
+	-- because the part is anchored, tweening Size grows it evenly about its
+	-- position rather than dragging one face.
+	part.Size = Vector3.new(0.5, full.Y, full.Z)
+	part.Position = Vector3.new(0, topY + full.Y / 2, Constants.PLANE_Z)
+	part.Parent = arena
+	table.insert(platforms, part)
+
+	local grow = TweenService:Create(
+		part,
+		TweenInfo.new(Constants.PLATFORM_GROW_SECONDS, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+		{ Size = full }
+	)
+	grow:Play()
+
+	grow.Completed:Connect(function()
+		-- Still Neon while it fades, so it visibly cools from glowing white down
+		-- to black instead of snapping to a matte part.
+		local fade = TweenService:Create(
+			part,
+			TweenInfo.new(Constants.PLATFORM_FADE_SECONDS),
+			{ Color = Constants.PLATFORM_SETTLED_COLOR }
+		)
+		fade:Play()
+		fade.Completed:Connect(function()
+			part.Material = Enum.Material.SmoothPlastic
+		end)
+	end)
+end
+
+-- Returns true when the stage changed and clients need to hear about it.
+local function updateStorm(height: number): boolean
+	local now = workspace:GetServerTimeNow()
+
+	-- Nobody playing: hold the clock rather than letting it expire against an
+	-- empty server.
+	if #queue == 0 then
+		state.stormEndsAt = now + Constants.STORM_SECONDS
+		return false
+	end
+
+	if height >= state.targetHeight then
+		spawnCheckpoint(baseTopY + height)
+		state.checkpoints += 1
+		-- The next bar is measured from what they actually reached, not from the
+		-- target they just cleared, so overshooting doesn't make the next stage
+		-- trivial.
+		state.targetHeight = height + Constants.STORM_TARGET_STEP
+		state.stormEndsAt = now + Constants.STORM_SECONDS
+		return true
+	end
+
+	if now >= state.stormEndsAt then
+		-- Ran out of time. For now the stage just restarts — see "Open design
+		-- question" in docs/game/TowerGame.md before adding a punishment.
+		state.stormEndsAt = now + Constants.STORM_SECONDS
+		return true
+	end
+
+	return false
 end
 
 -- --------------------------------------------------------------- the height --
@@ -323,11 +443,26 @@ local function updateHeight()
 		end
 	end
 
+	-- Checkpoint platforms are part of the tower even though they aren't blocks.
+	for _, platform in platforms do
+		local platformTop = partTopY(platform)
+		if platformTop > top then
+			top = platformTop
+		end
+	end
+
 	local height = top - baseTopY
 	local changed = math.abs(height - state.height) > Constants.HEIGHT_EPSILON or #blocks ~= state.blockCount
 	state.height = height
 	if height > state.maxHeight then
 		state.maxHeight = height
+		-- Everyone in the server shares the tower, so everyone gets credit for
+		-- the record it just set.
+		TowerStatsService.recordHeight(height)
+	end
+
+	if updateStorm(height) then
+		changed = true
 	end
 
 	-- Re-send periodically even when nothing moved: a player who joined between
@@ -418,9 +553,10 @@ function TowerService.Start()
 	end
 
 	buildArena()
+	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
 
 	Packets.Steer.listen(function(payload, player)
-		TowerService.steer(player, payload.dir)
+		TowerService.setSteer(player, payload.dir)
 	end)
 	Packets.Spin.listen(function(payload, player)
 		TowerService.spin(player, payload.clockwise)
@@ -439,7 +575,10 @@ function TowerService.Start()
 	Players.PlayerAdded:Connect(addPlayer)
 	Players.PlayerRemoving:Connect(removePlayer)
 
-	RunService.Heartbeat:Connect(clampToPlane)
+	RunService.Heartbeat:Connect(function(deltaTime)
+		stepHeld(deltaTime)
+		clampToPlane()
+	end)
 
 	task.spawn(function()
 		while true do

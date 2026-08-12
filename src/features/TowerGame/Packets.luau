@@ -12,7 +12,10 @@ local ByteNet = require(ReplicatedStorage.Packages.ByteNet)
 
 return ByteNet.defineNamespace("TowerGame", function()
 	return {
-		-- Client -> Server: steer the held piece one cell left (-1) or right (1).
+		-- Client -> Server: the direction currently *held* — -1 left, 1 right, 0
+		-- released. Sent on key down and key up rather than per movement step;
+		-- the server integrates the position from there, so a held key costs two
+		-- packets no matter how far the piece travels.
 		Steer = ByteNet.definePacket({
 			value = ByteNet.struct({
 				dir = ByteNet.int8,
@@ -54,6 +57,12 @@ return ByteNet.defineNamespace("TowerGame", function()
 				shapeId = ByteNet.uint8,
 				nextShapeId = ByteNet.uint8,
 				queueCount = ByteNet.uint8,
+				-- Storm stage: the height to beat, when the clock runs out (server
+				-- time, same deal as turnEndsAt), and how many checkpoint
+				-- platforms have been earned so far.
+				targetHeight = ByteNet.float32,
+				stormEndsAt = ByteNet.float64,
+				checkpoints = ByteNet.uint8,
 			}),
 			reliabilityType = "reliable",
 		}),

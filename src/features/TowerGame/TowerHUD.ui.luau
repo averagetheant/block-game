@@ -16,6 +16,7 @@
 -- is aiming) reflows the rest instead of leaving a hole.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
@@ -47,6 +48,7 @@ local CONTROL_ROW_WIDTH = 110 * 3 + 160 + CONTROL_GAP * 3
 local STORM_LABEL_HEIGHT = 24
 local STORM_LABEL_TEXT_SIZE = 22
 local PROGRESS_HEIGHT = 26
+local PANEL_RESIZE = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 local CASH_WIDTH = 190
 local CASH_HEIGHT = 54
 local CASH_TEXT_SIZE = 28
@@ -120,6 +122,23 @@ return function(props: Props)
 	local aiming = props.phase == PHASE.AIMING
 	local canAct = aiming and props.isMyTurn
 
+	-- The height panel gives up room for the turn dial and takes it back between
+	-- turns; tweened so the handover reads as one motion with the dial.
+	local statsRef = React.useRef(nil :: GuiObject?)
+	React.useEffect(function()
+		local panel = statsRef.current
+		if panel == nil then
+			return
+		end
+		local width = if aiming then -(STATS_HEIGHT + 10) else 0
+		local tween = TweenService:Create(panel, PANEL_RESIZE, { Size = UDim2.new(1, width, 0, STATS_HEIGHT) })
+		tween:Play()
+		return function()
+			tween:Cancel()
+			tween:Destroy()
+		end
+	end, { aiming } :: { any })
+
 	local column: { [string]: any } = {
 		Turns = React.createElement(TurnStrip, {
 			order = props.order,
@@ -135,7 +154,10 @@ return function(props: Props)
 			layoutOrder = 2,
 		}, {
 			Stats = React.createElement(ui.Panel, {
-				size = UDim2.new(1, if aiming then -(STATS_HEIGHT + 10) else 0, 0, STATS_HEIGHT),
+				-- Tweened rather than set: the dial appearing and disappearing
+				-- each turn would otherwise snap the panel's width twice a turn.
+				ref = statsRef,
+				size = UDim2.new(1, 0, 0, STATS_HEIGHT),
 				layoutOrder = 1,
 			}, {
 				Row = React.createElement(ui.Row, { size = UDim2.fromScale(1, 1) }, {

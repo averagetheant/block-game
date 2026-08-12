@@ -14,8 +14,15 @@
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
+local TweenService = game:GetService("TweenService")
+
 local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
+
+-- Height arrives in steps — a block lands and the number jumps — so the marker
+-- and the trail are tweened rather than set. Without this the dot teleports
+-- every time a piece settles.
+local GLIDE = TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 
 export type Props = {
 	-- Studs: where this leg started, where the tower is, where it ends.
@@ -37,8 +44,9 @@ local DONE_COLOR = Color3.fromRGB(112, 214, 122)
 local TOWER_COLOR = Color3.fromRGB(255, 255, 255)
 local GOAL_COLOR = Color3.fromRGB(226, 230, 245)
 
-local function dot(size: number, color: Color3, x: UDim, zIndex: number): any
+local function dot(size: number, color: Color3, x: UDim, zIndex: number, ref: any?): any
 	return React.createElement("Frame", {
+		ref = ref,
 		Size = UDim2.fromOffset(size, size),
 		Position = UDim2.new(x.Scale, x.Offset, 0.5, 0),
 		AnchorPoint = Vector2.new(0.5, 0.5),
@@ -58,6 +66,34 @@ end
 return function(props: Props)
 	local span = math.max(props.to - props.from, 1)
 	local progress = math.clamp((props.current - props.from) / span, 0, 1)
+
+	local towerRef = React.useRef(nil :: Frame?)
+	local trailRef = React.useRef(nil :: Frame?)
+
+	-- Glide both the marker and the trail to the new progress. Rendered at the
+	-- old value and tweened, so a block landing slides the dot along the line
+	-- instead of snapping it.
+	React.useEffect(function()
+		local tweens = {}
+		local tower = towerRef.current
+		if tower then
+			table.insert(tweens, TweenService:Create(tower, GLIDE, { Position = UDim2.new(progress, 0, 0.5, 0) }))
+		end
+		local trail = trailRef.current
+		if trail then
+			table.insert(tweens, TweenService:Create(trail, GLIDE, { Size = UDim2.new(progress, 0, 0, TRACK_HEIGHT) }))
+		end
+		for _, tween in tweens do
+			tween:Play()
+		end
+
+		return function()
+			for _, tween in tweens do
+				tween:Cancel()
+				tween:Destroy()
+			end
+		end
+	end, { progress } :: { any })
 
 	return React.createElement("Frame", {
 		Size = props.size or UDim2.new(1, 0, 0, TOWER_DOT + 6),
@@ -82,9 +118,12 @@ return function(props: Props)
 				Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
 			}),
 
-			-- How far the tower has come, drawn over the track.
+			-- How far the tower has come, drawn over the track. Rendered empty and
+			-- owned by the tween from then on — re-applying a changed Size prop
+			-- each render would fight the animation.
 			Done = React.createElement("Frame", {
-				Size = UDim2.new(progress, 0, 0, TRACK_HEIGHT),
+				ref = trailRef,
+				Size = UDim2.new(0, 0, 0, TRACK_HEIGHT),
 				Position = UDim2.fromScale(0, 0.5),
 				AnchorPoint = Vector2.new(0, 0.5),
 				BackgroundColor3 = DONE_COLOR,
@@ -96,7 +135,7 @@ return function(props: Props)
 
 			Start = dot(END_DOT, DONE_COLOR, UDim.new(0, 0), 3),
 			Goal = dot(END_DOT, GOAL_COLOR, UDim.new(1, 0), 3),
-			Tower = dot(TOWER_DOT, TOWER_COLOR, UDim.new(progress, 0), 4),
+			Tower = dot(TOWER_DOT, TOWER_COLOR, UDim.new(0, 0), 4, towerRef),
 		}),
 	})
 end

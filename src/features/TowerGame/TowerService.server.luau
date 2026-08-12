@@ -84,6 +84,9 @@ local held: Held? = nil
 -- Distance to the next checkpoint. Grows by STORM_GAP_GROWTH every time one is
 -- cleared, so each floor is a little further than the last.
 local stormGap = Constants.STORM_FIRST_TARGET
+-- Who dropped the piece that's currently settling. Whoever that is gets paid for
+-- any height the tower gains, since they're the one who put it there.
+local lastDropper: Player? = nil
 local nextShape: Shapes.Shape = Shapes.random()
 local lastBroadcast = 0
 
@@ -407,9 +410,29 @@ local function detonateBlock(block: Block)
 	explosion.DestroyJointRadiusPercent = 0
 	explosion.Parent = workspace
 
+	-- BlastPressure alone barely shifts a welded assembly, so throw everything in
+	-- radius by hand. Falls off with distance, so the blast has a shape rather
+	-- than flinging the whole tower equally.
+	local origin = explosion.Position
+	for _, other in blocks do
+		local root = other.root
+		if root.Parent == nil or other == block then
+			continue
+		end
+		local offset = root.Position - origin
+		local distance = offset.Magnitude
+		if distance > Constants.EXPLOSION_RADIUS then
+			continue
+		end
+		local falloff = 1 - distance / Constants.EXPLOSION_RADIUS
+		-- Bias upward so the tower erupts rather than being swept sideways.
+		local direction = (offset.Unit + Vector3.new(0, 0.6, 0)).Unit
+		root:ApplyImpulse(direction * Constants.EXPLOSION_IMPULSE * falloff * root.AssemblyMass)
+	end
+
 	-- On a throwaway marker rather than the block: the block is about to be
 	-- destroyed, and a sound parented to it would go with it.
-	Sfx.playAtPosition("Explosion", explosion.Position)
+	Sfx.playAtPosition("Explosion", origin)
 	block.model:Destroy()
 end
 
@@ -481,6 +504,7 @@ function TowerService.release()
 	-- Everyone hears the drop from where it happened. The holder also gets their
 	-- own confirmation cue locally (Drop2, played client-side).
 	Sfx.playAt("Drop", piece.root)
+	lastDropper = piece.player
 	TowerStatsService.recordBlockPlaced(piece.player)
 
 	state.phase = PHASE.SETTLING
@@ -815,10 +839,17 @@ local function updateHeight()
 	local changed = math.abs(height - state.height) > Constants.HEIGHT_EPSILON or #blocks ~= state.blockCount
 	state.height = height
 	if height > state.maxHeight then
+		-- Whoever placed last is the one who pushed it up, so they're paid for
+		-- the studs gained. The record itself is shared — everyone in the server
+		-- is building the same tower.
+		local gained = height - state.maxHeight
 		state.maxHeight = height
-		-- Everyone in the server shares the tower, so everyone gets credit for
-		-- the record it just set.
 		TowerStatsService.recordHeight(height)
+
+		local climber = lastDropper
+		if climber and climber.Parent == Players then
+			CashService.award(climber, math.floor(gained * Constants.CASH_PER_STUD))
+		end
 	end
 
 	if updateStorm(height) then

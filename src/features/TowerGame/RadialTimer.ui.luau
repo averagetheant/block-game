@@ -1,19 +1,19 @@
 --!strict
 -- The turn clock as a filling pie.
 --
--- Roblox has no radial fill, so this is the standard two-halves construction:
--- the circle is split down the middle into two clipping frames, and each holds a
--- half-disc that pivots about the circle's centre. The right half sweeps the
--- first 180°, the left half the rest, which together read as one wedge growing
--- clockwise from twelve o'clock.
+-- Roblox has no radial fill, so this is built from two half-discs — the right
+-- one sweeps the first 180°, the left one the rest — which together read as a
+-- wedge growing clockwise from twelve o'clock.
 --
--- Each half is four nested frames — clip, pivot, clip, disc — because a rotated
--- circle looks identical to an unrotated one. The rotation has to be applied to
--- a *half* disc, and the only way to cut a half disc without an image asset is
--- to clip a whole one.
+-- The interesting part is how a half-disc is cut. The obvious approach (clip a
+-- circle with a rotated frame) does not work: **ClipsDescendants is ignored on
+-- anything inside a rotated ancestor**, so the clip silently does nothing and
+-- you get a full circle. Instead the rotation lives in a UIGradient whose alpha
+-- steps hard from opaque to invisible at its midpoint. That cuts the disc along
+-- a diameter at any angle while every frame stays unrotated — so the outer
+-- half-width clip *does* work, and the intersection of the two gives the wedge.
 --
--- No assets, no per-frame work: the only thing that changes as time runs out is
--- two Rotation numbers.
+-- Nothing animates per frame; two gradient rotations change as the clock drains.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -31,47 +31,43 @@ export type Props = {
 	label: string?,
 }
 
--- One half of the pie. `side` decides which way it sweeps; `degrees` is how much
--- of this half's 180° is showing.
+-- A hard alpha step at the halfway point: everything before it is drawn, and
+-- everything after is gone. Rotating this cuts the circle along a diameter.
+local HALF_CUT = NumberSequence.new({
+	NumberSequenceKeypoint.new(0, 0),
+	NumberSequenceKeypoint.new(0.5, 0),
+	NumberSequenceKeypoint.new(0.501, 1),
+	NumberSequenceKeypoint.new(1, 1),
+})
+
+-- One half of the dial. `degrees` is how much of this half's 180° shows.
 local function halfDisc(side: "left" | "right", degrees: number, color: Color3): any
 	local isRight = side == "right"
-	-- 0° parks the disc entirely outside its own clip; 180° fills it exactly.
-	local rotation = degrees - 180
+	-- The gradient's cut line starts along the vertical (twelve o'clock) and
+	-- turns with the sweep. The right half sweeps down from the top; the left
+	-- half continues from the bottom.
+	local rotation = (if isRight then -90 else 90) + degrees
 
 	return React.createElement("Frame", {
+		-- Unrotated, so this clip actually clips.
 		Size = UDim2.fromScale(0.5, 1),
 		Position = UDim2.fromScale(if isRight then 0.5 else 0, 0),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
 		ClipsDescendants = true,
 	}, {
-		-- Anchored on the circle's centre, which sits on this clip's inner edge,
-		-- so rotating it sweeps around the middle of the dial rather than the
-		-- middle of the half.
-		Pivot = React.createElement("Frame", {
+		Disc = React.createElement("Frame", {
+			-- Full circle, positioned so its centre sits on the clip's inner edge
+			-- (the middle of the dial).
 			Size = UDim2.fromScale(2, 1),
-			AnchorPoint = Vector2.new(0.5, 0.5),
-			Position = UDim2.fromScale(if isRight then 0 else 1, 0.5),
-			Rotation = rotation,
-			BackgroundTransparency = 1,
+			Position = UDim2.fromScale(if isRight then 0 else -1, 0),
+			BackgroundColor3 = color,
 			BorderSizePixel = 0,
 		}, {
-			-- The half of the disc that leads the sweep.
-			Cut = React.createElement("Frame", {
-				Size = UDim2.fromScale(0.5, 1),
-				Position = UDim2.fromScale(if isRight then 0.5 else 0, 0),
-				BackgroundTransparency = 1,
-				BorderSizePixel = 0,
-				ClipsDescendants = true,
-			}, {
-				Disc = React.createElement("Frame", {
-					Size = UDim2.fromScale(2, 1),
-					Position = UDim2.fromScale(if isRight then -1 else 0, 0),
-					BackgroundColor3 = color,
-					BorderSizePixel = 0,
-				}, {
-					Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-				}),
+			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
+			Cut = React.createElement("UIGradient", {
+				Rotation = rotation,
+				Transparency = HALF_CUT,
 			}),
 		}),
 	})
@@ -104,6 +100,7 @@ return function(props: Props)
 			Size = UDim2.fromScale(1, 1),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
+			ZIndex = 2,
 		}, {
 			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
 			Stroke = React.createElement("UIStroke", {

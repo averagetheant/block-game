@@ -285,13 +285,17 @@ devices.
 ```
 
 The **turn clock is a pie** (`RadialTimer`), sitting beside the height panel and
-only existing while someone is aiming — the panel widens to fill the gap between
-turns. Roblox has no radial fill, so it's the standard two-halves construction:
-the circle is split down the middle into clipping frames, each holding a
-half-disc that pivots about the centre. A rotated circle looks identical to an
-unrotated one, so the rotation has to be applied to a *half* disc, and cutting
-one without an image asset means clipping a whole one — hence four nested frames
-per side. Nothing animates per frame; two Rotation numbers change.
+only existing while someone is aiming — the panel tweens wider to fill the gap
+between turns.
+
+Roblox has no radial fill, and the obvious way to fake one does not work:
+**`ClipsDescendants` is ignored on anything inside a rotated ancestor**, so
+clipping a circle with a rotated frame silently does nothing and you get a full
+circle back. The fix is to put the rotation somewhere that isn't a frame — a
+`UIGradient` whose alpha steps hard from opaque to invisible at its midpoint cuts
+the disc along a diameter at any angle while every frame stays unrotated. Two
+such half-discs, each inside an ordinary (working) half-width clip, intersect
+into the wedge. Nothing animates per frame; two gradient rotations change.
 
 The **progress line** (`ProgressLine`) measures *this leg of the climb only* —
 from `zoneBaseHeight` (where the current zone started) to `targetHeight` — so a
@@ -385,8 +389,15 @@ was": a missing skybox costs you a nice sky, not the game.
 
 ## Cash
 
-50 per zone reached, and 10 every five minutes. Both go to everyone in the
-server, because both are things the room did together — one tower, one clock.
+| Award | Who | Why |
+| ----- | --- | --- |
+| 50 per zone reached | everyone | the room cleared it together |
+| 10 per five minutes | everyone | one shared clock |
+| `CASH_PER_STUD` per stud of new record | whoever placed | they're the one who pushed it up |
+
+The per-stud award pays the last dropper, tracked as `lastDropper`, whenever the
+tower's record grows — so extending the tower earns, and the two shared awards
+keep it from being purely individual.
 
 There's no cash packet. It's persisted on the profile, so the replica diff *is*
 the event: `TowerFeedbackController` watches the value, and an increase becomes
@@ -414,10 +425,12 @@ re-tuning a cue's volume or pitch is a Studio edit and not a code change. A
 missing sound warns once and is otherwise a no-op — audio going quiet should
 never take gameplay down with it.
 
-Music cycles `Assets.Music`, shuffled and reshuffled each time the list is
-exhausted, client-side so each player drives their own playlist. Boil's own Music
-feature is switched off (`Music/Constants.ENABLED`) so the two don't fight over
-the mix.
+Music is **one track per zone**: a zone is the game's chapter, so it's the thing
+worth scoring. The track loops until the zone changes rather than handing off
+partway through, and the playlist is shuffled (and reshuffled once exhausted) so
+a long session doesn't repeat in a fixed order. Client-side, so each player
+drives their own. Boil's own Music feature is switched off
+(`Music/Constants.ENABLED`) so the two don't fight over the mix.
 
 ## When the storm lands
 

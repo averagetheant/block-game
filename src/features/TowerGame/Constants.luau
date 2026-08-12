@@ -68,9 +68,15 @@ return {
 	IMPACT_COOLDOWN = 0.25,
 	-- Rolloff for block sounds, in studs.
 	SOUND_RANGE = 140,
-	-- Explosion blocks.
-	EXPLOSION_RADIUS = 22,
-	EXPLOSION_PRESSURE = 260000,
+	-- Explosion blocks. Sized to actually gut a tower: the radius covers several
+	-- courses of blocks and the pressure is enough to throw them clear rather
+	-- than nudge them. An explosive piece should be a moment, not a bump.
+	EXPLOSION_RADIUS = 46,
+	EXPLOSION_PRESSURE = 1600000,
+	-- Extra outward kick applied by hand to everything in radius. BlastPressure
+	-- alone falls off sharply and barely moves the heavy welded assemblies, so
+	-- this is what gives the blast its throw.
+	EXPLOSION_IMPULSE = 145,
 	-- Glue blocks: how far a contact can be and still get welded.
 	GLUE_RADIUS = 6,
 
@@ -92,6 +98,9 @@ return {
 
 	-- ------------------------------------------------------------------- cash --
 	CASH_PER_ZONE = 50,
+	-- Paid to whoever placed the block, per stud the tower's record grew by.
+	-- Rewards the player who actually pushed it higher rather than the room.
+	CASH_PER_STUD = 2,
 	CASH_PER_INTERVAL = 10,
 	CASH_INTERVAL_SECONDS = 300,
 	-- How many bills fly to the counter per award, and how long they take.

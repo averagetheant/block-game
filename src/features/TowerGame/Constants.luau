@@ -110,6 +110,16 @@ return {
 	-- The blast is the loudest thing in the game; the kit's clip on its own sits
 	-- level with a block landing, which undersells it.
 	EXPLOSION_VOLUME = 1.7,
+	-- The Nuke product: a chain of blasts walked up the tower before the round
+	-- break takes it, so a nuke reads as a nuke rather than as the tower quietly
+	-- disappearing. Bigger and looser than a bomb — it isn't meant to be
+	-- survivable, it's meant to look like the end of the world.
+	NUKE_BLASTS = 8,
+	NUKE_BLAST_INTERVAL = 0.12,
+	NUKE_RADIUS = 60,
+	NUKE_PRESSURE = 2000000,
+	NUKE_IMPULSE = 190,
+
 	-- A bomb doesn't go off on contact — it warns first. Three beeps with the
 	-- piece flashing red, which is long enough for the room to see it coming and
 	-- short enough that the tower hasn't finished settling around it.
@@ -154,11 +164,60 @@ return {
 	ASSETS_FOLDER = "Assets",
 	-- Snowy: friction drops through the floor, everything slides.
 	SNOWY_PHYSICS = PhysicalProperties.new(0.8, 0.05, 0, 1, 1),
-	-- Stormy: a constant sideways nudge, in studs/second² of acceleration. Small
-	-- enough to lean a tower rather than sweep it away.
-	STORM_WIND = 5.5,
-	-- How long the wind holds one direction before drifting to a new one.
-	STORM_GUST_SECONDS = 4,
+	-- Stormy: lightning strikes a settled block and detonates on it. Deliberately
+	-- smaller than a Bomb — a bomb is a piece the players were handed and can
+	-- plan around, while this arrives unasked, so it takes a bite out of the
+	-- tower rather than gutting it.
+	LIGHTNING_RADIUS = 26,
+	LIGHTNING_PRESSURE = 700000,
+	LIGHTNING_IMPULSE = 85,
+	LIGHTNING_VOLUME = 1.4,
+	-- Seconds between strikes, rolled fresh in this band each time so the beats
+	-- can't be counted and waited out. Measured from the previous strike, so the
+	-- warning below sits *inside* the gap rather than adding to it.
+	LIGHTNING_MIN_SECONDS = 14,
+	LIGHTNING_MAX_SECONDS = 22,
+	-- How long the red marker sits on the spot before the bolt lands. The whole
+	-- point of the hazard: the strike is announced, so it costs you a tower only
+	-- if you keep building into it.
+	LIGHTNING_WARNING_SECONDS = 10,
+	-- Attribute the server stamps on the arena with the strike position. Clients
+	-- draw the bolt off it; attributes replicate, so the flash needs no packet.
+	STRIKE_ATTRIBUTE = "LightningAt",
+	-- Where the next bolt will land, or nil while none is pending. Clients draw
+	-- the red marker off this one.
+	WARN_ATTRIBUTE = "LightningWarnAt",
+	-- The marker: a translucent red column standing on the doomed spot.
+	WARN_COLOR = Color3.fromRGB(255, 64, 56),
+	WARN_WIDTH = 9,
+	WARN_HEIGHT = 400,
+	WARN_TRANSPARENCY = 0.72,
+	-- How fast it pulses, in full cycles per second. Slow enough to read as a
+	-- warning rather than as a strobe.
+	WARN_PULSE_HZ = 1.6,
+	-- The bolt itself, drawn client-side: a thin bright beam from high above the
+	-- struck point down onto it, gone almost immediately.
+	LIGHTNING_BOLT_WIDTH = 1.6,
+	LIGHTNING_BOLT_HEIGHT = 220,
+	LIGHTNING_BOLT_SECONDS = 0.16,
+	LIGHTNING_BOLT_COLOR = Color3.fromRGB(214, 232, 255),
+
+	-- Foggy: the arena fades out with distance. The camera stands ~78 studs back,
+	-- so the far end has to start well inside that or the fog does nothing.
+	FOG_START = 20,
+	FOG_END = 150,
+	FOG_COLOR = Color3.fromRGB(198, 202, 210),
+
+	-- Night: the world goes dark and every block carries its own light, so the
+	-- tower lights itself and the players build by what they've already placed.
+	NIGHT_BRIGHTNESS = 0.6,
+	NIGHT_AMBIENT = Color3.fromRGB(28, 30, 48),
+	NIGHT_CLOCK_TIME = 0,
+	-- One PointLight per *block*, not per cell — a light on all four cells of a
+	-- tetromino is four times the cost for no visible gain.
+	NIGHT_LIGHT_RANGE = 17,
+	NIGHT_LIGHT_BRIGHTNESS = 1.5,
+
 	-- How long the "special zone" banner stays up.
 	ZONE_WARNING_SECONDS = 4.5,
 	-- Height above the tower top that weather effects are parented at, so the
@@ -299,9 +358,27 @@ return {
 	-- the side — and if the place has a baseplate it would otherwise sit there
 	-- forever instead of falling out of the world.
 	DESPAWN_BELOW = 20,
-	-- Out-of-plane drift past this many studs gets corrected (the velocity clamp
-	-- handles the rest).
-	PLANE_TOLERANCE = 0.25,
+	-- How far off the plane a block may sit before it's nudged back. Tight: a
+	-- collision can throw a block this far in a single physics step, and at
+	-- BLOCK_DEPTH 4 even a fraction of a stud is visible as the tower losing its
+	-- flat silhouette. Measured at ~0.39 with this at 0.25.
+	PLANE_TOLERANCE = 0.08,
+	-- How far a block may be *tilted* out of the plane before it's straightened,
+	-- measured as `1 - |LookVector.Z|` (0 = perfectly face-on, 1 = edge-on).
+	--
+	-- Clamping angular velocity stops a block tipping any *further*, but never
+	-- undoes a tilt it already has — and a blast can impart most of a tumble
+	-- inside a single physics step, before the next clamp runs. Without this,
+	-- blocks come to rest skewed and stay skewed, which is what makes the tower
+	-- read as 3D.
+	PLANE_TILT_TOLERANCE = 0.002,
+	-- How fast a moving block is rotated back into plane, as an exponential rate.
+	-- Gentle: snapping a piece mid-flight looks like it teleported, so it eases
+	-- while it travels and is snapped outright once it's resting.
+	PLANE_STRAIGHTEN_RATE = 9,
+	-- Below this a block counts as resting, and gets straightened in one step
+	-- rather than eased.
+	PLANE_RESTING_SPEED = 0.05,
 
 	-- --------------------------------------------------------------- tempo --
 	-- Height recompute + state broadcast interval, seconds.
@@ -374,6 +451,21 @@ return {
 	-- The soft currency id this feature registers with the Store. Its balance
 	-- lives at { PROFILE_KEY, "Cash" } — Store debits it through that path.
 	CURRENCY_ID = "coins",
+
+	-- ------------------------------------------------------- colour skin packs --
+	-- The ten colour packs all cost the same: they're the same product in ten
+	-- flavours, and pricing one above another would only be telling players their
+	-- favourite colour is worth less.
+	COLOR_SKIN_PRICE = 60,
+	-- Defaults for the roll each block makes (see SkinPacks.colorFor). The bright
+	-- packs use these; the neutrals override them.
+	COLOR_SKIN_SATURATION = 0.78,
+	COLOR_SKIN_SATURATION_JITTER = 0.18,
+	COLOR_SKIN_VALUE = 0.82,
+	COLOR_SKIN_VALUE_JITTER = 0.2,
+	-- Hue wanders far less than saturation or value: past a narrow band a "red"
+	-- pack starts handing out oranges and stops being what the card promised.
+	COLOR_SKIN_HUE_JITTER = 0.02,
 
 	-- ------------------------------------------------------------ persistence --
 	-- Top-level profile key this feature owns (registered in PlayerData.luau).

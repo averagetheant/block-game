@@ -116,6 +116,9 @@ local currencies: { [string]: Currency } = {}
 local products: { [number]: Product } = {}
 local gamepasses: { [number]: Gamepass } = {}
 local inventoryTabs: { [string]: InventoryTab } = {}
+-- kind → a function turning one Pack into the element for its card's art slot.
+-- Client-realm only, for the same reason inventory tabs are: it holds React.
+local packPreviews: { [string]: (pack: Pack) -> any } = {}
 -- packId → already complained about its missing kind. See listKinds.
 local warnedKinds: { [string]: boolean } = {}
 
@@ -191,6 +194,37 @@ function Catalog.registerInventoryTab(def: InventoryTab)
 	end
 	inventoryTabs[def.id] = def
 	Catalog.Changed:Fire()
+end
+
+-- How a kind's cards draw their art, when a flat icon can't say what the pack
+-- is. Registered by the feature that owns the content, from its *client* realm —
+-- the renderer returns a React element, so it can't live in a shared Store.luau.
+--
+-- TowerGame uses this for skins: a colour pack is a hue and a material, and no
+-- 2D icon conveys either honestly, so it renders a real block instead. Store
+-- still knows nothing about blocks — it asks the owning feature to draw.
+function Catalog.registerPackPreview(kind: PackKind, render: (pack: Pack) -> any)
+	if packPreviews[kind] ~= nil then
+		warn(`[Store] pack preview for kind "{kind}" already registered; overwriting`)
+	end
+	packPreviews[kind] = render
+	Catalog.Changed:Fire()
+end
+
+-- The art element for a pack, or nil to fall back to its `icon`.
+function Catalog.previewFor(pack: Pack): any
+	local render = packPreviews[pack.kind]
+	if render == nil then
+		return nil
+	end
+	-- A broken preview must not take the shop down with it: the card falls back
+	-- to the icon, which is what it would have drawn anyway.
+	local ok, element = pcall(render, pack)
+	if not ok then
+		warn(`[Store] pack preview for kind "{pack.kind}" errored: {element}`)
+		return nil
+	end
+	return element
 end
 
 -- Lookups ---------------------------------------------------------------------

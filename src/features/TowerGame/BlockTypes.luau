@@ -114,8 +114,13 @@ function BlockTypes.chanceAt(checkpoints: number, scale: number?): number
 end
 
 -- nil for an ordinary block. `checkpoints` drives how often that isn't the case.
-function BlockTypes.roll(checkpoints: number, scale: number?): BlockType?
-	if math.random() > BlockTypes.chanceAt(checkpoints, scale) then
+-- `override` is a flat chance that replaces the curve *and* its cap, for a
+-- gamemode that wants to promise a number rather than scale one. Scaling can't
+-- make that promise: MAX_CHANCE holds the result at 0.4 however high the scale
+-- goes, so a mode advertising "70% special" would quietly deliver 40%.
+function BlockTypes.roll(checkpoints: number, scale: number?, override: number?): BlockType?
+	local chance = if override ~= nil then override else BlockTypes.chanceAt(checkpoints, scale)
+	if math.random() > chance then
 		return nil
 	end
 

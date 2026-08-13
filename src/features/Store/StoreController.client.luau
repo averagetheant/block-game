@@ -17,6 +17,7 @@ require(ReplicatedStorage.Features.Store)
 local Constants = require(ReplicatedStorage.Features.Store.Constants)
 local Catalog = require(ReplicatedStorage.Features.Store.Catalog)
 local Packets = require(ReplicatedStorage.Features.Store.Packets)
+local audio = require(ReplicatedStorage.Shared.Boil).audio
 
 -- Client-realm sibling controller.
 local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
@@ -89,6 +90,11 @@ function StoreController.equip(kind: string, packId: string)
 	if typeof(kind) ~= "string" or typeof(packId) ~= "string" then
 		return
 	end
+	-- Only a real equip gets the cue; the empty id is `unequip`, and taking
+	-- something off shouldn't sound like putting it on.
+	if #packId > 0 then
+		audio.playUI("equip")
+	end
 	Packets.Equip.send({ kind = kind, packId = packId })
 end
 
@@ -115,7 +121,36 @@ function StoreController.promptGamepass(gamepassId: number)
 end
 
 function StoreController.Start()
-	-- Nothing to wire up on start; every entry point is on-demand.
+	-- The purchase cue fires on the *grant*, not the request. Playing it when
+	-- the packet goes up would chime for a purchase the server then declined —
+	-- and this file's whole premise is that the replica coming back is the only
+	-- thing that means anything. Watching the owned set also covers Robux
+	-- products, which never send a packet at all.
+	--
+	-- The first payload is the profile loading, not a purchase, so the baseline
+	-- is taken before anything can sound.
+	local known: { [string]: boolean }? = nil
+
+	PlayerDataController.DataChanged:Connect(function()
+		local saved = slice()
+		local owned = if saved then saved.Owned else nil
+		if typeof(owned) ~= "table" then
+			return
+		end
+
+		if known == nil then
+			known = table.clone(owned)
+			return
+		end
+
+		for packId, isOwned in owned do
+			if isOwned == true and (known :: any)[packId] ~= true then
+				audio.playUI("purchase")
+				break
+			end
+		end
+		known = table.clone(owned)
+	end)
 end
 
 return StoreController

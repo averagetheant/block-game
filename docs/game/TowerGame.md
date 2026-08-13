@@ -123,7 +123,8 @@ modes and it's what asks:
 | Classic | Nothing. The un-voted numbers, exactly. |
 | Tower Rush | Two thirds of the usual storm clock for the same target. |
 | Blitz Builder | Half the turn clock. The storm clock is left alone, so shorter turns buy the players *more* attempts, not fewer. |
-| Mystery Mode | Special-piece odds ×6. Still capped by `BlockTypes.MAX_CHANCE`, so it's "most pieces", not "all". |
+| Roulette | **70%** of pieces are special — a flat `blockTypeChance` that bypasses the curve *and* `MAX_CHANCE`. |
+| Lightning Storm | Lightning strikes in **every** zone, not just Stormy. |
 
 **Classic is always on the ballot** — it carries `pinned = true`, so GamemodeVote
 keeps it and rolls the remaining slots from the twists. A ballot of nothing but
@@ -713,11 +714,62 @@ broadcasts the id; the server owns the half that can't be faked (how blocks
 | Clear Skies | unchanged | a random sky from `Assets.Zones.Normal` |
 | Retro | old stud look — Plastic, **studs on all six faces** | — |
 | Snowy | slippery (friction 0.05) | snowfall |
-| Stormy | unchanged | rain, plus a wind that leans the tower |
+| Stormy | struck blocks are destroyed | rain, plus **lightning** that detonates where it lands |
 | Space | unchanged | `workspace.Gravity` drops to **30** |
+| Foggy | unchanged | `Lighting` fog closes in to `FOG_END` |
+| Night | each gains a `PointLight` in its own colour | dark: `Brightness`, `Ambient` and `ClockTime` drop |
 
 Only special zones announce themselves — a normal zone is just a new sky. The
 banner clears itself after `ZONE_WARNING_SECONDS`.
+
+### The cadence
+
+Zones arrive on a **rhythm, not a roll**: `Zones.next` returns a normal zone
+unless `(cleared + 1)` is divisible by `NORMALS_PER_SPECIAL + 1`, which puts a
+special every third zone — two calm floors, then a twist.
+
+A weighted roll (what this replaced) can hand out four specials in a row or none
+for six floors, and neither is the shape of a run anyone wants. *Which* special
+comes up is still random, and `avoidId` stops the same one landing twice running.
+
+Normal zones therefore never roll, so their `weight` is unread — it's kept only
+so every row of the table reads the same.
+
+### Stormy: lightning
+
+Every `LIGHTNING_MIN_SECONDS` to `LIGHTNING_MAX_SECONDS`, the storm picks a
+**random spot** on the play plane at the tower's current height, stands a pulsing
+red column on it for `LIGHTNING_WARNING_SECONDS` (10), and *then* detonates.
+
+The warning is the mechanic. An unannounced strike is a tax; an announced one is
+a decision — you can see where the bolt is going and choose whether to keep
+building into it. A *place* is picked rather than a block precisely so the
+warning can appear before anything is standing there.
+
+The gap is measured from the previous strike and the warning sits **inside** it,
+so raising `LIGHTNING_WARNING_SECONDS` doesn't quietly slow the storm down. The
+marker is cleared before the bolt lands, and again if the zone changes mid-warning
+— otherwise a red column would be left standing over a zone with no lightning in
+it.
+
+The blast goes through the same `blastAt` the Bomb type uses, so a strike behaves
+the way players have already learned bombs behave and there's one blast to tune.
+It's deliberately smaller than a bomb (`LIGHTNING_RADIUS` 26 vs `EXPLOSION_RADIUS`
+46): a bomb is a piece the players were handed and can plan around, while this
+arrives unasked.
+
+The **Lightning Storm** gamemode (`alwaysLightning`) turns it on in every zone for
+a whole round. It keeps the ten-second warning, so it's round-long pressure rather
+than an unfair one.
+
+The server writes the strike position to the `STRIKE_ATTRIBUTE` on the arena and
+every client draws its own bolt off it. Attributes replicate, so the flash costs
+no packet of its own, and a client that misses it simply doesn't draw one.
+
+**This replaced a constant wind.** Wind applied every frame to every block, so
+there was no moment to react to — the tower slowly argued with itself and nothing
+a player did changed that. A strike lands somewhere specific, you see it happen,
+and the damage is local.
 
 **Retro studs every face.** A cube read as a 1962 brick from above and as a
 smooth slab from the side, which is worse than not studding it at all, so all six
@@ -737,17 +789,25 @@ file's.
 
 Two more details worth keeping:
 
-- **Zone dressing is the server's word, and it's the same for the whole room.** A
-  player who owns a material skin pack overrides it on their own screen only —
-  see [Skin packs](#skin-packs). A bought cosmetic can't be allowed to change
-  what everyone else sees.
+- **Zone dressing is the server's word, and it's the same for the whole room.**
+  A skin pack rides on the block rather than on the viewer — see
+  [Skin packs](#skin-packs) — so a bought cosmetic changes that player's blocks
+  for everyone, and nobody else's for anyone.
 - **The server sends an arbitrary number for the sky, not an index.** It has no
   idea how many skies exist — that's a Studio asset it can't see — so the client
   takes it modulo the folder count. Adding a sky in Studio needs no code change.
 
-The wind is applied as a mass-scaled impulse rather than a velocity write, so
-every block leans by the same acceleration and sleeping assemblies wake up and
-join in instead of standing rigid through a gale.
+**Fog and darkness are `Lighting` properties, so they're purely local.** The
+server never touches Lighting; `TowerZoneController` captures what the place file
+had on the first zone change and restores from that, rather than from a second
+set of hardcoded numbers that could drift away from it.
+
+Night's block lights are client-side decoration too — one `PointLight` per
+*block*, hung on the model's first part rather than on every cell (four lights on
+a tetromino cost four times as much and look the same), tinted the block's own
+colour so a tower of mixed skins lights the arena in what the players built with.
+Blocks arrive constantly, so the 0.5s sweep that keeps the weather above the
+tower also lights anything placed *during* the night.
 
 All the zone assets live under `ReplicatedStorage.Assets` and are **Studio-
 authored — Rojo doesn't sync them**. Every lookup degrades to "leave it as it
@@ -783,15 +843,50 @@ thing that pays out, and `StoreService` is the only thing that debits.
 
 ## Skin packs
 
-`SkinPacks.luau` lists the buyable block looks. There's one so far:
+`SkinPacks.luau` lists the buyable block looks, in two families:
 
 | Pack | Price | Effect |
 | ---- | ----- | ------ |
 | `skins.neon` — Neon Blocks | 100 coins | Every block part becomes `Enum.Material.Neon` |
+| `skins.red` … `skins.black` (10) | 60 coins | Every block you place is a **random shade** of that colour |
 
-A skin pack overrides the material of **the blocks its owner drops**, including
-whatever the current zone had dressed them in — a Retro zone can't dull a neon
-block. That override is the product.
+A skin pack overrides the look of **the blocks its owner drops**. A *material*
+pack (Neon) also overrides whatever the current zone had dressed them in — a
+Retro zone can't dull a neon block. That override is the product.
+
+### Colour packs roll a shade per block
+
+The ten colours set `hue` and no `material`, so the rolled `BlockSkin`'s surface
+(and its impact sounds) survive underneath the tint, and Retro can still stud them
+over — a colour pack owns the hue, not the surface, so the two overrides never
+have to fight.
+
+**Each block rolls its own shade** (`SkinPacks.colorFor`) rather than taking one
+flat value. A flat fill looks like a bug: forty identical blocks read as one solid
+mass with no edges, and the tower stops being legible as a stack of pieces.
+Varying saturation and value keeps every block's boundary visible while still
+reading as "this player builds in red".
+
+Hue wanders far less than the other two (`COLOR_SKIN_HUE_JITTER` 0.02) — past a
+narrow band a "red" pack starts handing out oranges and stops being what the card
+promised. The three neutrals override the defaults with near-zero saturation, so
+their variation is entirely in brightness, which is what "shades of grey" means.
+
+All ten cost the same. They're one product in ten flavours, and pricing one above
+another would only be telling players their favourite colour is worth less.
+
+### The cards show a real block
+
+A flat icon can't show what a skin sells — the colour packs differ from each
+other *only* by hue, and Neon only by material. So the shop and inventory tiles
+render `BlockPreview`: an actual T-block spinning in a `ViewportFrame`.
+
+Store owns the card and knows nothing about blocks. TowerGame hands it a renderer
+through `Catalog.registerPackPreview(kind, render)`, from
+`TowerSkinPresentation.client.luau` — a *client* file, because the renderer
+returns a React element and a shared `Store.luau` loads on the server too. Any
+other kind is unaffected and keeps its icon; a preview that errors falls back to
+the icon rather than taking the shop down.
 
 It's **server, not local**. The pack rides on the block, so the look a player
 bought is one the whole room sees on *their* blocks — it doesn't repaint anyone
@@ -830,10 +925,18 @@ appear in the shop — `group = "action"` keeps them out — because their butto
 a rail entry, registered by `TowerProductsPresentation` into the "actions"
 cluster — Nuke on `assets.Icons.nuke`, Skip on `assets.Icons.arrowRightOutline`.
 
-`TowerService.nuke()` routes through the same round break the storm uses when its
-clock expires, rather than a parallel teardown: the wreck, the gamemode vote and
-the fresh round all behave the way players have already seen them behave. Note
-that this means buying a Nuke also puts the next round to a vote.
+`TowerService.nuke()` walks a **barrage** of `NUKE_BLASTS` (8) explosions up the
+tower, spaced `NUKE_BLAST_INTERVAL` apart so they read as a chain rather than a
+single frame in which everything vanishes. They're fired against the tower's own
+height, so the barrage covers what was actually built — it climbs a tall stack
+and stays low on a short one.
+
+The round break then runs on a delay, concurrently: the barrage is the spectacle,
+the break is what actually resets the round, and neither waits on the other. It's
+the same round break the storm uses when its clock expires rather than a parallel
+teardown, so the wreck, the gamemode vote and the fresh round all behave the way
+players have already seen them behave — which does mean buying a Nuke also puts
+the next round to a vote.
 
 `TowerService.clearStage()` runs the checkpoint at `state.targetHeight`, not
 wherever the tower actually stands — the same full sequence (cutscene, platform,

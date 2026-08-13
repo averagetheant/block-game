@@ -29,6 +29,15 @@ export type Modifier = {
 	-- Multiplier on the odds a piece is a special type (bomb / burning / Noob).
 	-- 1 is the normal curve; the roll is still clamped by BlockTypes.MAX_CHANCE.
 	blockTypeScale: number,
+	-- Flat odds a piece is special, overriding the curve *and* its cap entirely.
+	-- nil leaves `blockTypeScale` in charge. This exists because a mode like
+	-- Roulette wants a promise ("70% of pieces are special") rather than a
+	-- multiplier, and a multiplier can't make that promise — MAX_CHANCE would
+	-- silently hold it at 0.4 however high the scale went.
+	blockTypeChance: number?,
+	-- Lightning strikes regardless of zone. Normally it's the Stormy zone's
+	-- hazard; a mode can turn it on everywhere.
+	alwaysLightning: boolean?,
 }
 
 export type Gamemode = {
@@ -95,17 +104,36 @@ Gamemodes.List = {
 		},
 	},
 	{
-		id = "mystery",
-		name = "Mystery Mode",
-		blurb = "Bombs. Lots of bombs.",
+		id = "roulette",
+		name = "Roulette",
+		blurb = "70% of pieces are special.",
 		icon = assets.Icons.questionMark,
 		order = 3,
-		-- Special pieces go from a garnish to the point of the stage. Still
-		-- capped by BlockTypes.MAX_CHANCE, so it's "most pieces", not "all".
+		-- A flat chance rather than a multiplier. The old Mystery Mode scaled the
+		-- curve ×6, which sounds dramatic and wasn't: MAX_CHANCE held it at 0.4
+		-- however high the scale went, so the mode's real behaviour didn't match
+		-- what it promised. `blockTypeChance` bypasses both the curve and the cap
+		-- so the number on the card is the number that happens.
 		modifier = {
 			turnSeconds = Constants.TURN_SECONDS,
 			stormSeconds = Constants.STORM_SECONDS,
-			blockTypeScale = 6,
+			blockTypeScale = 1,
+			blockTypeChance = 0.7,
+		},
+	},
+	{
+		id = "lightningStorm",
+		name = "Lightning Storm",
+		blurb = "Lightning strikes in every zone.",
+		icon = assets.Icons.rocket,
+		order = 4,
+		-- The Stormy zone's hazard, everywhere. It keeps its ten-second warning,
+		-- so this is a round-long pressure rather than an unfair one.
+		modifier = {
+			turnSeconds = Constants.TURN_SECONDS,
+			stormSeconds = Constants.STORM_SECONDS,
+			blockTypeScale = 1,
+			alwaysLightning = true,
 		},
 	},
 } :: { Gamemode }

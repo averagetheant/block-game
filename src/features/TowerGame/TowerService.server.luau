@@ -189,10 +189,13 @@ local function applyStage(modifier: Gamemodes.Modifier)
 	state.stormSeconds = modifier.stormSeconds
 end
 
--- Direction the storm-zone wind is currently leaning, and when it next drifts.
-local windDirection = 1
-local windChangeAt = 0
-
+-- The Stormy zone's lightning. `nextStrikeAt` is when the next bolt is due;
+-- `pendingStrikeX` is the column already announced by a red marker, nil while
+-- none is, and `strikeDueAt` is when that one lands. Only the X is held: what it
+-- hits is whatever is highest in that column when the bolt actually falls.
+local nextStrikeAt = 0
+local pendingStrikeX: number? = nil
+local strikeDueAt = 0
 
 -- Turn order for the HUD: whoever holds the piece first, then the queue in the
 -- order they'll play. `queue` already rotates the holder to the back on their
@@ -347,8 +350,11 @@ local function buildPiece(
 ): (Model, BasePart, Color3)
 	local model = Instance.new("Model")
 	model.Name = `Piece_{shape.name}`
-	-- The skin keeps its material and its sounds; only the colour is rolled.
-	local color = randomColor()
+	-- The skin keeps its material and its sounds; only the colour is rolled. A
+	-- colour pack rolls within its own family instead of across the whole wheel
+	-- — still a fresh shade per block, so the pieces stay legible as separate
+	-- blocks rather than merging into one flat mass.
+	local color = SkinPacks.colorFor(pack) or randomColor()
 
 	local root: BasePart? = nil
 	for index, cell in shape.cells do
@@ -356,7 +362,9 @@ local function buildPiece(
 		part.Name = `Cell{index}`
 		part.Size = Vector3.new(Constants.BLOCK_SIZE, Constants.BLOCK_SIZE, Constants.BLOCK_DEPTH)
 		part.Color = color
-		part.Material = if pack then pack.material else skin.material
+		-- A colour pack sets no material, so the rolled skin's own surface (and
+		-- its sounds) survive underneath the tint.
+		part.Material = if pack and pack.material then pack.material else skin.material
 		part.Transparency = skin.transparency or 0
 		part.TopSurface = Enum.SurfaceType.Smooth
 		part.BottomSurface = Enum.SurfaceType.Smooth
@@ -545,16 +553,18 @@ local function applyZoneLook(
 	end
 
 	local zone = Zones.get(state.zoneId)
-	-- A pack keeps its material through every zone, so Retro only gets to stud
-	-- the blocks whose placer wasn't wearing one.
-	local retro = zone.kind == "retro" and pack == nil
+	-- A *material* pack keeps its surface through every zone, so Retro only gets
+	-- to stud the blocks whose placer wasn't wearing one. A colour pack sets no
+	-- material, so its blocks still stud over — it owns the hue, not the surface,
+	-- and the two overrides don't have to fight.
+	local retro = zone.kind == "retro" and (pack == nil or pack.material == nil)
 
 	for _, part in modelParts(model) do
 		if retro then
 			part.Material = Enum.Material.Plastic
 			setSurfaces(part, Enum.SurfaceType.Studs)
 		else
-			part.Material = if pack then pack.material else skin.material
+			part.Material = if pack and pack.material then pack.material else skin.material
 			setSurfaces(part, Enum.SurfaceType.Smooth)
 		end
 		-- Snow wins over everything: a slippery zone is the whole point of it.
@@ -591,30 +601,8 @@ function TowerService.setZone(zoneId: number)
 	broadcast()
 end
 
--- A steady lean rather than a gale: enough to make a tall stack argue with
--- itself, not enough to sweep it off the platform. Applied as an impulse scaled
--- by mass so every block leans by the same acceleration regardless of size, and
--- so sleeping assemblies wake up and join in.
-local function applyWind(deltaTime: number)
-	if Zones.get(state.zoneId).kind ~= "stormy" then
-		return
-	end
-
-	local now = os.clock()
-	if now >= windChangeAt then
-		windChangeAt = now + Constants.STORM_GUST_SECONDS
-		windDirection = if math.random() < 0.5 then -1 else 1
-	end
-
-	local push = windDirection * Constants.STORM_WIND * deltaTime
-	for _, block in blocks do
-		local root = block.root
-		if root.Parent == nil then
-			continue
-		end
-		root:ApplyImpulse(Vector3.new(push * root.AssemblyMass, 0, 0))
-	end
-end
+-- (The Stormy zone's lightning lives further down, next to the explosion code it
+-- reuses — see `strikeLightning`.)
 
 -- ------------------------------------------------------------ the placement --
 --
@@ -692,13 +680,20 @@ local function glueBlock(block: Block)
 			weld.Parent = part
 		end
 	end
+
+	-- Once for the block, not once per weld: a piece settling against four
+	-- neighbours would otherwise fire this four times on the same frame.
+	Sfx.playAt("Glue", block.root)
 end
 
-local function detonateBlock(block: Block)
+-- Every explosion in the game goes through here — the Bomb type and the Stormy
+-- zone's lightning both — so a strike behaves the way players have already
+-- learned bombs behave, and there is one blast to tune rather than two.
+local function blastAt(origin: Vector3, radius: number, pressure: number, impulse: number, exclude: Block?)
 	local explosion = Instance.new("Explosion")
-	explosion.Position = block.root.Position
-	explosion.BlastRadius = Constants.EXPLOSION_RADIUS
-	explosion.BlastPressure = Constants.EXPLOSION_PRESSURE
+	explosion.Position = origin
+	explosion.BlastRadius = radius
+	explosion.BlastPressure = pressure
 	-- Our pieces are held together by WeldConstraints, which an Explosion doesn't
 	-- break — so this throws blocks around without dissolving them into cells.
 	explosion.DestroyJointRadiusPercent = 0
@@ -707,27 +702,146 @@ local function detonateBlock(block: Block)
 	-- BlastPressure alone barely shifts a welded assembly, so throw everything in
 	-- radius by hand. Falls off with distance, so the blast has a shape rather
 	-- than flinging the whole tower equally.
-	local origin = explosion.Position
 	for _, other in blocks do
 		local root = other.root
-		if root.Parent == nil or other == block then
+		if root.Parent == nil or other == exclude then
 			continue
 		end
 		local offset = root.Position - origin
 		local distance = offset.Magnitude
-		if distance > Constants.EXPLOSION_RADIUS then
+		if distance > radius then
 			continue
 		end
-		local falloff = 1 - distance / Constants.EXPLOSION_RADIUS
+		local falloff = 1 - distance / radius
 		-- Bias upward so the tower erupts rather than being swept sideways.
 		local direction = (offset.Unit + Vector3.new(0, 0.6, 0)).Unit
-		root:ApplyImpulse(direction * Constants.EXPLOSION_IMPULSE * falloff * root.AssemblyMass)
+		root:ApplyImpulse(direction * impulse * falloff * root.AssemblyMass)
 	end
+end
 
+local function detonateBlock(block: Block)
+	local origin = block.root.Position
+	blastAt(origin, Constants.EXPLOSION_RADIUS, Constants.EXPLOSION_PRESSURE, Constants.EXPLOSION_IMPULSE, block)
 	-- On a throwaway marker rather than the block: the block is about to be
 	-- destroyed, and a sound parented to it would go with it.
 	Sfx.playAtPosition("Explosion", origin, Constants.EXPLOSION_VOLUME)
 	block.model:Destroy()
+end
+
+-- Lightning: the Stormy zone's hazard, and a *punctuated* one rather than the
+-- constant lean the wind used to be.
+--
+-- Wind was a poor hazard for this game. It applied every frame to every block,
+-- so there was no moment to react to — the tower slowly argued with itself and
+-- nothing a player did changed that. A strike is the opposite: it lands
+-- somewhere specific, you see it happen, and the damage is local.
+-- Where the next bolt will land, chosen a full LIGHTNING_WARNING_SECONDS before
+-- it does. A random spot on the play plane rather than a chosen block: the storm
+-- isn't aiming at anyone, and picking a *place* is what lets the warning appear
+-- before there's anything standing there to hit.
+local function chooseStrike()
+	local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
+	if arena == nil then
+		return
+	end
+
+	-- Only the X is chosen. The bolt lands on whatever is highest in that column
+	-- at the moment it strikes, which is resolved *then* rather than now — ten
+	-- seconds is long enough for the players to have built something new under
+	-- the warning, and the strike should hit what's actually there.
+	pendingStrikeX = (math.random() * 2 - 1) * Constants.STEER_LIMIT_X
+	strikeDueAt = os.clock() + Constants.LIGHTNING_WARNING_SECONDS
+	-- The marker is a full column, so the warning only needs the X and the floor
+	-- to stand on; the client stretches it up from there.
+	arena:SetAttribute(Constants.WARN_ATTRIBUTE, Vector3.new(pendingStrikeX, baseTopY, Constants.PLANE_Z))
+end
+
+-- The top of whatever stands in `x`'s column, or the base if nothing does. This
+-- is what the bolt actually hits — resolved at strike time, not when the warning
+-- went up, so ten seconds of building under the marker counts.
+local function highestAt(x: number): Vector3
+	local best = baseTopY
+	for _, block in blocks do
+		if block.root.Parent == nil then
+			continue
+		end
+		for _, part in modelParts(block.model) do
+			-- Half a cell either side: a column as wide as the piece it's aimed
+			-- at, so a bolt can't slip between two neighbouring blocks.
+			if math.abs(part.Position.X - x) > Constants.BLOCK_SIZE / 2 then
+				continue
+			end
+			local top = partTopY(part)
+			if top > best then
+				best = top
+			end
+		end
+	end
+	for _, platform in platforms do
+		if math.abs(platform.Position.X - x) <= platform.Size.X / 2 then
+			best = math.max(best, partTopY(platform))
+		end
+	end
+	return Vector3.new(x, best, Constants.PLANE_Z)
+end
+
+local function strikeLightning(origin: Vector3)
+	local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
+	if arena then
+		-- Warning off first, bolt second. A client that saw both attributes change
+		-- in the same frame should be left with a flash and no marker, never the
+		-- other way round.
+		arena:SetAttribute(Constants.WARN_ATTRIBUTE, nil)
+		-- Every client draws the bolt off this attribute. The server says only
+		-- *where* it struck; attributes replicate, so the flash costs no packet
+		-- of its own and a client that misses it simply doesn't draw one.
+		arena:SetAttribute(Constants.STRIKE_ATTRIBUTE, origin)
+	end
+
+	Sfx.playAtPosition("Lightning", origin, Constants.LIGHTNING_VOLUME)
+	blastAt(origin, Constants.LIGHTNING_RADIUS, Constants.LIGHTNING_PRESSURE, Constants.LIGHTNING_IMPULSE)
+end
+
+-- Drives the strikes while a Stormy zone is up: choose a spot, warn for ten
+-- seconds, land the bolt, wait a randomised gap, repeat.
+--
+-- The gap is measured from the last strike and the warning sits *inside* it, so
+-- raising the warning doesn't quietly slow the storm down.
+local function updateLightning()
+	-- Normally the Stormy zone's hazard; the Lightning Storm gamemode turns it
+	-- on everywhere for the whole round.
+	if Zones.get(state.zoneId).kind ~= "stormy" and not stage.alwaysLightning then
+		-- Leaving the zone mid-warning must take the marker with it, or a red
+		-- column is left standing over a zone that has no lightning in it.
+		if pendingStrikeX ~= nil then
+			pendingStrikeX = nil
+			local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
+			if arena then
+				arena:SetAttribute(Constants.WARN_ATTRIBUTE, nil)
+			end
+		end
+		return
+	end
+
+	local now = os.clock()
+	local pendingX = pendingStrikeX
+	if pendingX ~= nil then
+		if now < strikeDueAt then
+			return
+		end
+		pendingStrikeX = nil
+		nextStrikeAt = now
+			+ Constants.LIGHTNING_MIN_SECONDS
+			+ math.random() * (Constants.LIGHTNING_MAX_SECONDS - Constants.LIGHTNING_MIN_SECONDS)
+		strikeLightning(highestAt(pendingX))
+		return
+	end
+
+	-- Nothing pending: start the next warning once the gap has run down, minus
+	-- the warning it has to fit in.
+	if now >= nextStrikeAt - Constants.LIGHTNING_WARNING_SECONDS then
+		chooseStrike()
+	end
 end
 
 local function paint(block: Block, color: Color3)
@@ -997,7 +1111,9 @@ local function beginTurn(player: Player)
 	-- likelier the more floors the run has cleared. Either can be pinned for
 	-- exactly this one piece by the "block" cmdr command.
 	local skin = if skinForced then forcedSkin :: BlockSkins.Skin else BlockSkins.random()
-	local blockType = if blockTypeForced then forcedBlockType else BlockTypes.roll(state.checkpoints, stage.blockTypeScale)
+	local blockType = if blockTypeForced
+		then forcedBlockType
+		else BlockTypes.roll(state.checkpoints, stage.blockTypeScale, stage.blockTypeChance)
 	skinForced = false
 	blockTypeForced = false
 
@@ -1070,7 +1186,7 @@ end
 
 -- ---------------------------------------------------------------- the plane --
 
-local function clampToPlane()
+local function clampToPlane(deltaTime: number)
 	for _, block in blocks do
 		local root = block.root
 		if root.Parent == nil then
@@ -1085,30 +1201,70 @@ local function clampToPlane()
 		-- already stopped. This is the speed the impact sound is scaled by.
 		block.speed = velocity.Magnitude
 
-		-- Skip assemblies that have gone to sleep; writing velocity to a resting
-		-- part would wake it up every frame.
-		if velocity.Magnitude < 0.05 and spin.Magnitude < 0.05 then
-			continue
+		local resting = velocity.Magnitude < Constants.PLANE_RESTING_SPEED
+			and spin.Magnitude < Constants.PLANE_RESTING_SPEED
+
+		-- Velocity only needs clamping while there *is* velocity, and writing it
+		-- to a sleeping assembly would wake it every frame for nothing.
+		if not resting then
+			if velocity.Z ~= 0 then
+				root.AssemblyLinearVelocity = Vector3.new(velocity.X, velocity.Y, 0)
+			end
+			-- Only in-plane spin (about Z) survives; tipping toward or away from
+			-- the camera is what we're suppressing. Custom models are exempt: a
+			-- Noob turns about Y to face the way it's walking, and zeroing that
+			-- would leave it moonwalking on the spot. It's still pinned to the
+			-- plane by the Z terms.
+			if not block.custom and (spin.X ~= 0 or spin.Y ~= 0) then
+				root.AssemblyAngularVelocity = Vector3.new(0, 0, spin.Z)
+			end
 		end
 
-		if velocity.Z ~= 0 then
-			root.AssemblyLinearVelocity = Vector3.new(velocity.X, velocity.Y, 0)
-		end
-		-- Only in-plane spin (about Z) survives; tipping toward or away from the
-		-- camera is what we're suppressing. Custom models are exempt: a Noob turns
-		-- about Y to face the way it's walking, and zeroing that would leave it
-		-- moonwalking on the spot. It's still pinned to the plane by the Z terms.
-		if not block.custom and (spin.X ~= 0 or spin.Y ~= 0) then
-			root.AssemblyAngularVelocity = Vector3.new(0, 0, spin.Z)
-		end
+		-- Position and orientation are corrected whether or not the block is
+		-- resting — a block that came to rest skewed is exactly the case that
+		-- needs fixing, and it will never be moving again to be caught otherwise.
+		-- Both are guarded by a tolerance, so a block that's already flat is
+		-- never written to and never woken.
+		local cf = root.CFrame
 
 		-- Every cell of a piece shares one Z (pieces only ever rotate about Z), so
 		-- the root's drift is the assembly's drift. Nudging the root drags the
 		-- welded assembly with it; Model:PivotTo is no use here because a model's
 		-- WorldPivot doesn't track parts the physics engine moved.
-		local drift = root.Position.Z - Constants.PLANE_Z
+		local drift = cf.Position.Z - Constants.PLANE_Z
 		if math.abs(drift) > Constants.PLANE_TOLERANCE then
-			root.CFrame = root.CFrame - Vector3.new(0, 0, drift)
+			cf = cf - Vector3.new(0, 0, drift)
+			root.CFrame = cf
+		end
+
+		-- Straighten. A Noob is exempt from the angular half of the clamp, so it's
+		-- exempt here too — it has to be allowed to turn around.
+		if block.custom then
+			continue
+		end
+
+		-- LookVector is the part's -Z axis. In-plane it points straight at (or
+		-- away from) the camera, so how far |Z| falls short of 1 is exactly how
+		-- far the block has tipped, with no angle extraction needed.
+		local tilt = 1 - math.abs(cf.LookVector.Z)
+		if tilt <= Constants.PLANE_TILT_TOLERANCE then
+			continue
+		end
+
+		-- The rotation worth keeping. For a pure Z rotation RightVector is
+		-- (cos, sin, 0), so its angle in the XY plane is the block's in-plane
+		-- spin — rebuilt around that and nothing else.
+		local right = cf.RightVector
+		local flat = CFrame.new(cf.Position) * CFrame.Angles(0, 0, math.atan2(right.Y, right.X))
+
+		if resting then
+			-- Settled and skewed: snap. One write, and next frame it's inside
+			-- tolerance, so this doesn't repeat.
+			root.CFrame = flat
+		else
+			-- Mid-flight: ease, or a tumbling piece would visibly teleport
+			-- upright. Framerate-independent, like every other follow here.
+			root.CFrame = cf:Lerp(flat, 1 - math.exp(-Constants.PLANE_STRAIGHTEN_RATE * deltaTime))
 		end
 	end
 end
@@ -1348,8 +1504,10 @@ local function runCheckpoint(height: number)
 		-- Only now does the stage actually advance.
 		state.checkpoints += 1
 
-		-- Clearing a checkpoint is what moves the run into a new zone.
-		local zone = Zones.random(state.zoneId)
+		-- Clearing a checkpoint is what moves the run into a new zone. The count
+		-- has just been incremented, so this asks for the zone *after* the ones
+		-- already cleared — which is what puts the specials on the cadence.
+		local zone = Zones.next(state.checkpoints, state.zoneId)
 		state.zoneId = zone.id
 		state.zoneSky = math.random(1, 255)
 		applyZoneToTower()
@@ -1465,7 +1623,35 @@ function TowerService.nuke(): boolean
 	if checkpointActive or intermission then
 		return false
 	end
-	runRoundBreak()
+
+	-- A nuke should look like one. Before the round break tears the tower down,
+	-- walk a barrage of blasts up it — spaced in time so they read as a chain
+	-- rather than a single frame in which everything vanishes.
+	--
+	-- Fired against the tower's own height so the barrage covers what was
+	-- actually built: on a tall stack it climbs, on a short one it stays low.
+	local top = state.height
+	task.spawn(function()
+		for index = 1, Constants.NUKE_BLASTS do
+			local fraction = index / Constants.NUKE_BLASTS
+			blastAt(
+				Vector3.new(
+					(math.random() * 2 - 1) * Constants.STEER_LIMIT_X,
+					baseTopY + top * fraction,
+					Constants.PLANE_Z
+				),
+				Constants.NUKE_RADIUS,
+				Constants.NUKE_PRESSURE,
+				Constants.NUKE_IMPULSE
+			)
+			task.wait(Constants.NUKE_BLAST_INTERVAL)
+		end
+	end)
+
+	Sfx.playAtPosition("Explosion", Vector3.new(0, baseTopY + top / 2, Constants.PLANE_Z), Constants.EXPLOSION_VOLUME)
+	-- The break runs concurrently: the barrage is the spectacle, the break is
+	-- what actually resets the round, and neither waits on the other.
+	task.delay(Constants.NUKE_BLASTS * Constants.NUKE_BLAST_INTERVAL, runRoundBreak)
 	return true
 end
 
@@ -1773,8 +1959,8 @@ function TowerService.Start()
 	Players.PlayerRemoving:Connect(removePlayer)
 
 	RunService.Heartbeat:Connect(function(deltaTime)
-		applyWind(deltaTime)
-		clampToPlane()
+		updateLightning()
+		clampToPlane(deltaTime)
 	end)
 
 	task.spawn(function()

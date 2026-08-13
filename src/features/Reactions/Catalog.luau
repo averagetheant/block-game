@@ -30,6 +30,9 @@ local Catalog = {}
 -- catalog by this feature's Store.luau; named here because the reactions
 -- themselves have to point at it.
 Catalog.PACK_ID = "reactions.emoji"
+Catalog.HYPE_PACK_ID = "reactions.hype"
+Catalog.SALT_PACK_ID = "reactions.salt"
+Catalog.BRAINROT_PACK_ID = "reactions.brainrot"
 
 -- Placeholder art for the one image reaction. Swap for your own upload — the
 -- point of shipping one is that the image path is exercised, not the picture.
@@ -47,7 +50,70 @@ Catalog.List = {
 	{ id = "skull", name = "Skull", kind = "text", text = "💀", pack = Catalog.PACK_ID, order = 6 },
 	{ id = "clap", name = "Clap", kind = "text", text = "👏", pack = Catalog.PACK_ID, order = 7 },
 	{ id = "rocket", name = "Rocket", kind = "image", image = ROCKET_IMAGE, pack = Catalog.PACK_ID, order = 8 },
+
+	-- Hype: for when the tower is going well.
+	{ id = "party", name = "Party", kind = "text", text = "🎉", pack = Catalog.HYPE_PACK_ID, order = 9 },
+	{ id = "star", name = "Star", kind = "text", text = "⭐", pack = Catalog.HYPE_PACK_ID, order = 10 },
+	{ id = "muscle", name = "Strong", kind = "text", text = "💪", pack = Catalog.HYPE_PACK_ID, order = 11 },
+	{ id = "hundred", name = "Hundred", kind = "text", text = "💯", pack = Catalog.HYPE_PACK_ID, order = 12 },
+
+	-- Salt: for when it is not.
+	{ id = "facepalm", name = "Facepalm", kind = "text", text = "🤦", pack = Catalog.SALT_PACK_ID, order = 13 },
+	{ id = "clown", name = "Clown", kind = "text", text = "🤡", pack = Catalog.SALT_PACK_ID, order = 14 },
+	{ id = "sleep", name = "Sleeping", kind = "text", text = "😴", pack = Catalog.SALT_PACK_ID, order = 15 },
+	{ id = "eyes", name = "Eyes", kind = "text", text = "👀", pack = Catalog.SALT_PACK_ID, order = 16 },
+
+	-- Brainrot: the character art the game already ships, as reactions. All four
+	-- are images, so a pack that is *entirely* image reactions exists — which is
+	-- the case the card preview has to handle without a text fallback.
+	{
+		id = "tungTung",
+		name = "Tung Tung",
+		kind = "image",
+		image = "rbxassetid://96425337367679",
+		pack = Catalog.BRAINROT_PACK_ID,
+		order = 17,
+	},
+	{
+		id = "liriliLarila",
+		name = "Lirili Larila",
+		kind = "image",
+		image = "rbxassetid://104842983573914",
+		pack = Catalog.BRAINROT_PACK_ID,
+		order = 18,
+	},
+	{
+		id = "trippiTroppi",
+		name = "Trippi Troppi",
+		kind = "image",
+		image = "rbxassetid://108224067442222",
+		pack = Catalog.BRAINROT_PACK_ID,
+		order = 19,
+	},
+	{
+		id = "tralalero",
+		name = "Tralalero",
+		kind = "image",
+		image = "rbxassetid://98753768070862",
+		pack = Catalog.BRAINROT_PACK_ID,
+		order = 20,
+	},
 } :: { Reaction }
+
+-- Every reaction belonging to a pack, in display order. The card preview uses
+-- this to draw a pack as its actual contents.
+function Catalog.inPack(packId: string): { Reaction }
+	local result = {}
+	for _, reaction in Catalog.List do
+		if reaction.pack == packId then
+			table.insert(result, reaction)
+		end
+	end
+	table.sort(result, function(a, b)
+		return (a.order or math.huge) < (b.order or math.huge)
+	end)
+	return result
+end
 
 -- What a fresh profile's bar holds, in order.
 Catalog.DEFAULT_SLOTS = { "laugh", "cry", "angry", "question" }

@@ -145,7 +145,12 @@ return function(props: Props)
 			AutoButtonColor = false,
 			Text = if open then "▼" else "▲",
 			TextColor3 = Constants.ARROW_COLOR,
-			TextSize = 18,
+			TextSize = Constants.ARROW_TEXT_SIZE,
+			-- ▲/▼ don't sit on their font's centre line — they're drawn low in
+			-- the em box, so a centred TextLabel renders them visibly below the
+			-- middle of the handle. Nudged up by hand; there's no text property
+			-- that fixes this.
+			TextYAlignment = Enum.TextYAlignment.Center,
 			[React.Event.Activated] = function()
 				setOpen(function(current: boolean): boolean
 					return not current
@@ -158,6 +163,12 @@ return function(props: Props)
 			UIStroke = React.createElement("UIStroke", {
 				Color = Constants.OUTLINE_COLOR,
 				Thickness = Constants.OUTLINE_THICKNESS,
+			}),
+			-- The optical correction. Padding the bottom pushes the glyph's own
+			-- box up inside the handle, which is the only way to move a centred
+			-- character off the layout centre.
+			UIPadding = React.createElement("UIPadding", {
+				PaddingBottom = UDim.new(0, Constants.ARROW_LIFT),
 			}),
 		}),
 	})

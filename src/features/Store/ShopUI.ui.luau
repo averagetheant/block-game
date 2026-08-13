@@ -190,6 +190,9 @@ return function(props: Props)
 				name = pack.name,
 				description = pack.description,
 				icon = pack.icon,
+				-- nil unless the owning feature registered a renderer for this
+				-- kind, in which case it replaces the icon in the art slot.
+				preview = Catalog.previewFor(pack),
 				action = action,
 				dimmed = owned,
 				layoutOrder = index,

@@ -32,6 +32,13 @@ return {
 	-- closed and rides up with it when open.
 	HANDLE_WIDTH = 48,
 	HANDLE_HEIGHT = 18,
+	-- The ▲/▼ glyph. Small — it's an affordance on an 18px tab, not a control
+	-- anyone needs to read from across the screen.
+	ARROW_TEXT_SIZE = 13,
+	-- Optical lift, in pixels. ▲/▼ are drawn low in their em box, so a centred
+	-- label renders them below the middle of the handle; bottom padding of this
+	-- much pushes the glyph back onto the centre it looks like it should be on.
+	ARROW_LIFT = 3,
 	-- Emoji glyph size inside a bar button. Kept to GLYPH_FIT of the button —
 	-- see that constant for why it isn't simply the button size.
 	GLYPH_TEXT_SIZE = 23,
@@ -44,6 +51,9 @@ return {
 	-- wherever the parent clips — which the float's CanvasGroup always does.
 	-- Every glyph size here is derived against this rather than eyeballed.
 	GLYPH_FIT = 0.58,
+	-- Side of one cell in a shop card's pack preview. Four of these plus padding
+	-- have to fit the card's art slot (~204 wide), which is what caps it here.
+	PREVIEW_CELL = 44,
 	-- Open/close slide.
 	SLIDE_TWEEN_INFO = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 

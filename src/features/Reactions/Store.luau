@@ -23,17 +23,54 @@ return function(Store)
 		inventory = false,
 	})
 
-	Store.registerPack({
-		id = Catalog.PACK_ID,
-		kind = "reaction",
-		name = "Emoji Pack",
-		description = "Four more reactions to swap into your bar, including one image reaction.",
-		icon = assets.Icons.friends,
-		price = 100,
-		currency = "coins",
-		variant = "purple",
-		order = 1,
-	})
+	-- Every pack is the same shape, so they're declared as data rather than as
+	-- four near-identical registerPack calls. The cards draw their *contents*
+	-- (see ReactionsPresentation), so the icon here is only a fallback for a
+	-- client that somehow has no preview registered.
+	local packs = {
+		{
+			id = Catalog.PACK_ID,
+			name = "Emoji Pack",
+			description = "Four more reactions, including one image reaction.",
+			price = 100,
+			variant = "purple",
+		},
+		{
+			id = Catalog.HYPE_PACK_ID,
+			name = "Hype Pack",
+			description = "For when the tower is actually going well.",
+			price = 100,
+			variant = "yellow",
+		},
+		{
+			id = Catalog.SALT_PACK_ID,
+			name = "Salt Pack",
+			description = "For when it is not.",
+			price = 100,
+			variant = "blue",
+		},
+		{
+			id = Catalog.BRAINROT_PACK_ID,
+			name = "Brainrot Pack",
+			description = "Four image reactions. You know the ones.",
+			price = 150,
+			variant = "green",
+		},
+	}
+
+	for index, pack in packs do
+		Store.registerPack({
+			id = pack.id,
+			kind = "reaction",
+			name = pack.name,
+			description = pack.description,
+			icon = assets.Icons.friends,
+			price = pack.price,
+			currency = "coins",
+			variant = pack.variant,
+			order = index,
+		})
+	end
 
 	-- Registered but unused if the bar is switched off — the pack would still
 	-- be buyable and there'd be nowhere to put it, so keep the two in step.

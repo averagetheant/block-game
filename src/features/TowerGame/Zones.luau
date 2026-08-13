@@ -5,13 +5,16 @@
 -- state packet, so the server enforces the physics half and every client applies
 -- the same visual half from these definitions.
 --
+-- They arrive on a *cadence*, not a roll: two normal zones, then a special. See
+-- `Zones.next`.
+--
 -- `id` goes over the wire — append, don't renumber.
 --
 -- Assets these names refer to live in `ReplicatedStorage.Assets.Zones` and are
 -- authored in Studio (Rojo doesn't sync them). A missing one degrades to "no
 -- change" rather than erroring; see TowerZoneController.
 
-export type Kind = "normal" | "retro" | "snowy" | "stormy" | "space"
+export type Kind = "normal" | "retro" | "snowy" | "stormy" | "space" | "foggy" | "night"
 
 export type Zone = {
 	id: number,
@@ -23,6 +26,9 @@ export type Zone = {
 	-- nil and roll one of the skies in `Assets.Zones.Normal` instead.
 	sky: string?,
 	tint: Color3,
+	-- Rarity among the *specials* — higher shows up more often. Normal zones are
+	-- never rolled for (the cadence in `Zones.next` places them), so their weight
+	-- is unread and kept only so every entry reads the same.
 	weight: number,
 	-- World gravity while this zone is up. nil means Roblox's default, which is
 	-- what every zone but Space wants. The server writes `workspace.Gravity`, so
@@ -67,7 +73,7 @@ Zones.List = {
 		id = 4,
 		kind = "stormy",
 		name = "Stormy Zone",
-		warning = "Wind is pushing the tower!",
+		warning = "Lightning is striking the tower!",
 		sky = "Stormy",
 		tint = Color3.fromRGB(150, 160, 200),
 		weight = 2,
@@ -84,13 +90,29 @@ Zones.List = {
 		-- and a knocked tower takes an age to come apart.
 		gravity = 30,
 	},
+	{
+		id = 6,
+		kind = "foggy",
+		name = "Foggy Zone",
+		warning = "You can barely see!",
+		sky = "Foggy",
+		tint = Color3.fromRGB(198, 202, 210),
+		weight = 2,
+	},
+	{
+		id = 7,
+		kind = "night",
+		name = "Night Zone",
+		warning = "Lights out — the blocks glow!",
+		sky = "Night",
+		tint = Color3.fromRGB(120, 128, 190),
+		weight = 2,
+	},
 } :: { Zone }
 
 local byId: { [number]: Zone } = {}
-local totalWeight = 0
 for _, zone in Zones.List do
 	byId[zone.id] = zone
-	totalWeight += zone.weight
 end
 
 -- Zone 1 (normal) is where every run starts.
@@ -104,23 +126,52 @@ function Zones.gravityOf(id: number): number
 	return Zones.get(id).gravity or Zones.DEFAULT_GRAVITY
 end
 
--- Weighted pick. `avoidId` keeps the same special zone from landing twice in a
--- row — repeating a hazard reads as the game glitching rather than escalating.
-function Zones.random(avoidId: number?): Zone
-	for _ = 1, 8 do
-		local roll = math.random() * totalWeight
-		for _, zone in Zones.List do
-			roll -= zone.weight
-			if roll > 0 then
-				continue
-			end
-			if zone.id == avoidId and zone.kind ~= "normal" then
-				break
-			end
+-- How many normal zones run between specials. The hazard is the punctuation, not
+-- the sentence: back-to-back specials stop reading as an escalation and start
+-- reading as the game's default state, and the plain zones are what give the
+-- players a stretch to build in.
+Zones.NORMALS_PER_SPECIAL = 2
+
+-- The next zone, given how many have already been cleared.
+--
+-- Deliberately a *cadence* rather than a weighted roll. A roll can hand out four
+-- specials in a row or none for six floors, and neither is the shape of a run
+-- anyone wants: this makes the rhythm two calm floors then a twist, every time,
+-- while leaving *which* twist random.
+--
+-- `avoidId` keeps the same special from landing twice running — repeating a
+-- hazard reads as the game glitching rather than escalating.
+function Zones.next(cleared: number, avoidId: number?): Zone
+	-- The +1 is because `cleared` counts zones behind us and this is picking the
+	-- one ahead: with a cadence of 2, that puts specials on the 3rd, 6th, 9th…
+	if (cleared + 1) % (Zones.NORMALS_PER_SPECIAL + 1) ~= 0 then
+		return byId[Zones.DEFAULT_ID]
+	end
+
+	local specials = {}
+	for _, zone in Zones.List do
+		if zone.kind ~= "normal" and zone.id ~= avoidId then
+			table.insert(specials, zone)
+		end
+	end
+	-- Only one special exists and we just played it: better to repeat than to
+	-- silently drop back to a normal zone the cadence promised wouldn't be here.
+	if #specials == 0 then
+		return byId[avoidId or Zones.DEFAULT_ID] or byId[Zones.DEFAULT_ID]
+	end
+
+	local total = 0
+	for _, zone in specials do
+		total += zone.weight
+	end
+	local roll = math.random() * total
+	for _, zone in specials do
+		roll -= zone.weight
+		if roll <= 0 then
 			return zone
 		end
 	end
-	return byId[Zones.DEFAULT_ID]
+	return specials[#specials]
 end
 
 return Zones

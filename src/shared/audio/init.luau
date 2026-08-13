@@ -30,7 +30,8 @@ local Audio = {}
 Audio.UI = {
 	click = "rbxassetid://6895079853",
 	click2 = "rbxassetid://103866342467024",
-	purchase = "rbxassetid://10066947742",
+	purchase = "rbxassetid://134952684776633",
+	equip = "rbxassetid://70430710356859",
 	hoverIn = "rbxassetid://99955064134003",
 	hoverOut = "rbxassetid://10066931761",
 	levelUp = "rbxassetid://112485797063762",
@@ -53,7 +54,7 @@ Audio.Music = {
 }
 
 export type UISoundKey =
-	"click" | "click2" | "purchase" | "hoverIn" | "hoverOut" | "levelUp"
+	"click" | "click2" | "purchase" | "equip" | "hoverIn" | "hoverOut" | "levelUp"
 	| "swipe" | "select" | "reward" | "tick" | "money"
 
 export type MusicKey =

@@ -89,6 +89,7 @@ local function packTab(kind: string, props: Props): { [string]: any }
 			name = pack.name,
 			description = pack.description,
 			icon = pack.icon,
+			preview = Catalog.previewFor(pack),
 			layoutOrder = index,
 			action = if isEquipped
 				then React.createElement(ui.Badge, {

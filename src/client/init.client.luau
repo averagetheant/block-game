@@ -41,6 +41,11 @@ local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 local screen = Instance.new("ScreenGui")
 screen.Name = "BoilRoot"
 screen.ResetOnSpawn = false
+-- Full-bleed: the GUI owns every pixel, including the strip under the Roblox
+-- topbar and a phone's notch / home indicator, so a full-screen effect (the
+-- storm's white-out) actually covers the screen. The cost is that edge-anchored
+-- UI has to move in past that chrome itself — `ui.useViewport().insets` reports
+-- how far, in design pixels.
 screen.IgnoreGuiInset = true
 -- Studio's Insert menu defaults to Sibling but Instance.new defaults to
 -- Global. Global mode breaks parent/child Z-layering (a child Frame at
@@ -51,12 +56,15 @@ screen.Parent = playerGui
 
 local root = ReactRoblox.createRoot(screen)
 
--- The root Frame's children are whatever presentations registered — the HUD host,
--- the Health widget, etc. — so this file names no content feature.
-local rootFrame = React.createElement("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-}, UIRegistry.getRoots())
+-- The root is the responsive canvas: full-screen, but with a coordinate space in
+-- *design pixels* (authored against 1920×1080) that one UIScale maps onto whatever
+-- screen this client actually has. Every offset below here — theme tokens, feature
+-- layout constants — is a design pixel, so a phone gets the same layout at the
+-- right density instead of a monitor's HUD at monitor sizes. See ui.Responsive.
+--
+-- Its children are whatever presentations registered — the HUD host, the Health
+-- widget, etc. — so this file names no content feature.
+local rootFrame = React.createElement(ui.Canvas, {}, UIRegistry.getRoots())
 
 -- Wrap the tree in every feature-registered provider (e.g. UIShell's
 -- FrameProvider, registered from a *Presentation above). First registered ends up

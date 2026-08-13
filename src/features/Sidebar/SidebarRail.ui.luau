@@ -114,10 +114,14 @@ return function(props: Props)
 		railHeight += Constants.GROUP_GAP
 	end
 
+	-- The rail sits on the left edge, which on a phone in landscape is where the
+	-- notch is — so the margin is measured from the usable edge, not the screen's.
+	local insets = ui.useViewport().insets
+
 	local children: { [string]: any } = {
 		Rail = React.createElement(UIShell.HideWhenFrameOpen, {
 			direction = "left",
-			basePosition = UDim2.new(0, Constants.RAIL_MARGIN, 0.5, 0),
+			basePosition = UDim2.new(0, Constants.RAIL_MARGIN + insets.left, 0.5, 0),
 			anchorPoint = Vector2.new(0, 0.5),
 			size = UDim2.fromOffset(RAIL_WIDTH, railHeight),
 		}, {

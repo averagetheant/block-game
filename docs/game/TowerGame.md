@@ -512,9 +512,13 @@ The **right stick is not a piece control**. It drives the player's cursor — se
 [Cursors](Cursors.md) — and on console that cursor is the only pointer they have,
 so nothing here may take the stick back.
 
-The HUD shows the matching list in the bottom-left corner for `HINT_SECONDS`
-(60), then fades it out — new players get told once, everyone else gets their
-screen back. **Which list it shows follows the input the player is actually
+The HUD shows the matching list for `HINT_SECONDS` (60), then fades it out — new
+players get told once, everyone else gets their screen back. It sits in the
+bottom-left corner, except when the touch controls are up: a phone's design
+canvas is short enough (~1470×680, see
+[responsive-scaling.md](responsive-scaling.md)) that a bottom-left block lands on
+the Sidebar rail, so on touch the hint moves to the centre, stacked above the
+status line with the controls it describes. **Which list it shows follows the input the player is actually
 using**, not what the machine has: `TowerView.useDevice` starts from capability
 and then tracks `LastInputTypeChanged`, because a PC with a controller plugged in
 reports both `KeyboardEnabled` and `GamepadEnabled` and would otherwise show
@@ -581,7 +585,7 @@ devices.
 | `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the clocks, picks the device |
 | `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
-| `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
+| `ControlsHint.ui.luau` | shared | Control list that fades out (bottom-left; centred on touch) |
 | `StormFade.ui.luau` | shared | The storm's one-shot white-out, played on `PHASE.GAMEOVER` |
 | `SteerStick.ui.luau` | shared | Touch steering: a horizontal drag track reporting analog `[-1, 1]` |
 | `SteerStick.story.luau` | shared | UI Labs story — drag it with the mouse, with a live value readout |

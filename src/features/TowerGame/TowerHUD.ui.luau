@@ -71,8 +71,11 @@ local URGENT_SECONDS = 5
 -- Under this many seconds the storm clock turns red.
 local STORM_URGENT_SECONDS = 30
 
--- Where the bills land. Kept in step with the counter's own anchor below.
-local CASH_TARGET = UDim2.new(1, -(EDGE_MARGIN + CASH_WIDTH / 2), 1, -(EDGE_MARGIN + CASH_HEIGHT / 2))
+-- Where the bills land. Kept in step with the counter's own anchor below — which
+-- moves with the device's chrome insets, so this takes them the same way.
+local function cashTarget(right: number, bottom: number): UDim2
+	return UDim2.new(1, -(right + CASH_WIDTH / 2), 1, -(bottom + CASH_HEIGHT / 2))
+end
 
 export type Props = {
 	height: number,
@@ -144,6 +147,16 @@ end
 return function(props: Props)
 	local aiming = props.phase == PHASE.AIMING
 	local canAct = aiming and props.isMyTurn
+
+	-- The HUD hugs all four edges, and on a phone all four edges have something
+	-- else on them: the Roblox topbar over the height panel, the notch beside the
+	-- controls hint, the home indicator under the TURN/DROP row. Margins are
+	-- measured from the *usable* edge rather than the screen's.
+	local insets = ui.useViewport().insets
+	local edgeTop = TOP_MARGIN + insets.top
+	local edgeBottom = EDGE_MARGIN + insets.bottom
+	local edgeLeft = EDGE_MARGIN + insets.left
+	local edgeRight = EDGE_MARGIN + insets.right
 
 	-- The height panel gives up room for the turn dial and takes it back between
 	-- turns; tweened so the handover reads as one motion with the dial.
@@ -259,7 +272,7 @@ return function(props: Props)
 			gap = STACK_GAP,
 			size = UDim2.fromOffset(COLUMN_WIDTH, 0),
 			automaticSize = Enum.AutomaticSize.Y,
-			position = UDim2.new(0.5, 0, 0, TOP_MARGIN),
+			position = UDim2.new(0.5, 0, 0, edgeTop),
 			anchorPoint = Vector2.new(0.5, 0),
 		}, column),
 
@@ -273,7 +286,12 @@ return function(props: Props)
 			xAlignment = Enum.TextXAlignment.Center,
 			size = UDim2.new(0, COLUMN_WIDTH, 0, STATUS_HEIGHT),
 			-- Clears the touch control row when there is one.
-			position = UDim2.new(0.5, 0, 1, -(if props.showControls then CONTROL_ROW_HEIGHT + EDGE_MARGIN * 2 else EDGE_MARGIN)),
+			position = UDim2.new(
+				0.5,
+				0,
+				1,
+				-(if props.showControls then CONTROL_ROW_HEIGHT + edgeBottom + EDGE_MARGIN else edgeBottom)
+			),
 			anchorPoint = Vector2.new(0.5, 1),
 		}),
 	}
@@ -287,7 +305,7 @@ return function(props: Props)
 		icon = ui.assets.Icons.magnifyingGlass,
 		variant = if props.overview then "green" else "blue",
 		size = UDim2.fromOffset(CAMERA_BUTTON, CAMERA_BUTTON),
-		position = UDim2.new(1, -EDGE_MARGIN, 1, -(CASH_HEIGHT + EDGE_MARGIN * 2)),
+		position = UDim2.new(1, -edgeRight, 1, -(CASH_HEIGHT + edgeBottom + EDGE_MARGIN)),
 		anchorPoint = Vector2.new(1, 1),
 		onClick = props.onToggleCamera,
 	})
@@ -295,7 +313,7 @@ return function(props: Props)
 	-- Bottom-right, opposite the controls hint. The bills fly here.
 	children.Cash = React.createElement(ui.Panel, {
 		size = UDim2.fromOffset(CASH_WIDTH, CASH_HEIGHT),
-		position = UDim2.new(1, -EDGE_MARGIN, 1, -EDGE_MARGIN),
+		position = UDim2.new(1, -edgeRight, 1, -edgeBottom),
 		anchorPoint = Vector2.new(1, 1),
 	}, {
 		Row = React.createElement(ui.Row, { gap = 8, size = UDim2.fromScale(1, 1) }, {
@@ -319,7 +337,7 @@ return function(props: Props)
 
 	children.CashFly = React.createElement(CashFly, {
 		awarded = props.cashAwarded,
-		target = CASH_TARGET,
+		target = cashTarget(edgeRight, edgeBottom),
 	})
 
 	-- Only special zones announce themselves; a normal zone is just a new sky.
@@ -355,10 +373,18 @@ return function(props: Props)
 	end
 
 	if props.showHint ~= false then
+		-- Bottom-left on a desktop, where that corner is empty. With the touch
+		-- controls up it moves to the middle, stacked above the status line: a
+		-- phone's canvas is short enough that a bottom-left block lands on top of
+		-- whatever else the client hangs off the left edge, and the hint describes
+		-- the controls, so sitting with them is where it belongs anyway.
+		local centred = props.showControls == true
 		children.Hint = React.createElement(ControlsHint, {
 			device = props.device,
-			position = UDim2.new(0, EDGE_MARGIN, 1, -EDGE_MARGIN),
-			anchorPoint = Vector2.new(0, 1),
+			position = if centred
+				then UDim2.new(0.5, 0, 1, -(CONTROL_ROW_HEIGHT + STATUS_HEIGHT + edgeBottom + EDGE_MARGIN * 2))
+				else UDim2.new(0, edgeLeft, 1, -edgeBottom),
+			anchorPoint = if centred then Vector2.new(0.5, 1) else Vector2.new(0, 1),
 		})
 	end
 
@@ -371,7 +397,7 @@ return function(props: Props)
 		children.Controls = React.createElement(ui.Row, {
 			gap = CONTROL_GAP * 2,
 			size = UDim2.fromOffset(CONTROL_ROW_WIDTH, CONTROL_ROW_HEIGHT),
-			position = UDim2.new(0.5, 0, 1, -EDGE_MARGIN),
+			position = UDim2.new(0.5, 0, 1, -edgeBottom),
 			anchorPoint = Vector2.new(0.5, 1),
 		}, {
 			Steer = React.createElement(SteerStick, {

@@ -247,6 +247,22 @@ React.createElement(ui.Stack, { gap = 12, padding = 10, fillHorizontal = true },
 | `ui.Grid` | UIGridLayout | cell size/padding, columns; children are **direct** cells |
 | `ui.Slot` | named transparent Frame | a positioned region; future portal-bridge target |
 
+### Responsive scaling (`ui.Canvas` / `ui.useViewport` / `ui.Responsive`)
+
+Every size in the kit is a **design pixel** authored against 1920×1080. The client entry mounts one `ui.Canvas` around the registered roots: a full-screen Frame sized `1 / scale` with a `UIScale` of `scale`, so scale-based positions stay put while every offset below shrinks with the screen. Features never read `ViewportSize`, never branch on device, and never mount their own canvas.
+
+```lua
+local metrics = ui.useViewport()
+-- metrics.viewport  Vector2, real device pixels
+-- metrics.scale     design px → device px  (1.0 at 1920×1080, ~0.63 on a phone)
+-- metrics.canvas    Vector2, design-space room available
+-- metrics.insets    { top, bottom, left, right } in design px — topbar / notch / home indicator
+
+ui.Responsive.scaleFor(Vector2.new(930, 430))  -- pure; what a phone would get
+```
+
+`BoilRoot` is full-bleed, so **edge-anchored** UI adds `insets` to its margin (`EDGE_MARGIN + insets.bottom`); centred UI needs nothing. Tune the curve against `Canvas.story.luau`, which previews any device at true size. Details in [responsive-scaling.md](game/responsive-scaling.md).
+
 ### Importing from Studio (`src/shared/dev/Inspect`)
 
 Studio-built templates can be dumped to clipboard with a one-liner — select the root instance(s) in Explorer, then paste in the command bar:
@@ -341,7 +357,7 @@ The defaults live in `DEFAULT_SOUNDS` at the top of `src/shared/ui/useHoverScale
 Synced to `ServerScriptService.Server` as a `Script`. Runs once at server start. Loads and starts every service under `ServerScriptService.Features`.
 
 ### `src/client/init.client.luau`
-Synced to `StarterPlayerScripts.Client` as a `LocalScript`. Runs once per player join. Auto-requires every feature, discovers + requires `*Presentation` / `*WorldInteraction` modules (which self-register into `UIRegistry`), mounts the root React app (`SkinProvider → FrameProvider → Frame(UIRegistry.getRoots())`), then loads + starts every controller and requests replicas. Names no content feature — see [presentations.md](game/presentations.md) and [UIRegistry](#uiregistry-srcsharedutilsuiregistryluau).
+Synced to `StarterPlayerScripts.Client` as a `LocalScript`. Runs once per player join. Auto-requires every feature, discovers + requires `*Presentation` / `*WorldInteraction` modules (which self-register into `UIRegistry`), mounts the root React app (`SkinProvider → FrameProvider → Canvas(UIRegistry.getRoots())`), then loads + starts every controller and requests replicas. Names no content feature — see [presentations.md](game/presentations.md) and [UIRegistry](#uiregistry-srcsharedutilsuiregistryluau).
 
 ## UIRegistry (src/shared/utils/UIRegistry.luau)
 

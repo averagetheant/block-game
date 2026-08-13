@@ -65,6 +65,15 @@ ui.Window = semantic("Window")
 ui.Text = semantic("Text")
 ui.GemBackground = semantic("GemBackground")
 
+-- Responsive scaling. Every size in the kit is a *design pixel* authored against
+-- 1920×1080; Canvas draws the whole client tree through one UIScale so those
+-- design pixels land correctly on a phone. Mounted once by the client entry —
+-- feature code only ever reads `useViewport()` (for the chrome insets, or the
+-- design-space room it actually has).
+ui.Canvas = require(script.Canvas)
+ui.Responsive = require(script.Responsive)
+ui.useViewport = ui.Responsive.useViewport
+
 -- Layout primitives (seam #2): transparent, structure-only. Not skin-resolved —
 -- they have no visuals, just UI*Layout / padding / sizing. Compose screens with
 -- these; put skinned primitives inside them.

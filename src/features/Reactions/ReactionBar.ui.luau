@@ -91,8 +91,13 @@ return function(props: Props)
 	-- screen. Closed: it drops until only the handle is left poking up. Both
 	-- are anchored at the bar's top-center, so the handle above it is the part
 	-- that stays on screen either way.
-	local openPosition = UDim2.new(0.5, 0, 1, -BAR_HEIGHT)
-	local closedPosition = UDim2.new(0.5, 0, 1, 0)
+	--
+	-- "The bottom of the screen" is the bottom of the *usable* screen: on a phone
+	-- the last strip belongs to the home indicator, and a handle hiding under it
+	-- is a handle nobody can grab.
+	local bottom = ui.useViewport().insets.bottom
+	local openPosition = UDim2.new(0.5, 0, 1, -(BAR_HEIGHT + bottom))
+	local closedPosition = UDim2.new(0.5, 0, 1, -bottom)
 	local positionRef = ui.useTweenedUDim2(if open then openPosition else closedPosition, {
 		tweenInfo = Constants.SLIDE_TWEEN_INFO,
 	})

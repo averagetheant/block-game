@@ -17,6 +17,7 @@ one-way dependency rule that keeps the framework updatable.
 | [layout-surfaces.md](layout-surfaces.md) | #2 layout | `Stack`/`Row`/`Grid`/`Slot` code primitives + the deferred Studio-extract pipeline. How a screen is *arranged*. |
 | [headless-core.md](headless-core.md) | #3 view | Cores are presentation-agnostic; views are dumb; actions are intent. Enforced by `tools/check-views`. |
 | [presentations.md](presentations.md) | #4 presentation | Self-registering screen / world / command surfaces and the de-hardcoded entry files. How a feature *shows up*. |
+| [responsive-scaling.md](responsive-scaling.md) | — | Design pixels, the `ui.Canvas` UIScale, and the chrome insets. How one layout fits a monitor *and* a phone. |
 
 Features and skins are also **distributable packages** — one folder, one
 `boil.toml`, installed and published with `boil`. See

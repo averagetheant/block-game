@@ -224,6 +224,16 @@ local function step(deltaTime: number)
 		return
 	end
 
+	-- X is ours, Y is the server's. It parks the piece clear of the tower and
+	-- lifts it again if the tower grows underneath (a Noob climbing, a Clone
+	-- landing), so the preview reads the altitude back every frame instead of
+	-- keeping the one it was handed — otherwise the holder aims a piece that is
+	-- drawn lower than the one that will actually fall.
+	local model = serverPiece
+	if model then
+		baseY = model:GetPivot().Position.Y
+	end
+
 	if steerDir ~= 0 then
 		aimX = math.clamp(
 			aimX + steerDir * Constants.STEER_SPEED * deltaTime,

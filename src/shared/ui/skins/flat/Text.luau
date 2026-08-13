@@ -26,5 +26,6 @@ return function(props: contract.TextProps)
 		ZIndex = props.zIndex,
 		TextXAlignment = props.xAlignment or Enum.TextXAlignment.Center,
 		TextYAlignment = props.yAlignment or Enum.TextYAlignment.Center,
+		TextWrapped = props.wrapped,
 	})
 end

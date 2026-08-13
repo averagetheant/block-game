@@ -28,4 +28,22 @@ return {
 	ITEM_SPACING = 12,
 	-- Default outer Sidebar padding on each side (pixels).
 	PADDING = 12,
+
+	-- ------------------------------------------------------------------ rail --
+	-- Gap between the "menu" cluster and the "actions" cluster. Wider than
+	-- ITEM_SPACING on purpose: it's what tells the player that Nuke is a
+	-- different sort of thing from Shop, without drawing a divider.
+	GROUP_GAP = 28,
+	-- Distance from the screen's left edge to the rail (pixels).
+	RAIL_MARGIN = 20,
+	-- Default size of the Window a rail entry opens. Large content surfaces
+	-- (a shop grid, an inventory) are the reason the rail is off-center at all,
+	-- so this is deliberately roomy — override per entry with `windowSize`.
+	WINDOW_SIZE = UDim2.fromOffset(820, 600),
+
+	-- Which surfaces this feature renders. `root` is the rail itself; turn it
+	-- off and every registered entry goes away with it, code intact.
+	Presentations = {
+		root = true,
+	},
 }

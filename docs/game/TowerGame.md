@@ -18,11 +18,11 @@ and no scoring (see [Not built yet](#not-built-yet)).
 
 1. `TowerService` builds the arena (base platform) at server start.
 2. Players enter a round-robin `queue` on join.
-3. **Turn** — the holder gets a piece spawned `SPAWN_CLEARANCE` studs above the
-   current tower top, and `TURN_SECONDS` (20) on the clock.
+3. **Turn** — the holder gets a piece spawned clear of the tower (see
+   [The held piece](#the-held-piece)) and `TURN_SECONDS` (20) on the clock.
 4. The holder steers (continuous left/right) and spins (quarter turns). The piece
-   is an *anchored, server-owned Model*, so every player watches the same aim with
-   no transform packets involved.
+   is an *anchored, non-colliding, server-owned Model*, so every player watches
+   the same aim with no transform packets involved.
 5. **Drop** — on the holder's release, or when the clock expires, or if the holder
    leaves, the piece is unanchored and physics takes it.
 6. `SETTLE_SECONDS` later the next player is up.
@@ -134,6 +134,53 @@ client reading them off `Constants` would draw the wrong shape for every voted
 stage. `applyStage` is the one place that writes `stage` and mirrors those two
 numbers into `state`.
 
+## The held piece
+
+A piece the holder is still aiming must not be able to touch the tower. Two rules
+enforce that, and both exist because breaking either one let a *placement* wreck
+the tower before it was ever dropped.
+
+**It doesn't collide.** `suspendCollision` clears `CanCollide` on every part of a
+fresh piece and `release` puts it back. Anchored is not enough on its own: an
+anchored *colliding* part is immovable world geometry, so a piece parked over the
+tower wedges or shoves whatever is still settling underneath it. The restore is
+per part from a saved table rather than a blanket `= true`, because a Noob rig
+arrives with its own answer for every limb and accessory — handing a hat collision
+turns it into a battering ram.
+
+**It stays above the tower for the whole turn.** The spawn altitude is
+`restingTopY() + halfHeight + SPAWN_CLEARANCE`, and each of those three terms is
+load-bearing:
+
+- `restingTopY()` is *not* `state.height`. The height readout is the scoring
+  number: it counts only blocks that have held still for `SETTLE_CONFIRM_SECONDS`,
+  and it skips Noobs entirely so a walking block can't make it bob. Both
+  exclusions are correct for scoring and wrong for clearance — a block that landed
+  a quarter-second ago and a Noob standing on the parapet are very much in the
+  way. `restingTopY` counts every block that is *resting* (`slowSince` is set the
+  instant an assembly goes quiet, half a second before `settled` follows), plus
+  every checkpoint platform, plus the base. Blocks still tumbling are left out, or
+  a piece flung up by a bomb would fire the next spawn into orbit.
+- `halfHeight` is the piece's largest half extent, not its current one. Rotating
+  about Z swaps width and height, so clearing only the current orientation put a
+  flat I-piece inside the tower the moment the holder spun it upright.
+- `SPAWN_CLEARANCE` (14) is therefore the *gap under the piece*, not the distance
+  to its pivot.
+
+`reseatHeldPiece` re-runs that sum every `POLL_INTERVAL` and lifts the piece when
+the tower has grown under it — a Noob climbing onto the parapet, a Clone dropping
+its copy in, a knocked block coming to rest higher than it started. It only ever
+moves the piece **up**; a piece sinking mid-turn reads as a glitch and would drop
+the holder into a gap that has since been filled. The one exception is `resetRun`,
+which passes `down = true`: the storm has just taken the entire tower, so there is
+nothing left to be clear of.
+
+Only Y is ever touched — X and the quarter turns stay the holder's. The holder's
+preview reads the altitude back off the server piece every frame (see
+[Aiming](#aiming)) so a mid-turn lift can't desync what they're aiming from what
+will actually fall, and `pieceTop` rides the state packet so the
+[camera](#camera) can guarantee the piece is on screen.
+
 ## Aiming
 
 Aiming is **client-owned and server-validated**. The holder's client runs the
@@ -165,6 +212,12 @@ The holder's client finds "its" piece by that attribute, so a released block tha
 still carried it got re-adopted on the next turn — hidden, and puppeted by the
 preview for the rest of the round. `findOwnPiece` additionally requires the model
 to be anchored, since a held piece always is and a live physics block never is.
+
+**X is the client's, Y is the server's.** The preview reads its altitude back off
+the server piece every frame instead of keeping the one it was handed at setup,
+because the server can lift a held piece mid-turn (see
+[The held piece](#the-held-piece)). Without that read-back the holder would aim a
+piece drawn lower than the one that actually falls.
 
 A placement is fully described by an X and a quarter-turn count, so there's no
 "move left" packet. `Release` carries the final placement with it, which is what
@@ -205,7 +258,11 @@ resolve, or a skin goes silent.
 | Classic | Concrete, grey | a dry knock |
 | Needoh | Glass, pink | squish, plus a release beat as it settles |
 | Butter | SmoothPlastic, yellow | softer squish, same settle beat |
-| Glow | Neon, cyan | a bubble pop |
+
+Id 4 is **retired**: it was "Glow", a Neon skin that rolled for free. Neon is a
+purchase now (see [Skin packs](#skin-packs)), and a stock skin that already
+glowed would have made the thing being sold look like nothing. Ids go over the
+wire — append, don't renumber.
 
 Skins change **material and color only, never geometry**. The kit's meshes are
 lovely but they aren't cubes, and a tetromino cell has to be a cube for the
@@ -445,8 +502,13 @@ devices.
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `Gamemodes.luau` | shared | The three votable modes and the stage numbers each one sets |
 | `Gamemode.luau` | shared | Registers those modes into GamemodeVote (auto-discovered) |
+| `SkinPacks.luau` | shared | The buyable block looks and the material each one forces |
+| `Store.luau` | shared | Registers the coins currency, the skin packs and the Robux products into the Store (auto-discovered) |
 | `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
 | `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
+| `TowerProductsService.server.luau` | server | What the Nuke / Next Checkpoint products actually do |
+| `TowerSkinController.client.luau` | client | Local material override for an equipped skin pack |
+| `TowerProductsPresentation.client.luau` | client | The two Robux buttons in the rail's "actions" cluster |
 | `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the wire |
 | `TowerAimController.client.luau` | client | The local preview and everything that makes aiming feel instant |
 | `TowerInputController.client.luau` | client | Keyboard + gamepad binds |
@@ -494,10 +556,13 @@ strip rotates it so the holder lands mid-list — which puts whoever just played
 the left and the upcoming queue on the right.
 
 Boil's demo surfaces are switched off rather than deleted, via each feature's own
-`Presentations` flag: `UIShowcase` (the left sidebar and the window frames it
-hosts, including the Notes and Settings windows) and `HealthSystem` (the HP
-badge). Flip either flag back on to get them back; their UI Labs stories still
-work regardless.
+`Presentations` flag: `UIShowcase` (its demo HUD, which used to host the Notes
+and Settings windows) and `HealthSystem` (the HP badge). Flip either flag back on
+to get them back; their UI Labs stories still work regardless.
+
+The left rail is now the [Sidebar](Sidebar.md) feature's own root presentation
+rather than UIShowcase's — features register onto it, so Shop, Bag, Nuke and Skip
+all arrive without anything editing anything else.
 
 ## Packets
 
@@ -510,6 +575,12 @@ The piece in play is described by the pair `shapeId` + `blockTypeId`. A type tha
 overrides the model sends `shapeId = 0` and is named from the type alone, which is
 what lets `BlockLabel.titleFor` produce the same string on the block and in the
 HUD from one packet.
+
+`pieceTop` is the top of the piece being aimed, in the same terms as `height`, and
+0 when nobody holds one. It exists because the camera can't derive it: a piece
+spawns clear of the tower and may be lifted again mid-turn, so its altitude is not
+a function of `height` and the client would have to know how tall the piece is to
+guess. One float buys the camera a guarantee that the piece is on screen.
 
 `turnSeconds` and `stormSeconds` ride along because a gamemode vote can change
 either, and both are denominators for the HUD's clocks.
@@ -526,7 +597,7 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `TURN_SECONDS` | The drop clock (20) |
 | `SETTLE_SECONDS` | Pause between turns |
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
-| `SPAWN_CLEARANCE` | Drop height above the tower top |
+| `SPAWN_CLEARANCE` | Clear air under a fresh piece, measured from its lowest possible point — see [The held piece](#the-held-piece) |
 | `STORM_SECONDS` | The stage clock (300) |
 | `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 60 studs, each next gap 5 further |
 | `STORM_BLAST_*` | How hard the storm throws the tower, and how long the debris flies |
@@ -548,6 +619,8 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `CAMERA_DISTANCE`, `CAMERA_AIM_LIFT`, `CAMERA_LERP` | Framing and follow feel on a desktop |
 | `CAMERA_DISTANCE_TOUCH`, `CAMERA_AIM_LIFT_TOUCH` | The same two for a phone — see [Camera](#camera) |
 | `CAMERA_CHECKPOINT_*` | The wide shot: how slowly it eases, how much headroom, and the floor and ceiling on how far back it goes |
+| `CAMERA_PIECE_MARGIN` | Headroom kept above the piece being aimed |
+| `CAMERA_MIN_HALF_WIDTH` | Half the play area the camera must show across, on any aspect ratio |
 | `DESPAWN_BELOW` | How far under the platform a fallen block is cleaned up |
 
 The HUD is a full-screen gameplay surface, so it hugs the top and bottom edges
@@ -589,8 +662,10 @@ file's.
 
 Two more details worth keeping:
 
-- **Glow blocks are exempt from Retro.** Their whole point is the material, and
-  studding them over just makes them grey.
+- **Zone dressing is the server's word, and it's the same for the whole room.** A
+  player who owns a material skin pack overrides it on their own screen only —
+  see [Skin packs](#skin-packs). A bought cosmetic can't be allowed to change
+  what everyone else sees.
 - **The server sends an arbitrary number for the sky, not an index.** It has no
   idea how many skies exist — that's a Studio asset it can't see — so the client
   takes it modulo the folder count. Adding a sky in Studio needs no code change.
@@ -623,6 +698,71 @@ counter and the flying bills can't disagree about how much arrived.
 The bills themselves aren't React-driven — a dozen images moved through state
 would re-render the HUD every frame of the burst. React owns the host frame; the
 bills are plain instances handed to TweenService that clean up after themselves.
+
+### Spending it
+
+Cash is registered with the [Store](Store.md) as the **`coins`** currency, whose
+balance lives at `{ "TowerGame", "Cash" }`. Store is told the *path* rather than
+given a copy, so there's still one source of truth — `CashService` is the only
+thing that pays out, and `StoreService` is the only thing that debits.
+
+## Skin packs
+
+`SkinPacks.luau` lists the buyable block looks. There's one so far:
+
+| Pack | Price | Effect |
+| ---- | ----- | ------ |
+| `skins.neon` — Neon Blocks | 100 coins | Every block part becomes `Enum.Material.Neon` |
+
+A skin pack overrides the material of every block **on the owner's screen**,
+including whatever the current zone had dressed them in — a Retro zone can't dull
+a neon tower. That override is the product.
+
+It's **local, not server**. The tower is shared, so a cosmetic one player bought
+must not change what the room sees; writing `Material` on a replicated part from
+the client changes it on that screen and nowhere else, which is exactly the reach
+a bought skin should have.
+
+`TowerSkinController` re-asserts it on a `SKIN_SWEEP_INTERVAL` (0.4s) sweep
+rather than once, because the server owns block materials: it dresses each piece
+as it spawns and re-dresses the whole tower on every zone change, and each of
+those replicates down and stomps the override. The sweep only runs while a pack
+is equipped — unequipped, the controller costs one signal connection.
+
+Unequipping restores what the server would be showing: the material each part
+spawned with, or `Plastic` if the current zone is Retro (the one zone that
+overrides materials itself).
+
+The list is the single source of truth — `Store.luau` builds the shop card from
+it and `TowerSkinController` reads the material from it, so the price and the
+look can't drift apart. `id` is persisted on the profile: append, don't rename.
+
+## Robux products
+
+Registered by `Store.luau`; ids live in `Constants.PRODUCTS` and must exist on
+the place or the purchase prompt throws.
+
+| Product | Id | Group | Effect |
+| ------- | -- | ----- | ------ |
+| 500 Coins | `3707809246` | currency | Store credits `coins` generically |
+| 1000 Coins | `3707809250` | currency | ” |
+| 10000 Coins | `3707809258` | currency | ” |
+| Nuke | `3707809217` | action | `TowerService.nuke()` |
+| Next Checkpoint | `3707809233` | action | `TowerService.clearStage()` |
+
+The three bundles appear as cards in the shop's Robux tab. The two actions never
+appear in the shop — `group = "action"` keeps them out — because their button is
+a rail entry, registered by `TowerProductsPresentation` into the "actions"
+cluster with the cash bill as a placeholder icon.
+
+`TowerService.nuke()` routes through the same `resetRun` the storm uses when its
+clock expires, rather than a parallel teardown: the wreck, the checkpoint wipe
+and the fresh stage all behave the way players have already seen them behave.
+
+Both handlers **return false while a checkpoint cutscene is running**. That isn't
+a failure — Store leaves the receipt undelivered, Roblox re-delivers it, and the
+player gets what they paid for a moment later instead of losing it. Detonating
+the tower under a camera holding a wide shot of it would read as a bug.
 
 ## Sound
 
@@ -663,10 +803,29 @@ camera aims lower (`CAMERA_AIM_LIFT_TOUCH`, 1) and stands further back
 (`CAMERA_DISTANCE_TOUCH`, 94), which gives the stack back without losing the piece
 waiting overhead.
 
+**The playing shot stretches to hold the piece.** `trackingShot` starts from the
+frame above — tower top, `aimLift`, `distance` — and then raises its *top* edge to
+at least `pieceTop + CAMERA_PIECE_MARGIN`, standing back far enough to fit the
+result. A piece always spawns clear of the tower and can be lifted further during
+the turn (see [The held piece](#the-held-piece)), so on a tall piece it sits well
+above where the old fixed shot's top edge was. The **bottom edge stays put**, so
+making room for a high piece shows *more* tower rather than trading it away. With
+nothing held (`pieceTop` = 0) this reduces exactly to the fixed shot.
+
+**Width is checked against the real viewport.** Roblox's `FieldOfView` is
+*vertical*, so every device frames the same height at a given distance and a phone
+held upright sees barely half of what a monitor does across. On those screens the
+horizontal axis clips first, and a piece steered to `STEER_LIMIT_X` would slide off
+the side. `distanceFor` reads `ViewportSize`, works out the distance that fits
+`CAMERA_MIN_HALF_WIDTH` (34 studs — the steering limit plus a piece's half width,
+plus air) at the current aspect ratio, and takes whichever of the two axes needs
+more room. On a 16:9 monitor the height always wins and nothing changes; on a
+portrait phone the camera stands back until the play area fits.
+
 **The checkpoint pull-back** frames the whole leg — `zoneBaseHeight` to `height`,
-plus `CAMERA_CHECKPOINT_PADDING` of headroom — at the distance that fits it in the
-vertical field of view, clamped between `CAMERA_CHECKPOINT_PULLBACK ×` the normal
-distance and `CAMERA_MAX_DISTANCE`. The floor matters: a short leg already fits in
+plus `CAMERA_CHECKPOINT_PADDING` of headroom — through the same `distanceFor`,
+with its floor raised to `CAMERA_CHECKPOINT_PULLBACK ×` the normal distance and
+the usual `CAMERA_MAX_DISTANCE` ceiling. The floor matters: a short leg already fits in
 the ordinary framing, and fitting it isn't enough — the move has to *read* as
 stepping back to look at what was built. It eases at `CAMERA_CHECKPOINT_LERP`
 rather than tracking at `CAMERA_LERP`.

@@ -23,6 +23,8 @@ export type State = {
 	turnEndsAt: number,
 	height: number,
 	maxHeight: number,
+	-- Top of the piece being aimed, studs above the base; 0 when nobody holds one.
+	pieceTop: number,
 	blockCount: number,
 	shapeId: number,
 	blockTypeId: number,
@@ -49,6 +51,7 @@ local data: State = {
 	turnEndsAt = 0,
 	height = 0,
 	maxHeight = 0,
+	pieceTop = 0,
 	blockCount = 0,
 	shapeId = 0,
 	blockTypeId = 0,

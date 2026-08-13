@@ -47,8 +47,47 @@ function TowerCameraController.Start()
 	local aimLift = if touchOnly then Constants.CAMERA_AIM_LIFT_TOUCH else Constants.CAMERA_AIM_LIFT
 	local distance = if touchOnly then Constants.CAMERA_DISTANCE_TOUCH else Constants.CAMERA_DISTANCE
 
+	local halfAngle = math.rad(Constants.CAMERA_FOV) / 2
+	-- Half the height the ordinary shot has in frame, at its ordinary distance.
+	local halfSpan = distance * math.tan(halfAngle)
+
 	local function shot(aimY: number, from: number): CFrame
 		return CFrame.lookAt(Vector3.new(0, aimY, Constants.PLANE_Z + from), Vector3.new(0, aimY, Constants.PLANE_Z))
+	end
+
+	-- How far back `span` studs of height need the camera to stand — and never
+	-- closer than the *width* of the play area needs it to be.
+	--
+	-- Roblox's FieldOfView is vertical, so the height in frame is the same on
+	-- every device and the width is not: a phone held upright sees barely half of
+	-- what a monitor does across. On those screens the horizontal axis is the one
+	-- that clips first, and the piece would slide off the side at the steering
+	-- limit. Reading the real viewport aspect covers both axes on any screen.
+	local function distanceFor(span: number, minimum: number): number
+		local viewport = workspace.CurrentCamera.ViewportSize
+		local aspect = if viewport.Y > 0 then viewport.X / viewport.Y else 1
+		local forWidth = Constants.CAMERA_MIN_HALF_WIDTH / math.max(aspect, 0.1)
+		local needed = math.max(span / 2, forWidth) / math.tan(halfAngle)
+		return math.clamp(needed, minimum, Constants.CAMERA_MAX_DISTANCE)
+	end
+
+	-- The playing shot: level with the tower top, stretched upward by however much
+	-- it takes to keep the piece the holder is aiming inside the frame. A piece
+	-- always spawns clear of the tower (and is lifted further if the tower grows
+	-- under it), so on a tall piece it can sit well above the ordinary top edge.
+	--
+	-- The bottom edge stays where it was, so making room for a high piece shows
+	-- *more* tower rather than trading it away. With nothing held this reduces
+	-- exactly to the old shot: aim CAMERA_AIM_LIFT above the top, stand at
+	-- CAMERA_DISTANCE.
+	local function trackingShot(baseTopY: number, data: TowerController.State): CFrame
+		local towerTop = baseTopY + math.max(data.height, Constants.CAMERA_MIN_HEIGHT)
+		local bottom = towerTop + aimLift - halfSpan
+		local top = math.max(
+			towerTop + aimLift + halfSpan,
+			baseTopY + data.pieceTop + Constants.CAMERA_PIECE_MARGIN
+		)
+		return shot((bottom + top) / 2, distanceFor(top - bottom, distance))
 	end
 
 	-- The checkpoint look: frame the whole leg the players just built, from where
@@ -59,11 +98,9 @@ function TowerCameraController.Start()
 		local bottom = baseTopY + math.max(data.zoneBaseHeight, 0)
 		local top = baseTopY + math.max(data.height, Constants.CAMERA_MIN_HEIGHT)
 		local span = math.max(top - bottom, 1) + Constants.CAMERA_CHECKPOINT_PADDING
-		-- Distance that puts `span` studs inside the vertical field of view.
-		local needed = span / 2 / math.tan(math.rad(Constants.CAMERA_FOV) / 2)
 		return shot(
 			(bottom + top) / 2,
-			math.clamp(needed, distance * Constants.CAMERA_CHECKPOINT_PULLBACK, Constants.CAMERA_MAX_DISTANCE)
+			distanceFor(span, distance * Constants.CAMERA_CHECKPOINT_PULLBACK)
 		)
 	end
 
@@ -75,8 +112,7 @@ function TowerCameraController.Start()
 			if data.phase == Constants.PHASE.CHECKPOINT then
 				return wideShot(baseTopY, data), Constants.CAMERA_CHECKPOINT_LERP
 			end
-			local height = math.max(data.height, Constants.CAMERA_MIN_HEIGHT)
-			return shot(baseTopY + height + aimLift, distance), Constants.CAMERA_LERP
+			return trackingShot(baseTopY, data), Constants.CAMERA_LERP
 		end
 
 		local camera = workspace.CurrentCamera

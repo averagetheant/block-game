@@ -44,8 +44,12 @@ return {
 	TURN_SECONDS = 20,
 	-- Grace period after a drop before the next player is handed a piece.
 	SETTLE_SECONDS = 1.5,
-	-- How far above the current tower top a fresh piece is spawned.
-	SPAWN_CLEARANCE = 18,
+	-- Clear air between the *bottom* of a fresh piece and the top of everything it
+	-- could land on. Measured from the piece's lowest possible point — the one it
+	-- would have after a quarter turn, since the holder can spin it at any moment
+	-- — so a tall piece spawns higher instead of spawning inside the tower it is
+	-- meant to land on.
+	SPAWN_CLEARANCE = 14,
 	-- Horizontal travel limit from the arena center, in studs. Just inside the
 	-- platform's half width so a piece can overhang but not fly off into space.
 	STEER_LIMIT_X = 22,
@@ -277,6 +281,43 @@ return {
 	-- orbit and the tower in one pixel.
 	CAMERA_MAX_DISTANCE = 420,
 	CAMERA_FOV = 60,
+	-- Headroom left above the held piece when the camera has to stretch upward to
+	-- keep it in frame. The piece always clears the tower (SPAWN_CLEARANCE), so
+	-- the camera has to be willing to follow it up there.
+	CAMERA_PIECE_MARGIN = 6,
+	-- Half the width of the play area the camera must always show, in studs: the
+	-- steering limit (22) plus a piece's own half width (8), plus a little air.
+	-- Roblox's FieldOfView is *vertical*, so a phone held upright frames the same
+	-- height as a monitor and far less width — the camera reads the real viewport
+	-- aspect and stands back far enough to cover this on whatever screen it's on.
+	CAMERA_MIN_HALF_WIDTH = 34,
+
+	-- ----------------------------------------------------------------- store --
+	-- Developer products, configured on the Roblox place. Ids are the live ones
+	-- — a product id can't be invented locally, so these are the numbers or the
+	-- purchase prompt errors.
+	--
+	-- The cash bundles are granted generically by StoreService (grant `amount`
+	-- of `currency`); the two action products run handlers registered by
+	-- TowerProductsService.
+	PRODUCTS = {
+		CASH_500 = 3707809246,
+		CASH_1000 = 3707809250,
+		CASH_10000 = 3707809258,
+		-- Throws the whole tower off the plane and starts the run over — the
+		-- storm's outcome, bought.
+		NUKE = 3707809217,
+		-- Clears the current stage from wherever the tower is, cutscene and all.
+		NEXT_CHECKPOINT = 3707809233,
+	},
+	-- The soft currency id this feature registers with the Store. Its balance
+	-- lives at { PROFILE_KEY, "Cash" } — Store debits it through that path.
+	CURRENCY_ID = "coins",
+	-- How often the local skin override re-asserts itself. The server owns
+	-- block materials and re-dresses the tower on every zone change, so an
+	-- equipped material pack has to keep putting its own material back. Cheap:
+	-- one walk of the arena, and only while such a pack is equipped.
+	SKIN_SWEEP_INTERVAL = 0.4,
 
 	-- ------------------------------------------------------------ persistence --
 	-- Top-level profile key this feature owns (registered in PlayerData.luau).
@@ -305,5 +346,11 @@ return {
 		-- `skipstage` — a dev handle on the stage clear. Gated by Cmdr's username
 		-- allowlist like every other command; turn it off for a public build.
 		command = true,
+		-- The two Robux buttons on the left rail (Nuke, Next Checkpoint) and the
+		-- server handlers behind them. Off = the products stop being offered and
+		-- any receipt for one is left undelivered rather than silently eaten.
+		actions = true,
+		-- Client-side material override for an equipped skin pack.
+		skins = true,
 	},
 }

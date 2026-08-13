@@ -1,0 +1,59 @@
+-- Wires the pure ShopUI to live data: ownership + balances off the PlayerData
+-- replica, and the Catalog's Changed signal so a late registration shows up
+-- without a remount.
+--
+-- Balances are read per currency rather than as one blob, because each one
+-- lives wherever its owning feature keeps it.
+
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local React = require(ReplicatedStorage.Packages.React)
+
+local Boil = require(ReplicatedStorage.Shared.Boil)
+local Catalog = require(ReplicatedStorage.Features.Store.Catalog)
+local Constants = require(ReplicatedStorage.Features.Store.Constants)
+local ShopUI = require(ReplicatedStorage.Features.Store.ShopUI)
+
+-- Client-realm siblings (StarterPlayerScripts.Features tree).
+local StoreController = require(script.Parent.StoreController)
+local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
+
+-- Re-render when the catalog changes. Registration happens at load, so in
+-- practice this only fires for a feature that registers late — cheap insurance
+-- against a shop that renders once and then lies.
+local function useCatalogVersion()
+	local _, setVersion = React.useState(0)
+	React.useEffect(function()
+		local conn = Catalog.Changed:Connect(function()
+			setVersion(function(v: number): number
+				return v + 1
+			end)
+		end)
+		return function()
+			conn:Disconnect()
+		end
+	end, {})
+end
+
+return function()
+	useCatalogVersion()
+
+	-- Subscribing to the whole profile rather than one key: a purchase moves
+	-- both the Store slice and whichever feature's slice holds the currency.
+	Boil.useReplica(PlayerDataController)
+
+	local store = Boil.useReplica(PlayerDataController, Constants.PROFILE_KEY) or {}
+	local owned = store.Owned or {}
+
+	local balances: { [string]: number } = {}
+	for _, currency in Catalog.listCurrencies() do
+		balances[currency.id] = StoreController.balance(currency.id)
+	end
+
+	return React.createElement(ShopUI, {
+		owned = owned,
+		balances = balances,
+		onBuyPack = StoreController.purchase,
+		onBuyProduct = StoreController.promptProduct,
+		onBuyGamepass = StoreController.promptGamepass,
+	})
+end

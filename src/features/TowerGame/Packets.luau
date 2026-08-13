@@ -51,6 +51,12 @@ return ByteNet.defineNamespace("TowerGame", function()
 				-- Studs above the base platform's top surface.
 				height = ByteNet.float32,
 				maxHeight = ByteNet.float32,
+				-- Top of the piece the holder is currently aiming, in the same terms
+				-- as `height`; 0 when nobody holds one. A piece always spawns clear
+				-- of the tower, so it can sit well above `height` — this is what lets
+				-- the camera guarantee it's on screen without the client having to
+				-- work out how tall the piece is.
+				pieceTop = ByteNet.float32,
 				blockCount = ByteNet.uint16,
 				shapeId = ByteNet.uint8,
 				-- BlockTypes id of the current piece, 0 for an ordinary block.

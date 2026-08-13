@@ -92,6 +92,13 @@ type Held = {
 	baseColor: Color3,
 	custom: boolean,
 	pivot: CFrame,
+	-- Half the piece's tallest possible extent, i.e. how far below the pivot its
+	-- lowest cell can reach at *any* of the four quarter turns. The spawn and the
+	-- mid-turn lift both clear the tower by this plus SPAWN_CLEARANCE.
+	halfHeight: number,
+	-- What every part's CanCollide was before the piece was suspended, so `release`
+	-- can put each one back instead of blanket-setting true.
+	collision: { [BasePart]: boolean },
 	player: Player,
 }
 
@@ -112,6 +119,9 @@ local blocks: { Block } = {}
 -- back to the block that owns it without walking the list. Burning uses it to
 -- find what it's resting against; keep it in step with every add and remove.
 local blockByModel: { [Model]: Block } = {}
+-- Anchored checkpoint platforms, tracked separately from `blocks` because they
+-- have no physics but still count toward the tower's top.
+local platforms: { BasePart } = {}
 local held: Held? = nil
 -- Distance to the next checkpoint. Grows by STORM_GAP_GROWTH every time one is
 -- cleared, so each floor is a little further than the last.
@@ -129,6 +139,7 @@ local state = {
 	turnEndsAt = 0,
 	height = 0,
 	maxHeight = 0,
+	pieceTop = 0,
 	blockCount = 0,
 	shapeId = 0,
 	blockTypeId = 0,
@@ -264,6 +275,46 @@ local function modelParts(model: Model): { BasePart }
 	return found
 end
 
+-- Highest world-Y a part reaches, accounting for rotation: project each half
+-- extent onto the world up axis. Blocks tip in-plane, so their bounding box is
+-- rarely axis-aligned and `Position.Y + Size.Y / 2` would under-read a tilted
+-- piece.
+local function partTopY(part: BasePart): number
+	local cf = part.CFrame
+	local half = part.Size / 2
+	local reach = math.abs(cf.RightVector.Y) * half.X
+		+ math.abs(cf.UpVector.Y) * half.Y
+		+ math.abs(cf.LookVector.Y) * half.Z
+	return cf.Position.Y + reach
+end
+
+-- Take a piece out of the physics world for as long as the holder is aiming it.
+--
+-- Anchored is *not* enough on its own: an anchored, colliding part is immovable
+-- world geometry, so a piece parked over the tower wedges or shoves whatever is
+-- still settling underneath it. That's how a placement could wreck the tower
+-- before it had even been dropped.
+--
+-- Returns what each part's CanCollide was so `release` can put it back one part
+-- at a time, rather than blanket-setting true — a Noob rig arrives with its own
+-- answer per limb and accessory, and handing a hat collision makes it a prop
+-- that knocks blocks over.
+local function suspendCollision(model: Model): { [BasePart]: boolean }
+	local saved = {}
+	for _, part in modelParts(model) do
+		saved[part] = part.CanCollide
+		part.CanCollide = false
+	end
+	return saved
+end
+
+local function restoreCollision(model: Model, saved: { [BasePart]: boolean })
+	for _, part in modelParts(model) do
+		local was = saved[part]
+		part.CanCollide = if was ~= nil then was else true
+	end
+end
+
 -- The name plate hanging off the piece: "Bomb T-Shape", or just "T-Shape" for an
 -- ordinary block. Types with their own model have no silhouette to name.
 local function labelPiece(model: Model, root: BasePart, shape: Shapes.Shape?, blockType: BlockTypes.BlockType?)
@@ -333,9 +384,90 @@ local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType:
 	return model, rootPart, color
 end
 
+-- The top of everything a piece could come down on: every block that is actually
+-- resting, every checkpoint platform, and the base.
+--
+-- Deliberately wider than `state.height`, which is the *scoring* number and only
+-- counts blocks that have held still for SETTLE_CONFIRM_SECONDS — and skips Noobs
+-- entirely, because a walking block would make the readout bob. A block that
+-- landed a quarter of a second ago and a Noob standing on the parapet are both
+-- very much in the way, and spawning a piece into either is exactly how a
+-- placement ends up inside the tower.
+--
+-- Blocks still tumbling are left out. A piece thrown up by a bomb is somewhere
+-- else a moment later, and taking it for the tower's top would fire the next
+-- spawn into orbit. `slowSince` is the test: it's set the instant an assembly
+-- goes quiet, so it reads "resting" a good half second before `settled` does.
+local function restingTopY(): number
+	local top = baseTopY
+	for _, block in blocks do
+		if block.root.Parent == nil then
+			continue
+		end
+		if not (block.custom or block.settled or block.slowSince ~= nil) then
+			continue
+		end
+		for _, part in modelParts(block.model) do
+			top = math.max(top, partTopY(part))
+		end
+	end
+	for _, platform in platforms do
+		top = math.max(top, partTopY(platform))
+	end
+	return top
+end
+
+-- How far below its pivot a piece can reach at *any* of its four quarter turns.
+-- Rotating about Z swaps the piece's width and height, so the worst case is the
+-- larger half extent — clearing only the current one would drop a flat I-piece
+-- straight into the tower the instant the holder spun it upright.
+local function pieceHalfHeight(model: Model): number
+	local _, size = model:GetBoundingBox()
+	return math.max(size.X, size.Y) / 2
+end
+
+-- Pivot altitude that leaves SPAWN_CLEARANCE of clear air under the piece.
+local function clearPivotY(halfHeight: number): number
+	return restingTopY() + halfHeight + Constants.SPAWN_CLEARANCE
+end
+
 -- Where a fresh piece appears: clear of whatever has been built so far.
-local function spawnPivot(): CFrame
-	return CFrame.new(0, baseTopY + math.max(state.height, 0) + Constants.SPAWN_CLEARANCE, Constants.PLANE_Z)
+local function spawnPivot(halfHeight: number): CFrame
+	return CFrame.new(0, clearPivotY(halfHeight), Constants.PLANE_Z)
+end
+
+-- Put the held piece back at its clearance, so "the piece is above the tower"
+-- holds for the whole turn rather than only for the instant it spawned. The tower
+-- moves under the holder all the time: a Noob walks up onto the parapet, a Clone
+-- drops its copy in, a block knocked loose comes to rest higher than it started.
+--
+-- `down` allows the piece to come back down as well as go up. Normally it may
+-- only rise — a piece sinking mid-turn reads as a glitch, and it would drop the
+-- holder into a gap that has since been filled — but when the storm has just
+-- taken the entire tower there is nothing left to be clear of, and a piece left
+-- hanging over an empty arena is worse.
+--
+-- Returns whether it moved, so the caller knows the state is worth broadcasting.
+-- Only Y is touched; X and the holder's quarter turns are theirs.
+local function reseatHeldPiece(down: boolean): boolean
+	local piece = held
+	if piece == nil then
+		return false
+	end
+
+	local wanted = clearPivotY(piece.halfHeight)
+	local shift = wanted - piece.pivot.Position.Y
+	if math.abs(shift) < Constants.HEIGHT_EPSILON then
+		return false
+	end
+	if shift < 0 and not down then
+		return false
+	end
+
+	piece.pivot = piece.pivot + Vector3.new(0, shift, 0)
+	piece.model:PivotTo(piece.pivot)
+	state.pieceTop = wanted + piece.halfHeight - baseTopY
+	return true
 end
 
 -- ---------------------------------------------------------------- the zones --
@@ -360,12 +492,15 @@ local function setSurfaces(part: BasePart, surface: Enum.SurfaceType)
 end
 
 -- Retro dresses blocks in the old stud look — on every face, so a cube reads as
--- a 1962 brick from any angle instead of only from above. Glow blocks are
--- exempt: their whole point is the material, and studding them over would just
--- make them grey.
+-- a 1962 brick from any angle instead of only from above.
 --
 -- Leaving a zone undresses the block again, because a zone is a property of the
 -- world rather than of whichever zone a block happened to spawn in.
+--
+-- This is the *server's* say on how a block looks, and it's the same for the
+-- whole room. A player who owns a material skin pack overrides it on their own
+-- screen only (TowerSkinController) — a bought cosmetic can't be allowed to
+-- change what everyone else sees.
 -- What a block would feel like with no zone in play: bouncy blocks are the one
 -- type that owns its own physics.
 local function basePhysics(blockType: BlockTypes.BlockType?): PhysicalProperties
@@ -383,7 +518,7 @@ local function applyZoneLook(model: Model, skin: BlockSkins.Skin, blockType: Blo
 	end
 
 	local zone = Zones.get(state.zoneId)
-	local retro = zone.kind == "retro" and skin.name ~= "Glow"
+	local retro = zone.kind == "retro"
 
 	for _, part in modelParts(model) do
 		if retro then
@@ -778,6 +913,9 @@ function TowerService.release()
 	-- preview forever.
 	piece.model:SetAttribute(Constants.HELD_ATTRIBUTE, nil)
 
+	-- Solid before it's loose, so the first frame of physics already has the piece
+	-- colliding with the tower rather than a frame of it falling through.
+	restoreCollision(piece.model, piece.collision)
 	for _, part in modelParts(piece.model) do
 		part.Anchored = false
 	end
@@ -794,6 +932,7 @@ function TowerService.release()
 	state.turnEndsAt = 0
 	state.shapeId = 0
 	state.blockTypeId = 0
+	state.pieceTop = 0
 	broadcast()
 end
 
@@ -832,8 +971,11 @@ local function beginTurn(player: Player)
 
 	local piece = model :: Model
 	applyZoneLook(piece, skin, blockType)
-	local pivot = spawnPivot()
+	local halfHeight = pieceHalfHeight(piece)
+	local pivot = spawnPivot(halfHeight)
 	piece:PivotTo(pivot)
+	-- Nothing the holder is still aiming may touch the tower.
+	local collision = suspendCollision(piece)
 	-- Tells the holder's client "this one is yours" so it can hide the real piece
 	-- and drive a local preview instead.
 	piece:SetAttribute(Constants.HELD_ATTRIBUTE, player.UserId)
@@ -848,10 +990,13 @@ local function beginTurn(player: Player)
 		baseColor = color :: Color3,
 		custom = shape == nil,
 		pivot = pivot,
+		halfHeight = halfHeight,
+		collision = collision,
 		player = player,
 	}
 
 	state.phase = PHASE.AIMING
+	state.pieceTop = pivot.Position.Y + halfHeight - baseTopY
 	state.holderUserId = player.UserId
 	state.turnEndsAt = workspace:GetServerTimeNow() + stage.turnSeconds
 	-- 0 for a piece with no silhouette; the HUD names it from blockTypeId instead.
@@ -906,28 +1051,11 @@ local function clampToPlane()
 	end
 end
 
--- Highest world-Y a part reaches, accounting for rotation: project each half
--- extent onto the world up axis. Blocks tip in-plane, so their bounding box is
--- rarely axis-aligned and `Position.Y + Size.Y / 2` would under-read a tilted
--- piece.
-local function partTopY(part: BasePart): number
-	local cf = part.CFrame
-	local half = part.Size / 2
-	local reach = math.abs(cf.RightVector.Y) * half.X
-		+ math.abs(cf.UpVector.Y) * half.Y
-		+ math.abs(cf.LookVector.Y) * half.Z
-	return cf.Position.Y + reach
-end
-
 -- ---------------------------------------------------------------- the storm --
 --
 -- The pressure mechanic. Every stage names a height to beat before the clock
 -- runs out; clearing it welds a permanent floor onto the tower at whatever
 -- altitude the players got to, and sets a higher bar.
-
--- Anchored checkpoint platforms, tracked separately from `blocks` because they
--- have no physics but still count toward the tower's top.
-local platforms: { BasePart } = {}
 
 -- Drop a block out of the live list. Always through here: `blocks` and
 -- `blockByModel` describe the same set and a stale entry in the map would hand
@@ -1068,6 +1196,10 @@ end
 
 local function resetRun()
 	breakTower()
+	-- The tower the held piece was parked above no longer exists, so bring it
+	-- back down to the base instead of leaving it (and the camera following it)
+	-- hanging over an empty arena for the rest of the turn.
+	reseatHeldPiece(true)
 
 	stormGap = Constants.STORM_FIRST_TARGET
 	state.checkpoints = 0
@@ -1115,6 +1247,7 @@ local function cancelHeldPiece()
 	state.turnEndsAt = 0
 	state.shapeId = 0
 	state.blockTypeId = 0
+	state.pieceTop = 0
 end
 
 local function runCheckpoint(height: number)
@@ -1188,6 +1321,24 @@ function TowerService.clearStage(): boolean
 		return false
 	end
 	runCheckpoint(state.height)
+	return true
+end
+
+-- Blow the tower apart on demand: exactly what the storm does when its clock
+-- runs out, without the clock. Routed through the same `resetRun` rather than a
+-- parallel teardown, so the wreck, the checkpoint wipe and the fresh stage all
+-- behave the way players have already seen them behave.
+--
+-- Returns false while a checkpoint is running — that sequence owns the world
+-- for its duration, and detonating the tower under a camera holding a wide shot
+-- of it would read as a bug. The caller (a Robux purchase) treats false as
+-- "not now" and leaves the receipt for redelivery.
+function TowerService.nuke(): boolean
+	if checkpointActive then
+		return false
+	end
+	resetRun()
+	broadcast()
 	return true
 end
 
@@ -1363,6 +1514,11 @@ local function updateHeight()
 		changed = true
 	end
 
+	-- Lift the held piece if the tower has grown under it since it spawned.
+	if reseatHeldPiece(false) then
+		changed = true
+	end
+
 	-- Re-send periodically even when nothing moved: a player who joined between
 	-- broadcasts has no other way to learn the state.
 	if changed or os.clock() - lastBroadcast > 1 then
@@ -1394,6 +1550,7 @@ local function goIdle()
 	state.turnEndsAt = 0
 	state.shapeId = 0
 	state.blockTypeId = 0
+	state.pieceTop = 0
 	broadcast()
 end
 

@@ -31,13 +31,17 @@ Boil.UIRegistry.registerScreen("Notes", element)
 local data = Boil.useReplica(...)
 ```
 
-`Boil` exposes `ui`, `audio`, `Loader`, `LoadOrdered`, `UIRegistry`, and
-`useReplica`, plus the skin-authoring **types** (`Boil.Skin`, `Boil.Components`,
-`Boil.ButtonProps`, …) — a skin package has to name the shapes it implements, and
-`Shared.ui.contract` is a deep path this rule forbids. Members load lazily on
-first access, so requiring `Boil` is cheap and
+`Boil` exposes `ui`, `assets`, `audio`, `Loader`, `LoadOrdered`, `UIRegistry`,
+and `useReplica`, plus the skin-authoring **types** (`Boil.Skin`,
+`Boil.Components`, `Boil.ButtonProps`, …) — a skin package has to name the shapes
+it implements, and `Shared.ui.contract` is a deep path this rule forbids. Members
+load lazily on first access, so requiring `Boil` is cheap and
 realm-safe — a server Service that only touches `Boil.LoadOrdered` never pulls in
-the React UI kit behind `Boil.ui`. It deliberately does **not** export third-party
+the React UI kit behind `Boil.ui`. `Boil.assets` exists for the same reason: a
+feature's shared registration file (a `Store.luau`, a `Sidebar.luau`) loads on
+both realms and often wants nothing but an icon id, and reaching it through
+`Boil.ui` would drag React onto the server for the sake of one string. It
+deliberately does **not** export third-party
 Wally packages (React, ByteNet, ReplicaService — require those directly) or
 anything a feature owns. Because features bind to this surface instead of deep
 paths, the framework can refactor its internals freely; only this surface has to

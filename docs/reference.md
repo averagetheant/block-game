@@ -202,7 +202,7 @@ When you need a new shared knob, add it to `theme.luau` rather than inlining a m
 
 Three lower-level pieces are also exported and reusable when building new gem-styled surfaces:
 
-- `ui.Text` — TextLabel using the gem display font. `shadow = true` opts into the two-layer drop-shadow (black shadow + white foreground offset by `-2px`, each with a Miter UIStroke) that Button and Badge use internally. Default is a plain single-layer label — use that for cleaner non-gem surfaces (e.g. the Sidebar's labels).
+- `ui.Text` — TextLabel using the gem display font. `shadow = true` opts into the two-layer drop-shadow (black shadow + white foreground offset by `-2px`, each with a Miter UIStroke) that Button and Badge use internally. Default is a plain single-layer label — use that for cleaner non-gem surfaces (e.g. the Sidebar's labels). `wrapped = true` wraps at the label's width; pair it with `automaticSize = Y` for a block of copy that sizes to its content. Note the display font carries no emoji — for a glyph, use a raw TextLabel (see `Reactions/ReactionGlyph.ui.luau`).
 - `ui.GemBackground` — the noise-tiled gradient Frame with the inner-glow stroke, black miter outline, and an optional `hasShine` shine stroke. Used internally by Button (`hasShine = true`) and Badge.
 - `ui.Window` — full window layout: dark glass Panel + top bar (optional Badge title + optional close Button) + scrollable content area. Children passed in are mounted directly into the scroll body. Use for any new feature window — see `src/features/UIShowcase/UIShowcase.ui.luau` for the call pattern.
 

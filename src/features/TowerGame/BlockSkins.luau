@@ -12,7 +12,10 @@
 -- cube for the stacking to read honestly. The squish is carried by the sound.
 --
 -- `id` goes over the wire and is what the HUD would look up, so ids are stable —
--- append, don't renumber.
+-- append, don't renumber. Id 4 is retired: it was "Glow", a Neon skin that rolled
+-- for free. Neon is a *purchase* now (the Store's `skins.neon` pack overrides the
+-- material on every block for whoever owns it), and a stock skin that already
+-- glowed would have made the thing being sold look like nothing.
 
 export type Skin = {
 	id: number,
@@ -72,16 +75,6 @@ BlockSkins.List = {
 		volume = 0.7,
 		pitchRange = { 0.9, 1.15 },
 		weight = 3,
-	},
-	{
-		id = 4,
-		name = "Glow",
-		color = Color3.fromRGB(120, 220, 255),
-		material = Enum.Material.Neon,
-		impactSound = "rbxassetid://140323850218372",
-		volume = 0.6,
-		pitchRange = { 0.95, 1.2 },
-		weight = 2,
 	},
 } :: { Skin }
 

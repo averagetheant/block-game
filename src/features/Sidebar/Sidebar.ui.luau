@@ -31,6 +31,7 @@ type Props = {
 	size: UDim2?,
 	position: UDim2?,
 	anchorPoint: Vector2?,
+	layoutOrder: number?,
 	zIndex: number?,
 }
 
@@ -73,6 +74,7 @@ return function(props: Props)
 		AnchorPoint = props.anchorPoint or Vector2.new(0, 0.5),
 		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
+		LayoutOrder = props.layoutOrder,
 		ZIndex = props.zIndex,
 	}, children)
 end

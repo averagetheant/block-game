@@ -200,13 +200,17 @@ export type CueOptions = {
 
 local warnedCues: { [string]: boolean } = {}
 
-local function cueLibrary(): Folder?
+-- Deliberately no class check on either level: what matters is that the Sounds
+-- are *in* there, not what kind of instance is holding them. Requiring a literal
+-- Folder would silently mute every cue in the game the day someone reorganised
+-- the library into a Model or a Configuration, and the failure would look like a
+-- broken sound rather than a broken assumption.
+local function cueLibrary(): Instance?
 	local root = ReplicatedStorage:FindFirstChild(Audio.CUE_FOLDER)
 	if root == nil then
 		return nil
 	end
-	local sounds = root:FindFirstChild(Audio.CUE_SUBFOLDER)
-	return if sounds and sounds:IsA("Folder") then sounds else nil
+	return root:FindFirstChild(Audio.CUE_SUBFOLDER)
 end
 
 -- The template for `name`, or nil with a one-time warning. Once per name, not

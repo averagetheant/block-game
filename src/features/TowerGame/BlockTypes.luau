@@ -7,42 +7,90 @@
 --
 --   chance = min(BASE_CHANCE + PER_CHECKPOINT * checkpoints, MAX_CHANCE)
 --
--- At checkpoint 0 that's a rare surprise; by the fifth floor it's most of a
--- coin flip, which is what turns a calm stack into a scramble.
+-- Deliberately stingy at the bottom of the run: the first few floors are where
+-- players are still learning to aim, and a hazard every other piece there reads
+-- as noise rather than escalation. The curve only bites once a run is long.
+--
+-- `description` is the line the block's own name plate shows under its title
+-- (see BlockLabel), so it's written for the player, not for this file.
+--
+-- `id` goes over the wire and is what a name plate looks up — append, don't
+-- renumber.
 
-export type Kind = "plain" | "explosion" | "glue"
+export type Kind = "plain" | "explosion" | "glue" | "clone" | "bouncy" | "burning" | "noob"
 
 export type BlockType = {
 	id: number,
 	kind: Kind,
 	name: string,
+	-- One short line, shown under the name on the block's plate.
+	description: string,
 	-- Tint used for the Highlight that marks the block, so a hazard reads at a
 	-- glance without fighting whatever skin it rolled.
 	tell: Color3,
 	weight: number,
+	-- True for types that bring their own model instead of a tetromino. Those
+	-- skip the shape entirely: no cells, no skin dressing, no shape suffix on the
+	-- name plate. TowerService hands the build off to the type's own module.
+	overridesModel: boolean?,
 }
 
 local BlockTypes = {}
 
 -- Odds that a piece is special at all.
-BlockTypes.BASE_CHANCE = 0.08
-BlockTypes.PER_CHECKPOINT = 0.06
-BlockTypes.MAX_CHANCE = 0.45
+BlockTypes.BASE_CHANCE = 0.03
+BlockTypes.PER_CHECKPOINT = 0.035
+BlockTypes.MAX_CHANCE = 0.4
 
 BlockTypes.List = {
 	{
 		id = 1,
 		kind = "explosion",
-		name = "Explosive",
+		name = "Bomb",
+		description = "Explodes.",
 		tell = Color3.fromRGB(255, 92, 72),
-		weight = 1,
+		weight = 3,
 	},
 	{
 		id = 2,
 		kind = "glue",
 		name = "Glue",
+		description = "Glues parts together.",
 		tell = Color3.fromRGB(126, 240, 138),
-		weight = 1,
+		weight = 3,
+	},
+	{
+		id = 3,
+		kind = "clone",
+		name = "Clone",
+		description = "Duplicates itself.",
+		tell = Color3.fromRGB(120, 214, 255),
+		weight = 2,
+	},
+	{
+		id = 4,
+		kind = "bouncy",
+		name = "Bouncy",
+		description = "Bounces!",
+		tell = Color3.fromRGB(255, 140, 230),
+		weight = 3,
+	},
+	{
+		id = 5,
+		kind = "burning",
+		name = "Burning",
+		description = "Burns blocks, careful!",
+		tell = Color3.fromRGB(255, 152, 48),
+		weight = 2,
+	},
+	{
+		id = 6,
+		kind = "noob",
+		name = "Noob",
+		description = "Places a Noob.",
+		tell = Color3.fromRGB(255, 214, 82),
+		weight = 2,
+		overridesModel = true,
 	},
 } :: { BlockType }
 

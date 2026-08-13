@@ -4,8 +4,11 @@ A Tricky Towers-style co-op stacker. Everyone plays **one shared tower**: player
 take turns, each turn hands the holder a tetromino they can slide and rotate, and
 a 20-second clock drops it for them if they dither. Over the top of that runs the
 **storm** — a stage clock demanding a target height, which pays out a permanent
-floor when the players make it. The camera never orbits; it rides the tower's
-altitude.
+floor when the players make it, blows up everything below it, and moves the run
+into a new zone. Roughly one piece in twenty is a *type* — a bomb, a burning
+block, a Noob — and every piece wears its own name plate saying which. The camera
+never orbits; it rides the tower's altitude, and steps back once a stage to show
+off what got built.
 
 Prototype status: the turn loop, the physics, the storm stages, the height
 tracking and the saved leaderstats all work end-to-end. There's no win/lose state
@@ -24,10 +27,21 @@ and no scoring (see [Not built yet](#not-built-yet)).
    leaves, the piece is unanchored and physics takes it.
 6. `SETTLE_SECONDS` later the next player is up.
 
-Height is recomputed every `POLL_INTERVAL` from every **settled** block (a block
-counts once its assembly is slower than `SETTLED_SPEED`, so a piece mid-fall can't
-spike the readout) plus every checkpoint platform. `maxHeight` is the running
-maximum.
+Height is recomputed every `POLL_INTERVAL` from every **settled** block plus every
+checkpoint platform. `maxHeight` is the running maximum.
+
+**Settling is a sustained state, not an instant.** A block is a candidate once its
+assembly is slower than `SETTLED_SPEED` *and* `SETTLED_SPIN`, but it only counts
+once it has stayed that quiet for `SETTLE_CONFIRM_SECONDS` (0.45). The hold is
+load-bearing: a block thrown into the air by a bomb is momentarily motionless at
+the top of its arc, and "momentarily motionless in mid-air" used to be enough to
+hand the players a checkpoint they hadn't built to. Going back above
+`UNSETTLE_SPEED` / `UNSETTLE_SPIN` takes a settled block back out of the count, so
+a tower knocked loose stops paying out until it comes to rest again.
+
+A Noob (see [Blocks](#blocks-skins-and-types)) is a block that walks, so it's
+excluded from the measurement entirely — otherwise the height would bob every
+time it jumped.
 
 ## The storm
 
@@ -37,10 +51,10 @@ The pressure mechanic, running independently of whose turn it is.
   checkpoint is `STORM_FIRST_TARGET` (60 studs) up, and every cleared stage puts
   the next one `STORM_GAP_GROWTH` (5) studs further than the last gap — 60, 65,
   70, and so on.
-- **Cleared** — the moment the tower reaches the target, a checkpoint platform is
-  welded onto the tower at exactly that altitude, the floor count goes up, and the
-  next target is set to *the height they actually reached* plus the new gap.
-  Overshooting doesn't make the next stage free.
+- **Cleared** — the tower reaches the target and the [checkpoint cutscene](#the-checkpoint-cutscene)
+  runs. Afterwards the floor count is up and the next target is set to *the height
+  they actually reached* plus the new gap; overshooting doesn't make the next stage
+  free.
 - **Expired** — the storm takes everything. See [When the storm lands](#when-the-storm-lands).
 - On an empty server the clock is held rather than ticking down to nothing.
 
@@ -50,16 +64,40 @@ line while glowing white (Neon), then cools from white to near-black before
 dropping back to SmoothPlastic. Because the part is anchored, tweening `Size`
 grows it evenly about its center instead of dragging one face.
 
-**Clearing a stage wipes the tower underneath it.** Every block whose highest
-point is at or below the new platform is destroyed, so the checkpoint becomes a
-clean foundation hanging in the air rather than the cap on a growing pile. That's
-what keeps a long session from dragging hundreds of physics parts behind it, and
-the height readout doesn't flinch because the platform's own top is what the
-measurement lands on. A piece still falling *above* the line survives.
-
 Checkpoints are tracked in their own list, separate from `blocks` — they have no
 physics but still count toward the tower's top. Earlier platforms are left where
 they are, so the floors you've cleared stay visible below.
+
+## The checkpoint cutscene
+
+Clearing a stage is an event, not a counter going up. `runCheckpoint` takes the
+world over for about five seconds:
+
+1. `PHASE.CHECKPOINT` goes out and `checkpointActive` freezes everything else —
+   the turn loop parks and the height poll returns early. Whoever was holding a
+   piece loses it (their client sees the turn end and tears its preview down on
+   its own); they get a fresh turn when play resumes.
+2. The camera pulls back to frame the **whole leg** the players just built, from
+   `zoneBaseHeight` to `height`, and holds it for `CHECKPOINT_VIEW_SECONDS`.
+3. The new platform grows in at the top.
+4. **The tower under it is blown apart** — every block whose highest point is at
+   or below the platform is thrown clear with a random shove, an upward kick and a
+   tumble, and destroyed `CHECKPOINT_BLAST_SECONDS` later. A piece still falling
+   *above* the line survives. The checkpoint becomes a clean foundation hanging in
+   the air rather than the cap on a growing pile, which is what keeps a long
+   session from dragging hundreds of physics parts behind it. The height readout
+   doesn't flinch, because the platform's own top is what the measurement lands on.
+5. The stage numbers advance, the zone rolls, the camera comes back, and
+   `CHECKPOINT_RESUME_SECONDS` later the queue starts again.
+
+**The stage numbers are deliberately advanced last.** `zoneBaseHeight` and
+`height` are exactly the pair the client camera frames the wide shot from, so
+moving them at the start of the sequence would collapse the shot to nothing. The
+server sends no camera cue at all — it says `PHASE.CHECKPOINT` and
+`TowerCameraController` decides what that looks like.
+
+Freezing the height poll is also what stops the demolition from clearing the
+*next* checkpoint off its own debris.
 
 ## Aiming
 
@@ -147,21 +185,96 @@ run has gone:
 
 ```
 chance = min(BASE_CHANCE + PER_CHECKPOINT × checkpoints, MAX_CHANCE)
-       = min(0.08 + 0.06 × checkpoints, 0.45)
+       = min(0.03 + 0.035 × checkpoints, 0.40)
 ```
 
-- **Explosive** — detonates on impact and consumes itself. Pieces are held
-  together by `WeldConstraint`s, which an `Explosion` doesn't break, so it throws
-  the tower around without dissolving blocks into loose cells.
-- **Glue** — welds to everything it's resting against when it **settles**, not
-  when it first touches something. That distinction is the whole mechanic: at the
-  moment of impact a block is often still mid-bounce with nothing but the part it
-  just grazed nearby, so welding then glues it to the wrong thing (or to nothing).
-  Welding to an anchored platform effectively anchors it, which is what glue
-  should feel like.
+That curve is deliberately stingy at the bottom — 3% on the first floor, about a
+fifth by the fifth, capped at two in five. The early floors are where players are
+still learning to aim, and a hazard every other piece there reads as noise rather
+than as escalation.
+
+| Type | Says | Does |
+| ---- | ---- | ---- |
+| **Bomb** | Explodes. | Beeps and flashes red three times on impact, then detonates and consumes itself. |
+| **Glue** | Glues parts together. | Welds to everything it's resting against, on settle. |
+| **Clone** | Duplicates itself. | Drops a plain copy of itself in from `CLONE_RISE` above, on settle. |
+| **Bouncy** | Bounces! | Lands with `BOUNCY_PHYSICS` instead of the dead default. |
+| **Burning** | Burns blocks, careful! | Arrives alight; chars black over `BURN_SECONDS` (20) and disintegrates, spreading to whatever it touches. |
+| **Noob** | Places a Noob. | Replaces the tetromino with a Noob that walks and jumps until something lands on it. |
+
+Details worth knowing:
+
+- **Bomb** — the fuse *is* the mechanic. `BOMB_BEEPS` red flashes with a beep each
+  give the room time to see which block is about to erupt, and are short enough
+  that nobody can build around it. Pieces are held together by `WeldConstraint`s,
+  which an `Explosion` doesn't break, so the blast throws the tower around without
+  dissolving blocks into loose cells. Every step of the fuse re-checks that the
+  block still exists — a bomb is easily wiped by a checkpoint demolition mid-count.
+- **Glue** welds on **settle**, not on first touch. That distinction is the whole
+  mechanic: at the moment of impact a block is often still mid-bounce with nothing
+  but the part it just grazed nearby, so welding then glues it to the wrong thing
+  (or to nothing). Welding to an anchored platform effectively anchors it, which
+  is what glue should feel like.
+- **Clone** waits for the same moment, so the copy has something solid to land on,
+  and nudges the copy `CLONE_OFFSET_X` sideways so it can't balance perfectly on
+  its own parent. The copy is deliberately **plain** — a clone that cloned would
+  bury the arena inside two turns.
+- **Burning** is a *state*, not just a type. `igniteBlock` can be called on any
+  block, and it is: `spreadBurn` runs from the height poll (not from `Touched`,
+  because a block already resting against its neighbour never fires `Touched`
+  again) and lights anything within `BURN_SPREAD_RADIUS`, after a
+  `BURN_SPREAD_DELAY` grace so a burning piece doesn't take the whole course it
+  landed in with it. A lit block lerps from its own colour to black and fades out
+  over the last `BURN_FADE_FRACTION` of its life. The hazard isn't the block, it's
+  the hole it leaves.
+- **Noob** is the one type that **overrides the model** (`overridesModel` in the
+  type table). Instead of tetromino cells the holder aims a Noob rig, and once it
+  settles it stops being cargo: `NoobBlock.activate` walks it randomly along X
+  (never Z — the plane clamp would fight it) and jumps it at `NOOB_JUMP_CHANCE`.
+  Any block landing on it at speed kills it, and it ragdolls and despawns. It's
+  excluded from the height, from the zone dressing, and from the plane clamp's
+  angular term (it has to be allowed to turn around to face where it's walking).
+  The rig is a **Studio asset**; a missing one silently rolls an ordinary block
+  instead, so a Noob costs you the joke rather than the turn.
 
 A special block is marked with a `Highlight` in its type's color rather than by
-repainting it — the skin already owns the color.
+repainting it — the skin already owns the color. `Bouncy` is the one type that
+owns its own `CustomPhysicalProperties`; `basePhysics` is what keeps that from
+being clobbered when a zone re-dresses the tower (Snowy still wins, because a
+slippery zone is the whole point of it).
+
+## Name plates
+
+Every piece wears its own name (`BlockLabel.luau`), a `BillboardGui` hanging off
+the **top-right corner** of the block: the title in bold white, and for a typed
+block its one-line description under it in a lighter weight.
+
+```
+                          Bomb T-Shape
+                          Explodes.
+        ▓▓▓▓▓▓
+          ▓▓
+```
+
+The title composes as `{Type} {Shape}-Shape`, or just `{Shape}-Shape` for a plain
+block, or the type alone for one that overrides the model ("Noob"). `titleFor` is
+the single naming authority — the HUD's status line calls the same function, so
+the plate and the HUD can't describe the piece differently.
+
+Three things about the implementation:
+
+- **Server-built world UI, not a React screen surface.** It has to sit on the
+  block and it has to be the same for everybody, so one server-owned instance
+  covers every player and the plate can't disagree between clients. (This is why
+  it has no UI Labs story — there's no React component to put in one.)
+- **Adorned to an `Attachment` at the model's bounding-box centre**, pushed out by
+  a *world-space* offset. Adorning the root cell instead would drag the plate
+  around the piece as it rotates, because the root cell moves within the model.
+- **It's dismissed when the block settles.** The plate is a *piece* affordance,
+  not a tower one — fifty blocks wearing fifty of them is a wall of text. The
+  holder's own plate is the preview clone's; the real piece's is `Enabled = false`
+  locally for that one player, for the same reason its parts are hidden (a GUI is
+  out of `LocalTransparencyModifier`'s reach).
 
 Three edge cases the input controller handles, all of which come from "held" being
 a state rather than an event:
@@ -206,6 +319,10 @@ assembly that drifts more than `PLANE_TOLERANCE`. Sleeping assemblies are skippe
 so a resting tower isn't woken every frame. Pieces still tip and topple — just
 sideways, toward the camera plane, the way Tricky Towers does.
 
+A Noob is exempt from the **angular** half of that only: it has to be allowed to
+turn about Y to face the direction it's walking, and zeroing that would leave it
+moonwalking on the spot. The Z terms still pin it to the plane.
+
 A piece is one Model of welded cells with **no PrimaryPart**, deliberately: when a
 model has a PrimaryPart, `PivotTo` uses that part's CFrame and ignores
 `WorldPivot`, which would swing a rotating piece around its first cell instead of
@@ -213,8 +330,24 @@ spinning it in place.
 
 ## Studio setup
 
-**None required** — the server generates the base platform on first run. Two
-optional hooks:
+**None required to boot** — the server generates the base platform on first run,
+and every Studio asset below degrades to "leave it as it was" when it's missing.
+
+### Assets to create
+
+All under `ReplicatedStorage.Assets` (Rojo does **not** sync these).
+
+| Asset | What it is | Missing means |
+| ----- | ---------- | ------------- |
+| `Assets.Noob` | A `Model` with a `Humanoid` and a `HumanoidRootPart` — a classic Noob rig | The Noob type silently rolls an ordinary block instead |
+| `Assets.Sounds.BombBeep` | A short `Sound`, the bomb's warning beep | The fuse still flashes red, just silently |
+| `Assets.Zones.Space` | A `Sky` for the Space zone | Space zone keeps whatever sky was up |
+
+(Plus everything the earlier zones already wanted: `Assets.Zones.Retro` / `Snowy`
+/ `Stormy`, `Assets.Zones.Normal.*`, `Assets.SnowParticle`, `Assets.RainParticle`,
+and the `Assets.Sounds` library.)
+
+### Optional hooks
 
 - **Your own platform.** Build a part in Studio and give it the CollectionService
   tag **`TowerBase`**. The server uses it instead of generating one and measures
@@ -261,7 +394,10 @@ devices.
 | `Shapes.luau` | shared | The seven tetrominoes as grid cells (ids are wire-stable) |
 | `Packets.luau` | shared | ByteNet: `Place`, `Release`, `State` |
 | `BlockSkins.luau` | shared | Look + sounds per skin, with rarity weights |
-| `BlockTypes.luau` | shared | Explosive / glue, and the odds curve |
+| `BlockTypes.luau` | shared | The six block types, their descriptions, and the odds curve |
+| `BlockLabel.luau` | shared | The world-space name plate, and `titleFor` — the one place a piece is named |
+| `NoobBlock.luau` | shared | The Noob rig: build, wander, squash. Server-only in practice |
+| `Zones.luau` | shared | The five zones, their skies, and their gravity |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
 | `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
@@ -269,7 +405,7 @@ devices.
 | `TowerAimController.client.luau` | client | The local preview and everything that makes aiming feel instant |
 | `TowerInputController.client.luau` | client | Keyboard + gamepad binds |
 | `TowerPointerController.client.luau` | client | Mouse aiming + click-to-drop (PC) |
-| `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude |
+| `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude, plus the checkpoint pull-back |
 | `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the clocks, picks the device |
 | `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
@@ -284,7 +420,7 @@ devices.
               [ 24.5 studs  best 60.0 ] (◕) height, with the turn clock beside it
               ●────────●────────────○      progress: start, tower, next zone
                    3:42 until storm!
-  Move — A / D…        Your turn — T piece            [LEFT][TURN][RIGHT][DROP]
+  Move — A / D…        Your turn — Bomb T-Shape       [LEFT][TURN][RIGHT][DROP]
   (fades after 60s)                            $ 1,250   (touch only)
 ```
 
@@ -324,6 +460,11 @@ work regardless.
 than being fed a per-second packet. It re-sends at least once a second so a late
 joiner picks up the game without a request/response handshake.
 
+The piece in play is described by the pair `shapeId` + `blockTypeId`. A type that
+overrides the model sends `shapeId = 0` and is named from the type alone, which is
+what lets `BlockLabel.titleFor` produce the same string on the block and in the
+HUD from one packet.
+
 The client's turn check in `TowerController` is a traffic optimization only;
 `TowerService` re-validates the holder on every intent.
 
@@ -340,14 +481,24 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `STORM_SECONDS` | The stage clock (300) |
 | `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 60 studs, each next gap 5 further |
 | `STORM_BLAST_*` | How hard the storm throws the tower, and how long the debris flies |
+| `CHECKPOINT_*_SECONDS` | The four beats of the checkpoint cutscene. Total pause is their sum plus `PLATFORM_GROW_SECONDS` |
+| `CHECKPOINT_BLAST_*` | How hard the old tower is thrown when the new floor lands |
 | `BlockTypes.BASE_CHANCE` / `PER_CHECKPOINT` / `MAX_CHANCE` | How often a block is special. **Note the cap** — raising `BASE_CHANCE` alone does nothing past `MAX_CHANCE` |
+| `BOMB_BEEPS`, `BOMB_BEEP_ON/OFF`, `EXPLOSION_VOLUME` | The bomb's fuse and how loud the payoff is |
+| `BURN_SECONDS`, `BURN_SPREAD_RADIUS`, `BURN_SPREAD_DELAY` | How long a burning block lasts and how eagerly it passes it on |
+| `CLONE_RISE`, `CLONE_OFFSET_X` | Where a Clone's copy drops in from |
+| `BOUNCY_PHYSICS` | How much a Bouncy block bounces |
+| `NOOB_*` | Walk speed, jump odds, and how long a squashed Noob lies there |
+| `SETTLE_CONFIRM_SECONDS`, `UNSETTLE_SPEED/SPIN` | How long a block has to hold still to count, and what knocks it back out |
 | `IMPACT_MIN_SPEED`, `IMPACT_LOUD_SPEED` | What counts as a landing, and what counts as a hard one |
 | `AVATAR_*` | Turn-strip sizing, spacing and fade |
 | `HINT_SECONDS`, `HINT_FADE_SECONDS` | How long the controls list stays, and how fast it goes |
 | `PLATFORM_SIZE` | Size of the base *and* every checkpoint — they're the same slab |
 | `PLATFORM_GROW_SECONDS`, `PLATFORM_FADE_SECONDS` | The checkpoint entrance tween |
 | `BLOCK_PHYSICS` | Friction / density / bounce of every block |
-| `CAMERA_DISTANCE`, `CAMERA_AIM_LIFT`, `CAMERA_LERP` | Framing and follow feel |
+| `CAMERA_DISTANCE`, `CAMERA_AIM_LIFT`, `CAMERA_LERP` | Framing and follow feel on a desktop |
+| `CAMERA_DISTANCE_TOUCH`, `CAMERA_AIM_LIFT_TOUCH` | The same two for a phone — see [Camera](#camera) |
+| `CAMERA_CHECKPOINT_*` | The wide shot: how slowly it eases, how much headroom, and the floor and ceiling on how far back it goes |
 | `DESPAWN_BELOW` | How far under the platform a fallen block is cleaned up |
 
 The HUD is a full-screen gameplay surface, so it hugs the top and bottom edges
@@ -360,17 +511,34 @@ Clearing a checkpoint moves the run into a new zone. The server picks it and
 broadcasts the id; the server owns the half that can't be faked (how blocks
 *feel*), the client owns the look. Both read the same `Zones.luau` table.
 
-| Zone | Blocks | Weather |
-| ---- | ------ | ------- |
+| Zone | Blocks | World |
+| ---- | ------ | ----- |
 | Clear Skies | unchanged | a random sky from `Assets.Zones.Normal` |
-| Retro | old stud look (Plastic + Studs/Inlet) | — |
+| Retro | old stud look — Plastic, **studs on all six faces** | — |
 | Snowy | slippery (friction 0.05) | snowfall |
 | Stormy | unchanged | rain, plus a wind that leans the tower |
+| Space | unchanged | `workspace.Gravity` drops to **30** |
 
 Only special zones announce themselves — a normal zone is just a new sky. The
 banner clears itself after `ZONE_WARNING_SECONDS`.
 
-Two details worth keeping:
+**Retro studs every face.** A cube read as a 1962 brick from above and as a
+smooth slab from the side, which is worse than not studding it at all, so all six
+`SurfaceType`s go to `Studs`.
+
+**Leaving a zone undresses the block again.** `applyZoneLook` has an else branch
+that puts the skin's material and smooth surfaces back, because a zone is a
+property of the world rather than of whichever zone a block happened to spawn in.
+Physics comes from `basePhysics` (the block's own — `BOUNCY_PHYSICS` for a Bouncy
+block, otherwise `BLOCK_PHYSICS`) unless the zone is Snowy, which always wins.
+
+**Gravity is the one zone rule that isn't per-block.** The server writes
+`workspace.Gravity` from `Zones.gravityOf`, which replicates; every zone but Space
+names no gravity and gets `Zones.DEFAULT_GRAVITY` (196.2) back. `resetRun` and
+`Start` both set it, so a run never inherits the last one's physics — or the place
+file's.
+
+Two more details worth keeping:
 
 - **Glow blocks are exempt from Retro.** Their whole point is the material, and
   studding them over just makes them grey.
@@ -416,6 +584,7 @@ bills are plain instances handed to TweenService that clean up after themselves.
 | `NormalBlockCollision` | everyone | the Classic skin's impact sound |
 | `YourTurn` | just you | `TowerFeedbackController` |
 | `ZoneReached` | just you | `TowerZoneController` |
+| `BombBeep` | everyone, positionally | each flash of a bomb's fuse |
 | `CashSound` | just you | on the cash value rising |
 | `Explosion` | everyone, positionally | on a throwaway marker, since the block is about to be destroyed |
 
@@ -430,6 +599,32 @@ partway through, and the playlist is shuffled (and reshuffled once exhausted) so
 a long session doesn't repeat in a fixed order. Client-side, so each player
 drives their own. Boil's own Music feature is switched off
 (`Music/Constants.ENABLED`) so the two don't fight over the mix.
+
+## Camera
+
+A fixed, level shot of the play plane that rides the tower's altitude. It never
+orbits; the only things that change are Y and, once per stage, how far back it
+stands.
+
+**Phone framing is its own shot.** A phone held upright has far less vertical room
+than a monitor, so the desktop `CAMERA_AIM_LIFT` (10) put the tower top near the
+middle of the screen and everything the player had built ran off the bottom —
+which reads as the camera sitting too high. On touch-without-keyboard devices the
+camera aims lower (`CAMERA_AIM_LIFT_TOUCH`, 1) and stands further back
+(`CAMERA_DISTANCE_TOUCH`, 94), which gives the stack back without losing the piece
+waiting overhead.
+
+**The checkpoint pull-back** frames the whole leg — `zoneBaseHeight` to `height`,
+plus `CAMERA_CHECKPOINT_PADDING` of headroom — at the distance that fits it in the
+vertical field of view, clamped between `CAMERA_CHECKPOINT_PULLBACK ×` the normal
+distance and `CAMERA_MAX_DISTANCE`. The floor matters: a short leg already fits in
+the ordinary framing, and fitting it isn't enough — the move has to *read* as
+stepping back to look at what was built. It eases at `CAMERA_CHECKPOINT_LERP`
+rather than tracking at `CAMERA_LERP`.
+
+The server sends no camera cue for any of this. It broadcasts `PHASE.CHECKPOINT`
+and this file decides what that looks like, which is what keeps the camera a
+deletable presentation (`Presentations.camera = false`).
 
 ## When the storm lands
 
@@ -462,10 +657,18 @@ game, not the history.
 - **The tower marker is a plain dot.** `ProgressLine` is built so it can become a
   little stack without touching anything else.
 - **Special zones are implemented but unobserved.** Two checkpoints in a row rolled
-  normal during testing (a 4-in-10 shot each), so retro / snowy / stormy have not
-  been seen end-to-end in a real run. The assets they name all exist and the code
-  paths are short, but they haven't been watched. Temporarily zeroing the normal
-  zone's `weight` in `Zones.luau` is the quickest way to force one.
+  normal during early testing, so retro / snowy / stormy / space have not been seen
+  end-to-end in a real run. The code paths are short, but they haven't been watched.
+  Temporarily zeroing the normal zone's `weight` in `Zones.luau` is the quickest way
+  to force one.
+- **The new block types haven't been watched in a real run either.** Bomb, Glue,
+  Clone, Bouncy, Burning and Noob are all wired end-to-end, but the odds curve is
+  deliberately stingy (3% on the first floor), so forcing one means either raising
+  `BlockTypes.BASE_CHANCE` or zeroing every other type's `weight`.
+- **Name plates disappear on settle**, so there's no way to tell a Glue block from
+  an ordinary one once it's part of the tower. That's the intended trade — fifty
+  plates is a wall of text — but if a type ever needs to be readable *in* the
+  tower, `BlockLabel.dismiss` is the one call to reconsider.
 - **Skins are colour and material only.** Making a block actually *look* like a
   Needoh means squash-and-stretch on impact, which is a deformation problem the
   cube geometry doesn't allow. The sound carries it for now.

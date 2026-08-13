@@ -20,7 +20,7 @@ local Constants = require(TowerGame:WaitForChild("Constants"))
 local TowerHUD = require(TowerGame:WaitForChild("TowerHUD"))
 local Zones = require(TowerGame:WaitForChild("Zones"))
 
-local PHASE_NAMES = { "aiming (yours)", "aiming (someone else)", "settling", "idle" }
+local PHASE_NAMES = { "aiming (yours)", "aiming (someone else)", "settling", "checkpoint", "idle" }
 
 -- Stands in for TowerFeedbackController.CashAwarded. The story fires it on a
 -- timer so the bill burst plays on a loop while you tune it.
@@ -55,9 +55,11 @@ return {
 		checkpoints = UILabs.Slider(1, 0, 20, 1),
 		playerCount = UILabs.Slider(4, 1, 8, 1),
 		cash = UILabs.Slider(1250, 0, 100000, 10),
-		shapeName = UILabs.Choose({ "I", "O", "T", "S", "Z", "J", "L" }),
+		-- The composed piece name, exactly as TowerView builds it from the shape
+			-- and the block type.
+			shapeName = UILabs.Choose({ "T-Shape", "I-Shape", "Bomb T-Shape", "Burning L-Shape", "Noob" }),
 		device = UILabs.Choose({ "pc", "touch", "gamepad" }),
-		zoneWarning = UILabs.Choose({ "none", "Retro Zone", "Snowy Zone", "Stormy Zone" }),
+		zoneWarning = UILabs.Choose({ "none", "Retro Zone", "Snowy Zone", "Stormy Zone", "Space Zone" }),
 		showControls = true,
 	},
 
@@ -84,6 +86,8 @@ return {
 		local phase = Constants.PHASE.AIMING
 		if selected == "settling" then
 			phase = Constants.PHASE.SETTLING
+		elseif selected == "checkpoint" then
+			phase = Constants.PHASE.CHECKPOINT
 		elseif selected == "idle" then
 			phase = Constants.PHASE.IDLE
 		end

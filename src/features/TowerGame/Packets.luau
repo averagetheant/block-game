@@ -53,6 +53,10 @@ return ByteNet.defineNamespace("TowerGame", function()
 				maxHeight = ByteNet.float32,
 				blockCount = ByteNet.uint16,
 				shapeId = ByteNet.uint8,
+				-- BlockTypes id of the current piece, 0 for an ordinary block.
+				-- The HUD names the piece from the pair: a type that brings its
+				-- own model (the Noob) sends shapeId 0 and is named from this.
+				blockTypeId = ByteNet.uint8,
 				nextShapeId = ByteNet.uint8,
 				-- Turn order as user ids, current holder first. The HUD's headshot
 				-- strip rotates this so the holder lands dead center; the entry at

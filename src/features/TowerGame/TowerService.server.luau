@@ -27,9 +27,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 
+local BlockLabel = require(ReplicatedStorage.Features.TowerGame.BlockLabel)
 local BlockSkins = require(ReplicatedStorage.Features.TowerGame.BlockSkins)
 local BlockTypes = require(ReplicatedStorage.Features.TowerGame.BlockTypes)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+local NoobBlock = require(ReplicatedStorage.Features.TowerGame.NoobBlock)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
@@ -43,10 +45,25 @@ type Block = {
 	model: Model,
 	root: BasePart,
 	-- Only settled blocks count toward the height, so a piece still falling
-	-- through the air can't spike the readout.
+	-- through the air can't spike the readout. Set by the poll, and taken back
+	-- off a block that gets knocked loose again.
 	settled: boolean,
+	-- When the assembly first went quiet, or nil if it isn't. A block has to hold
+	-- still for SETTLE_CONFIRM_SECONDS before `settled` follows — see updateHeight.
+	slowSince: number?,
+	-- Latch for the once-per-block half of settling (the settle sound).
+	settledOnce: boolean,
+	-- nil for a piece that brought its own model (the Noob).
+	shape: Shapes.Shape?,
 	skin: BlockSkins.Skin,
 	blockType: BlockTypes.BlockType?,
+	-- The colour every cell was painted, kept so effects that repaint the block
+	-- (a bomb's flash, a burn's charring) can put it back or lerp from it.
+	baseColor: Color3,
+	-- True for a model this file didn't build out of cells. Those are excluded
+	-- from the height, left out of the zone dressing, and only loosely held to
+	-- the play plane — a Noob has to be allowed to turn around.
+	custom: boolean,
 	impactSound: Sound?,
 	settleSound: Sound?,
 	-- Speed carried into the current frame. Sampled before physics damps it, so
@@ -55,14 +72,19 @@ type Block = {
 	-- One-shot latch for the block type's effect.
 	resolved: boolean,
 	lastImpactAt: number,
+	-- When this block caught fire, or nil if it hasn't. Burning is a state a
+	-- block can be given by a neighbour, not just something the Burning type has.
+	burnStartedAt: number?,
 }
 
 type Held = {
 	model: Model,
 	root: BasePart,
-	shape: Shapes.Shape,
+	shape: Shapes.Shape?,
 	skin: BlockSkins.Skin,
 	blockType: BlockTypes.BlockType?,
+	baseColor: Color3,
+	custom: boolean,
 	pivot: CFrame,
 	player: Player,
 }
@@ -80,6 +102,10 @@ local baseTopY = 0
 
 local queue: { Player } = {}
 local blocks: { Block } = {}
+-- Reverse index into `blocks`, so a part found by a spatial query can be traced
+-- back to the block that owns it without walking the list. Burning uses it to
+-- find what it's resting against; keep it in step with every add and remove.
+local blockByModel: { [Model]: Block } = {}
 local held: Held? = nil
 -- Distance to the next checkpoint. Grows by STORM_GAP_GROWTH every time one is
 -- cleared, so each floor is a little further than the last.
@@ -99,6 +125,7 @@ local state = {
 	maxHeight = 0,
 	blockCount = 0,
 	shapeId = 0,
+	blockTypeId = 0,
 	nextShapeId = nextShape.id,
 	order = {},
 	targetHeight = Constants.STORM_FIRST_TARGET,
@@ -199,7 +226,27 @@ local function randomColor(): Color3
 	return Color3.fromHSV(math.random(), 0.68, 0.98)
 end
 
-local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType: BlockTypes.BlockType?): (Model, BasePart)
+-- Every BasePart of a model, descendants included. Pieces built here are flat
+-- (cells are direct children), but a Noob rig hangs a Handle inside every
+-- accessory, and an anchored hat on an unanchored rig floats where it was.
+local function modelParts(model: Model): { BasePart }
+	local found = {}
+	for _, descendant in model:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			table.insert(found, descendant)
+		end
+	end
+	return found
+end
+
+-- The name plate hanging off the piece: "Bomb T-Shape", or just "T-Shape" for an
+-- ordinary block. Types with their own model have no silhouette to name.
+local function labelPiece(model: Model, root: BasePart, shape: Shapes.Shape?, blockType: BlockTypes.BlockType?)
+	local title = BlockLabel.titleFor(if blockType then blockType.name else nil, if shape then shape.name else nil)
+	BlockLabel.attach(model, root, title, if blockType then blockType.description else nil)
+end
+
+local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType: BlockTypes.BlockType?): (Model, BasePart, Color3)
 	local model = Instance.new("Model")
 	model.Name = `Piece_{shape.name}`
 	-- The skin keeps its material and its sounds; only the colour is rolled.
@@ -257,7 +304,8 @@ local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType:
 	-- when one is set, `GetPivot`/`PivotTo` use that part's CFrame and ignore
 	-- WorldPivot, which would put the rotation axis through the first cell.
 	model.WorldPivot = model:GetBoundingBox()
-	return model, rootPart
+	labelPiece(model, rootPart, shape, blockType)
+	return model, rootPart, color
 end
 
 -- Where a fresh piece appears: clear of whatever has been built so far.
@@ -271,36 +319,75 @@ end
 -- feel. The look (sky, weather particles, the warning) is TowerZoneController's
 -- job — it reads the same zone id off the state packet.
 
--- Retro dresses blocks in the old stud look. Glow blocks are exempt: their whole
--- point is the material, and studding them over would just make them grey.
-local function applyZoneLook(model: Model, skin: BlockSkins.Skin)
+local SURFACES = {
+	"TopSurface",
+	"BottomSurface",
+	"LeftSurface",
+	"RightSurface",
+	"FrontSurface",
+	"BackSurface",
+}
+
+local function setSurfaces(part: BasePart, surface: Enum.SurfaceType)
+	for _, name in SURFACES do
+		(part :: any)[name] = surface
+	end
+end
+
+-- Retro dresses blocks in the old stud look — on every face, so a cube reads as
+-- a 1962 brick from any angle instead of only from above. Glow blocks are
+-- exempt: their whole point is the material, and studding them over would just
+-- make them grey.
+--
+-- Leaving a zone undresses the block again, because a zone is a property of the
+-- world rather than of whichever zone a block happened to spawn in.
+-- What a block would feel like with no zone in play: bouncy blocks are the one
+-- type that owns its own physics.
+local function basePhysics(blockType: BlockTypes.BlockType?): PhysicalProperties
+	if blockType and blockType.kind == "bouncy" then
+		return Constants.BOUNCY_PHYSICS
+	end
+	return Constants.BLOCK_PHYSICS
+end
+
+local function applyZoneLook(model: Model, skin: BlockSkins.Skin, blockType: BlockTypes.BlockType?)
+	-- A Noob isn't scenery. Studding one over, or handing it snow friction, turns
+	-- a character back into a prop.
+	if model:GetAttribute(Constants.RAW_MODEL_ATTRIBUTE) then
+		return
+	end
+
 	local zone = Zones.get(state.zoneId)
 	local retro = zone.kind == "retro" and skin.name ~= "Glow"
 
-	for _, part in model:GetChildren() do
-		if not part:IsA("BasePart") then
-			continue
-		end
+	for _, part in modelParts(model) do
 		if retro then
 			part.Material = Enum.Material.Plastic
-			part.TopSurface = Enum.SurfaceType.Studs
-			part.BottomSurface = Enum.SurfaceType.Inlet
+			setSurfaces(part, Enum.SurfaceType.Studs)
+		else
+			part.Material = skin.material
+			setSurfaces(part, Enum.SurfaceType.Smooth)
 		end
-		if zone.kind == "snowy" then
-			part.CustomPhysicalProperties = Constants.SNOWY_PHYSICS
-		end
+		-- Snow wins over everything: a slippery zone is the whole point of it.
+		part.CustomPhysicalProperties = if zone.kind == "snowy"
+			then Constants.SNOWY_PHYSICS
+			else basePhysics(blockType)
 	end
 end
 
 -- Re-dress everything already standing when the zone changes, so a zone is a
 -- property of the world rather than of whatever happened to spawn during it.
 local function applyZoneToTower()
+	-- Gravity is the one zone rule that isn't per-block: Space drops it to a
+	-- sixth, everything else puts it back. Server-owned, so it replicates.
+	workspace.Gravity = Zones.gravityOf(state.zoneId)
+
 	for _, block in blocks do
-		applyZoneLook(block.model, block.skin)
+		applyZoneLook(block.model, block.skin, block.blockType)
 	end
 	local piece = held
 	if piece then
-		applyZoneLook(piece.model, piece.skin)
+		applyZoneLook(piece.model, piece.skin, piece.blockType)
 	end
 end
 
@@ -439,14 +526,67 @@ local function detonateBlock(block: Block)
 
 	-- On a throwaway marker rather than the block: the block is about to be
 	-- destroyed, and a sound parented to it would go with it.
-	Sfx.playAtPosition("Explosion", origin)
+	Sfx.playAtPosition("Explosion", origin, Constants.EXPLOSION_VOLUME)
 	block.model:Destroy()
 end
 
--- Wire up what a block does when it hits something. Both the sound and the
--- block type fire from the same signal, because "it landed" is one event.
+local function paint(block: Block, color: Color3)
+	for _, part in modelParts(block.model) do
+		part.Color = color
+	end
+end
+
+-- A bomb warns before it goes off: three red flashes and three beeps, then the
+-- blast. The delay is the mechanic — it's long enough for the room to see which
+-- block is about to erupt and short enough that nobody can build around it.
+--
+-- Every step re-checks that the block is still in the world, because a bomb can
+-- easily be wiped by a checkpoint demolition or knocked off the edge mid-fuse.
+local function armBomb(block: Block)
+	task.spawn(function()
+		for _ = 1, Constants.BOMB_BEEPS do
+			if block.root.Parent == nil then
+				return
+			end
+			paint(block, Constants.BOMB_FLASH_COLOR)
+			Sfx.playAt("BombBeep", block.root)
+			task.wait(Constants.BOMB_BEEP_ON)
+			if block.root.Parent == nil then
+				return
+			end
+			paint(block, block.baseColor)
+			task.wait(Constants.BOMB_BEEP_OFF)
+		end
+		if block.root.Parent == nil then
+			return
+		end
+		detonateBlock(block)
+	end)
+end
+
+-- Catching fire is a *state*, not a type: the Burning block starts alight, and
+-- anything it's resting against catches from it, so the hazard spreads through
+-- the tower rather than staying with the piece that caused it.
+local function igniteBlock(block: Block)
+	-- A Noob would char and disintegrate like scenery, which reads as a bug
+	-- rather than a joke.
+	if block.burnStartedAt ~= nil or block.custom or block.root.Parent == nil then
+		return
+	end
+	block.burnStartedAt = os.clock()
+
+	local fire = Instance.new("Fire")
+	fire.Name = "Burning"
+	fire.Heat = 10
+	fire.Size = Constants.BLOCK_SIZE * 1.5
+	fire.Parent = block.root
+end
+
+-- Wire up what a block does when it hits something. The sound, the block type
+-- and anything unlucky enough to be underneath all fire from the same signal,
+-- because "it landed" is one event.
 local function watchLanding(block: Block)
-	local function onTouched()
+	local function onTouched(hit: BasePart)
 		local speed = block.speed
 		if speed < Constants.IMPACT_MIN_SPEED then
 			return
@@ -454,20 +594,148 @@ local function watchLanding(block: Block)
 
 		playImpact(block, speed)
 
-		-- Only explosions resolve on impact; glue waits for the block to settle
-		-- (see glueBlock), which is handled in the height poll.
+		-- Landing on a Noob is fatal to the Noob, whatever kind of block did it.
+		local humanoid = NoobBlock.humanoidOf(hit)
+		if humanoid and humanoid.Parent then
+			NoobBlock.kill(humanoid.Parent :: Model)
+		end
+
+		-- Only bombs resolve on impact. Glue and Clone wait for the block to come
+		-- to rest, which the height poll handles.
 		if block.resolved or block.blockType == nil or block.blockType.kind ~= "explosion" then
 			return
 		end
 		block.resolved = true
-		detonateBlock(block)
+		armBomb(block)
 	end
 
-	for _, part in block.model:GetChildren() do
-		if part:IsA("BasePart") then
-			part.Touched:Connect(onTouched)
+	for _, part in modelParts(block.model) do
+		part.Touched:Connect(onTouched)
+	end
+end
+
+-- The one place a live block enters the world. Called by `release` for the piece
+-- the holder dropped, and by the Clone type for the copy it makes.
+local function registerBlock(
+	model: Model,
+	root: BasePart,
+	shape: Shapes.Shape?,
+	skin: BlockSkins.Skin,
+	blockType: BlockTypes.BlockType?,
+	baseColor: Color3,
+	custom: boolean
+): Block
+	local block: Block = {
+		model = model,
+		root = root,
+		settled = false,
+		slowSince = nil,
+		settledOnce = false,
+		shape = shape,
+		skin = skin,
+		blockType = blockType,
+		baseColor = baseColor,
+		custom = custom,
+		impactSound = attachSound(root, "Impact", skin.impactSound, skin.volume),
+		settleSound = if skin.settleSound
+			then attachSound(root, "Settle", skin.settleSound, skin.volume * 0.6)
+			else nil,
+		speed = 0,
+		resolved = false,
+		lastImpactAt = 0,
+		burnStartedAt = nil,
+	}
+	table.insert(blocks, block)
+	blockByModel[model] = block
+	watchLanding(block)
+
+	-- A Burning block arrives already alight; everything else has to catch.
+	if blockType and blockType.kind == "burning" then
+		igniteBlock(block)
+	end
+	return block
+end
+
+-- Clone blocks: the copy drops in once the original has come to rest, from a
+-- little above it and nudged to one side so it can't balance perfectly on its
+-- parent. The copy is deliberately *plain* — a clone that cloned would bury the
+-- arena inside two turns.
+local function spawnCloneOf(block: Block)
+	local shape = block.shape
+	if shape == nil or block.root.Parent == nil then
+		return
+	end
+
+	local model, root, color = buildPiece(shape, block.skin, nil)
+	applyZoneLook(model, block.skin, nil)
+
+	-- The block's own root, not the model's pivot: a model's WorldPivot doesn't
+	-- track parts the physics engine moved, so the pivot is still wherever the
+	-- piece was aimed.
+	local origin = block.root.Position
+	local drift = (if math.random() < 0.5 then -1 else 1) * Constants.CLONE_OFFSET_X
+	model:PivotTo(CFrame.new(
+		math.clamp(origin.X + drift, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X),
+		origin.Y + Constants.CLONE_RISE,
+		Constants.PLANE_Z
+	))
+	model.Parent = arena
+
+	for _, part in modelParts(model) do
+		part.Anchored = false
+	end
+	registerBlock(model, root, shape, block.skin, nil, color, false)
+end
+
+-- Burning spreads by contact, checked from the poll rather than from Touched:
+-- a block already resting against its neighbour never fires Touched again, and
+-- resting against something is exactly the case that should catch.
+local function spreadBurn(block: Block)
+	local params = OverlapParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { block.model }
+
+	for _, part in modelParts(block.model) do
+		local reach = part.Size + Vector3.one * Constants.BURN_SPREAD_RADIUS
+		for _, other in workspace:GetPartBoundsInBox(part.CFrame, reach, params) do
+			local model = other:FindFirstAncestorOfClass("Model")
+			local neighbour = if model then blockByModel[model] else nil
+			if neighbour then
+				igniteBlock(neighbour)
+			end
 		end
 	end
+end
+
+-- One step of a block's burn. Returns true when the block finished disintegrating
+-- and the caller should drop it from the list.
+local function tickBurn(block: Block, now: number): boolean
+	local started = block.burnStartedAt
+	if started == nil then
+		return false
+	end
+
+	local progress = math.min((now - started) / Constants.BURN_SECONDS, 1)
+	if progress >= 1 then
+		block.model:Destroy()
+		return true
+	end
+
+	-- Chars the whole way down, then goes to nothing over the last stretch, so
+	-- there's a moment of "that one's about to go" before the hole appears.
+	local charred = block.baseColor:Lerp(Color3.new(0, 0, 0), progress)
+	local fadeFrom = 1 - Constants.BURN_FADE_FRACTION
+	local fade = if progress > fadeFrom then (progress - fadeFrom) / Constants.BURN_FADE_FRACTION else 0
+	local transparency = math.max(block.skin.transparency or 0, fade)
+	for _, part in modelParts(block.model) do
+		part.Color = charred
+		part.Transparency = transparency
+	end
+
+	if now - started >= Constants.BURN_SPREAD_DELAY then
+		spreadBurn(block)
+	end
+	return false
 end
 
 -- Hand the piece to physics. Called by the holder, and by the turn loop when the
@@ -485,29 +753,11 @@ function TowerService.release()
 	-- preview forever.
 	piece.model:SetAttribute(Constants.HELD_ATTRIBUTE, nil)
 
-	for _, part in piece.model:GetChildren() do
-		if part:IsA("BasePart") then
-			part.Anchored = false
-		end
+	for _, part in modelParts(piece.model) do
+		part.Anchored = false
 	end
 
-	local skin = piece.skin
-	local block: Block = {
-		model = piece.model,
-		root = piece.root,
-		settled = false,
-		skin = skin,
-		blockType = piece.blockType,
-		impactSound = attachSound(piece.root, "Impact", skin.impactSound, skin.volume),
-		settleSound = if skin.settleSound
-			then attachSound(piece.root, "Settle", skin.settleSound, skin.volume * 0.6)
-			else nil,
-		speed = 0,
-		resolved = false,
-		lastImpactAt = 0,
-	}
-	table.insert(blocks, block)
-	watchLanding(block)
+	registerBlock(piece.model, piece.root, piece.shape, piece.skin, piece.blockType, piece.baseColor, piece.custom)
 	-- Everyone hears the drop from where it happened. The holder also gets their
 	-- own confirmation cue locally (Drop2, played client-side).
 	Sfx.playAt("Drop", piece.root)
@@ -518,11 +768,12 @@ function TowerService.release()
 	state.holderUserId = 0
 	state.turnEndsAt = 0
 	state.shapeId = 0
+	state.blockTypeId = 0
 	broadcast()
 end
 
 local function beginTurn(player: Player)
-	local shape = nextShape
+	local shape: Shapes.Shape? = nextShape
 	nextShape = Shapes.random()
 
 	-- Rolled per piece. Skin is pure flavour; type is the hazard, and it gets
@@ -530,21 +781,47 @@ local function beginTurn(player: Player)
 	local skin = BlockSkins.random()
 	local blockType = BlockTypes.roll(state.checkpoints)
 
-	local model, root = buildPiece(shape, skin, blockType)
-	applyZoneLook(model, skin)
+	local model: Model?, root: BasePart?, color: Color3? = nil, nil, nil
+
+	-- A type that overrides the model builds its own. That build can fail — the
+	-- Noob rig is a Studio asset this file can't conjure — so a miss falls
+	-- straight through to an ordinary tetromino rather than costing a turn.
+	if blockType and blockType.overridesModel then
+		model, root = NoobBlock.build()
+		-- Nothing repaints a Noob, but every block carries the colour it started
+		-- as, so the effects that do repaint have something to restore.
+		color = Color3.new(1, 1, 1)
+		if model == nil then
+			blockType = nil
+		end
+	end
+
+	if model == nil then
+		shape = shape :: Shapes.Shape
+		model, root, color = buildPiece(shape, skin, blockType)
+	else
+		-- No silhouette to name, so the plate is just the type.
+		shape = nil
+		labelPiece(model :: Model, root :: BasePart, nil, blockType)
+	end
+
+	local piece = model :: Model
+	applyZoneLook(piece, skin, blockType)
 	local pivot = spawnPivot()
-	model:PivotTo(pivot)
+	piece:PivotTo(pivot)
 	-- Tells the holder's client "this one is yours" so it can hide the real piece
 	-- and drive a local preview instead.
-	model:SetAttribute(Constants.HELD_ATTRIBUTE, player.UserId)
-	model.Parent = arena
+	piece:SetAttribute(Constants.HELD_ATTRIBUTE, player.UserId)
+	piece.Parent = arena
 
 	held = {
-		model = model,
-		root = root,
+		model = piece,
+		root = root :: BasePart,
 		shape = shape,
 		skin = skin,
 		blockType = blockType,
+		baseColor = color :: Color3,
+		custom = shape == nil,
 		pivot = pivot,
 		player = player,
 	}
@@ -552,7 +829,9 @@ local function beginTurn(player: Player)
 	state.phase = PHASE.AIMING
 	state.holderUserId = player.UserId
 	state.turnEndsAt = workspace:GetServerTimeNow() + Constants.TURN_SECONDS
-	state.shapeId = shape.id
+	-- 0 for a piece with no silhouette; the HUD names it from blockTypeId instead.
+	state.shapeId = if shape then shape.id else 0
+	state.blockTypeId = if blockType then blockType.id else 0
 	state.nextShapeId = nextShape.id
 	broadcast()
 end
@@ -584,8 +863,10 @@ local function clampToPlane()
 			root.AssemblyLinearVelocity = Vector3.new(velocity.X, velocity.Y, 0)
 		end
 		-- Only in-plane spin (about Z) survives; tipping toward or away from the
-		-- camera is what we're suppressing.
-		if spin.X ~= 0 or spin.Y ~= 0 then
+		-- camera is what we're suppressing. Custom models are exempt: a Noob turns
+		-- about Y to face the way it's walking, and zeroing that would leave it
+		-- moonwalking on the spot. It's still pinned to the plane by the Z terms.
+		if not block.custom and (spin.X ~= 0 or spin.Y ~= 0) then
 			root.AssemblyAngularVelocity = Vector3.new(0, 0, spin.Z)
 		end
 
@@ -623,26 +904,59 @@ end
 -- have no physics but still count toward the tower's top.
 local platforms: { BasePart } = {}
 
--- Everything the new platform replaces. The checkpoint spawns at the tower's
--- highest point, so every settled block is underneath it — but a piece dropped
--- a moment ago could still be falling *above* the line, and that one survives.
-local function clearBlocksBelow(cutoffY: number)
-	for index = #blocks, 1, -1 do
-		local block = blocks[index]
-		local highest = -math.huge
-		for _, part in block.model:GetChildren() do
-			if part:IsA("BasePart") then
-				highest = math.max(highest, partTopY(part))
-			end
-		end
-		if highest <= cutoffY then
-			block.model:Destroy()
-			table.remove(blocks, index)
-		end
-	end
+-- Drop a block out of the live list. Always through here: `blocks` and
+-- `blockByModel` describe the same set and a stale entry in the map would hand
+-- a burning neighbour a destroyed model.
+local function removeBlockAt(index: number): Block
+	local block = blocks[index]
+	table.remove(blocks, index)
+	blockByModel[block.model] = nil
+	return block
 end
 
-local function spawnCheckpoint(topY: number)
+local function highestPointOf(block: Block): number
+	local highest = -math.huge
+	for _, part in modelParts(block.model) do
+		highest = math.max(highest, partTopY(part))
+	end
+	return highest
+end
+
+-- Everything the new platform replaces, thrown clear rather than deleted. The
+-- checkpoint spawns at the tower's highest point, so every settled block is
+-- underneath it — but a piece dropped a moment ago could still be falling
+-- *above* the line, and that one survives.
+--
+-- The blocks are taken out of `blocks` immediately, which is what lets them
+-- scatter in 3D: the plane clamp only holds on to live blocks.
+local function blastBlocksBelow(cutoffY: number): { Block }
+	local debris = {}
+	for index = #blocks, 1, -1 do
+		if highestPointOf(blocks[index]) > cutoffY then
+			continue
+		end
+		local block = removeBlockAt(index)
+		table.insert(debris, block)
+
+		local root = block.root
+		if root.Parent == nil then
+			continue
+		end
+		root.AssemblyLinearVelocity = Vector3.new(
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_HORIZONTAL,
+			Constants.CHECKPOINT_BLAST_UP * (0.5 + math.random()),
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_HORIZONTAL * 0.5
+		)
+		root.AssemblyAngularVelocity = Vector3.new(
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_SPIN,
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_SPIN,
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_SPIN
+		)
+	end
+	return debris
+end
+
+local function spawnCheckpoint(topY: number): BasePart
 	local full = Constants.PLATFORM_SIZE
 
 	local part = Instance.new("Part")
@@ -660,12 +974,6 @@ local function spawnCheckpoint(topY: number)
 	part.Position = Vector3.new(0, topY + full.Y / 2, Constants.PLANE_Z)
 	part.Parent = arena
 	table.insert(platforms, part)
-
-	-- The tower below is now scaffolding: the platform is the new ground, and
-	-- keeping a few hundred settled parts alive under it buys nothing but
-	-- physics cost. Height is measured off the platform's own top, so the
-	-- readout doesn't move when they go.
-	clearBlocksBelow(part.Position.Y - full.Y / 2)
 
 	local grow = TweenService:Create(
 		part,
@@ -687,6 +995,8 @@ local function spawnCheckpoint(topY: number)
 			part.Material = Enum.Material.SmoothPlastic
 		end)
 	end)
+
+	return part
 end
 
 -- The storm arrives. Everything the players built gets thrown off the plane and
@@ -697,6 +1007,7 @@ end
 local function breakTower()
 	local debris = blocks
 	blocks = {}
+	table.clear(blockByModel)
 
 	for _, block in debris do
 		local root = block.root
@@ -738,27 +1049,74 @@ local function resetRun()
 	state.height = 0
 	state.zoneBaseHeight = 0
 	state.targetHeight = Constants.STORM_FIRST_TARGET
-	-- Back to clear skies; a fresh run shouldn't inherit the last one's weather.
+	-- Back to clear skies; a fresh run shouldn't inherit the last one's weather —
+	-- or its gravity.
 	state.zoneId = Zones.DEFAULT_ID
 	state.zoneSky = math.random(1, 255)
+	workspace.Gravity = Zones.gravityOf(state.zoneId)
 	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
 	-- maxHeight deliberately survives: it's the server's best-ever record, not
 	-- part of the run, and TowerStatsService has already banked it per player.
 end
 
--- Returns true when the stage changed and clients need to hear about it.
-local function updateStorm(height: number): boolean
-	local now = workspace:GetServerTimeNow()
+-- ----------------------------------------------------------- the checkpoint --
+--
+-- Clearing a stage is a cutscene, not a counter. Play stops, the camera pulls
+-- back to take in the whole leg the players built, the new floor snaps in, the
+-- scaffolding under it is blown apart, and only then does the queue start again.
+--
+-- While this is running `checkpointActive` freezes everything else: the turn
+-- loop parks, and the height poll returns early so the debris flying past can't
+-- be mistaken for a tower. The stage numbers are deliberately *not* advanced
+-- until the end, because `zoneBaseHeight` and `height` are exactly the pair the
+-- client camera frames the wide shot from — moving them early would collapse the
+-- shot to nothing.
 
-	-- Nobody playing: hold the clock rather than letting it expire against an
-	-- empty server.
-	if #queue == 0 then
-		state.stormEndsAt = now + Constants.STORM_SECONDS
-		return false
+local checkpointActive = false
+
+-- The holder loses the piece rather than the turn being played out under a
+-- camera that's looking somewhere else. Their client sees the turn end and tears
+-- its preview down on its own.
+local function cancelHeldPiece()
+	local piece = held
+	if piece == nil then
+		return
 	end
+	held = nil
+	piece.model:Destroy()
+	state.holderUserId = 0
+	state.turnEndsAt = 0
+	state.shapeId = 0
+	state.blockTypeId = 0
+end
 
-	if height >= state.targetHeight then
-		spawnCheckpoint(baseTopY + height)
+local function runCheckpoint(height: number)
+	checkpointActive = true
+	cancelHeldPiece()
+	state.phase = PHASE.CHECKPOINT
+	broadcast()
+
+	task.spawn(function()
+		-- A beat of stillness, then the camera has its look.
+		task.wait(Constants.CHECKPOINT_PAUSE_SECONDS + Constants.CHECKPOINT_VIEW_SECONDS)
+
+		local platform = spawnCheckpoint(baseTopY + height)
+		task.wait(Constants.PLATFORM_GROW_SECONDS)
+
+		-- The tower below is scaffolding now: the platform is the new ground, and
+		-- keeping a few hundred settled parts alive under it buys nothing but
+		-- physics cost. Height is measured off the platform's own top, so the
+		-- readout doesn't move when they go.
+		local cutoff = platform.Position.Y - Constants.PLATFORM_SIZE.Y / 2
+		local debris = blastBlocksBelow(cutoff)
+		Sfx.playAtPosition("Explosion", Vector3.new(0, cutoff, Constants.PLANE_Z), Constants.EXPLOSION_VOLUME)
+
+		task.wait(Constants.CHECKPOINT_BLAST_SECONDS)
+		for _, block in debris do
+			block.model:Destroy()
+		end
+
+		-- Only now does the stage actually advance.
 		state.checkpoints += 1
 
 		-- Clearing a checkpoint is what moves the run into a new zone.
@@ -776,7 +1134,29 @@ local function updateStorm(height: number): boolean
 		-- starts from.
 		state.zoneBaseHeight = height
 		state.targetHeight = height + stormGap
+		state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
+		state.phase = PHASE.SETTLING
+		broadcast()
+
+		-- The camera is on its way back in; let it land before a piece appears.
+		task.wait(Constants.CHECKPOINT_RESUME_SECONDS)
+		checkpointActive = false
+	end)
+end
+
+-- Returns true when the stage changed and clients need to hear about it.
+local function updateStorm(height: number): boolean
+	local now = workspace:GetServerTimeNow()
+
+	-- Nobody playing: hold the clock rather than letting it expire against an
+	-- empty server.
+	if #queue == 0 then
 		state.stormEndsAt = now + Constants.STORM_SECONDS
+		return false
+	end
+
+	if height >= state.targetHeight then
+		runCheckpoint(height)
 		return true
 	end
 
@@ -790,43 +1170,116 @@ end
 
 -- --------------------------------------------------------------- the height --
 
+-- What a block does the moment it comes to rest. Everything here is once-only:
+-- a block that gets knocked loose and re-settles must not glue itself twice or
+-- hand the players a second clone.
+local function onSettled(block: Block)
+	if not block.settledOnce then
+		block.settledOnce = true
+		-- The squishy skins get a second beat as they come to rest — the release
+		-- half of the ASMR kit's press/release pair.
+		if block.settleSound then
+			block.settleSound:Play()
+		end
+		-- The plate has done its job: it named the piece while it mattered. A
+		-- fifty-block tower wearing fifty of them is a wall of text.
+		BlockLabel.dismiss(block.model)
+	end
+
+	-- A Noob stops being cargo and starts being a character. Once only: it walks,
+	-- which un-settles it, and every re-settle would otherwise start a second
+	-- wander loop fighting the first.
+	if block.custom then
+		if not block.resolved then
+			block.resolved = true
+			NoobBlock.activate(block.model)
+		end
+		return
+	end
+
+	local blockType = block.blockType
+	if block.resolved or blockType == nil then
+		return
+	end
+
+	-- Glue sets where the block ends up, not where it first grazed. Clone waits
+	-- for the same moment, so the copy has something solid to land on.
+	if blockType.kind == "glue" then
+		block.resolved = true
+		glueBlock(block)
+	elseif blockType.kind == "clone" then
+		block.resolved = true
+		spawnCloneOf(block)
+	end
+end
+
+-- Settling is a *sustained* state, not an instant. A block only counts toward
+-- the tower once it has held still for SETTLE_CONFIRM_SECONDS, because a block
+-- thrown up by a bomb is briefly motionless at the top of its arc — and a block
+-- that is briefly motionless in mid-air used to be enough to clear a checkpoint
+-- the players hadn't built to.
+local function updateSettle(block: Block, now: number)
+	local root = block.root
+	local speed = root.AssemblyLinearVelocity.Magnitude
+	local spin = root.AssemblyAngularVelocity.Magnitude
+
+	if speed < Constants.SETTLED_SPEED and spin < Constants.SETTLED_SPIN then
+		block.slowSince = block.slowSince or now
+	else
+		block.slowSince = nil
+		-- Knocked properly loose: it stops counting until it comes to rest again.
+		if speed > Constants.UNSETTLE_SPEED or spin > Constants.UNSETTLE_SPIN then
+			block.settled = false
+		end
+	end
+
+	local since = block.slowSince
+	if block.settled or since == nil or now - since < Constants.SETTLE_CONFIRM_SECONDS then
+		return
+	end
+	block.settled = true
+	onSettled(block)
+end
+
 local function updateHeight()
+	-- The checkpoint cutscene owns the world while it runs. Measuring a tower
+	-- that's mid-demolition would spike the readout off flying debris and could
+	-- clear the next stage from the wreckage of the last one.
+	if checkpointActive then
+		if os.clock() - lastBroadcast > 1 then
+			broadcast()
+		end
+		return
+	end
+
 	local top = baseTopY
+	local now = os.clock()
 
 	for index = #blocks, 1, -1 do
 		local block = blocks[index]
 		if block.root.Parent == nil then
-			table.remove(blocks, index)
+			removeBlockAt(index)
 			continue
 		end
 		-- Knocked off the platform: stop paying for its physics.
 		if block.root.Position.Y < baseTopY - Constants.DESPAWN_BELOW then
-			block.model:Destroy()
-			table.remove(blocks, index)
+			removeBlockAt(index).model:Destroy()
+			continue
+		end
+		-- Burning blocks char, spread, and eventually aren't there any more.
+		if tickBurn(block, now) then
+			removeBlockAt(index)
 			continue
 		end
 
-		if not block.settled and block.root.AssemblyLinearVelocity.Magnitude < Constants.SETTLED_SPEED then
-			block.settled = true
-			-- The squishy skins get a second beat as they come to rest — the
-			-- release half of the ASMR kit's press/release pair.
-			if block.settleSound then
-				block.settleSound:Play()
-			end
-			-- Glue sets where the block ends up, not where it first grazed.
-			if not block.resolved and block.blockType and block.blockType.kind == "glue" then
-				block.resolved = true
-				glueBlock(block)
-			end
-		end
-		if not block.settled then
+		updateSettle(block, now)
+		-- A Noob walks and jumps; it's a hazard standing on the tower, not part
+		-- of it, and letting it into the measurement would make the height bob.
+		if not block.settled or block.custom then
 			continue
 		end
 
-		for _, part in block.model:GetChildren() do
-			if not part:IsA("BasePart") then
-				continue
-			end
+		for _, part in modelParts(block.model) do
 			local partTop = partTopY(part)
 			if partTop > top then
 				top = partTop
@@ -893,11 +1346,17 @@ local function goIdle()
 	state.holderUserId = 0
 	state.turnEndsAt = 0
 	state.shapeId = 0
+	state.blockTypeId = 0
 	broadcast()
 end
 
 local function runTurns()
 	while true do
+		-- Nobody gets a piece while the checkpoint cutscene is playing.
+		while checkpointActive do
+			task.wait(0.1)
+		end
+
 		local player = nextPlayer()
 		if player == nil then
 			goIdle()
@@ -908,7 +1367,7 @@ local function runTurns()
 		beginTurn(player)
 
 		-- Ends on any of: the player released it (held goes nil), the 20s clock
-		-- expired, or the holder left mid-turn.
+		-- expired, the holder left mid-turn, or a checkpoint took the piece away.
 		while held ~= nil and workspace:GetServerTimeNow() < state.turnEndsAt and player.Parent == Players do
 			task.wait(0.1)
 		end
@@ -951,6 +1410,9 @@ function TowerService.Start()
 	end
 
 	buildArena()
+	-- Zones own gravity (Space drops it to a sixth), so the run starts from the
+	-- default rather than from whatever the place file was saved with.
+	workspace.Gravity = Zones.gravityOf(state.zoneId)
 	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
 
 	Packets.Place.listen(function(payload, player)

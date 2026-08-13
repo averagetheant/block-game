@@ -109,11 +109,16 @@ local function statusLine(props: Props): string
 	if props.phase == PHASE.IDLE then
 		return "Waiting for players…"
 	end
+	if props.phase == PHASE.CHECKPOINT then
+		return "Checkpoint! Clearing the tower…"
+	end
 	if props.phase == PHASE.SETTLING then
 		return "Settling…"
 	end
+	-- `shapeName` is the piece's full name ("Bomb T-Shape", "Noob"), the same
+	-- text the block's own plate shows, so the two can't describe it differently.
 	if props.isMyTurn then
-		return `Your turn — {props.shapeName} piece`
+		return `Your turn — {props.shapeName}`
 	end
 	return `{props.holderName or "Someone"} is placing the {props.shapeName}`
 end

@@ -18,5 +18,9 @@ return {
 	-- Off for TowerGame: that feature cycles its own playlist out of
 	-- Assets.Music, and two music systems would just fight over the mix. Flip
 	-- back on if you drop TowerGame's music controller.
+	--
+	-- Gates the Settings row as well as the controller (see Settings.luau) —
+	-- while this is off, TowerGame registers the "Music" toggle its own playlist
+	-- honours, so the player still gets exactly one working switch.
 	ENABLED = false,
 }

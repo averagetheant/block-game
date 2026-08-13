@@ -13,7 +13,7 @@ local ui = require(ReplicatedStorage.Shared.Boil).ui
 local Store = require(Features:WaitForChild("Store"))
 
 return {
-	summary = "Inventory window: a tab per registered pack kind (equip one, or None) plus any tab a feature registered for itself. Toggle `ownEverything` to fill the grid; Equip/Unequip only print here — there's no replica in UI Labs.",
+	summary = "Inventory window: a tab per registered pack kind (equip one, or None) plus any tab a feature registered for itself. Toggle `ownEverything` to fill the grid; equipping only prints here — there's no replica in UI Labs.",
 	react = React,
 	reactRoblox = ReactRoblox,
 

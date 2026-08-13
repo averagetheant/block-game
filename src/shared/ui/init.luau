@@ -73,6 +73,14 @@ ui.Row = require(script.Row)
 ui.Grid = require(script.Grid)
 ui.Slot = require(script.Slot)
 
+-- Root viewport fit. The client entry wraps the whole tree in one ScaleLayer, so
+-- the pixel offsets everything else is authored in land the same way on a phone
+-- as on a monitor. Features don't mount their own — read `useViewportScale` only
+-- when you need the raw number (converting a real screen-pixel measurement into
+-- the scaled tree's units).
+ui.ScaleLayer = require(script.ScaleLayer)
+ui.useViewportScale = require(script.useViewportScale)
+
 -- Skin-agnostic behavior hooks.
 ui.useHoverScale = require(script.useHoverScale)
 ui.useTweenedScale = require(script.useTweenedScale)

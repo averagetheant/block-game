@@ -141,15 +141,24 @@ function TowerCameraController.Start()
 	task.spawn(function()
 		local baseTopY = waitForBaseTop()
 
-		-- The whole tower, base to top, with room around it. Unlike `wideShot`
-		-- (which frames only the current leg, from `zoneBaseHeight`) this starts
-		-- at the base — the button's promise is "show me everything I've built",
-		-- not "show me this stage".
+		-- The whole tower, current floor to top, with room around it.
+		--
+		-- Measured from `zoneBaseHeight` — the altitude of the floor the run is
+		-- standing on — rather than from the base. Everything below that floor has
+		-- been demolished: the server blows the previous platforms away with the
+		-- scaffolding under them, so framing from the base would spend most of the
+		-- shot on the empty column where old stages used to be and squeeze the
+		-- tower the button was pressed to look at into a sliver at the top. On the
+		-- first stage the two are the same thing.
 		local function overviewShot(baseTopY: number, data: TowerController.State): CFrame
-			local top = baseTopY + math.max(data.height, Constants.CAMERA_MIN_HEIGHT)
-			local span = math.max(top - baseTopY, 1) + Constants.CAMERA_OVERVIEW_PADDING
+			local floor = baseTopY + math.max(data.zoneBaseHeight, 0)
+			-- The minimum is a span *above the floor*, not an absolute altitude:
+			-- height is measured from the base, so by floor five it's already
+			-- hundreds of studs and a floor on `data.height` would never bite.
+			local top = math.max(baseTopY + data.height, floor + Constants.CAMERA_MIN_HEIGHT)
+			local span = math.max(top - floor, 1) + Constants.CAMERA_OVERVIEW_PADDING
 			return shot(
-				(baseTopY + top) / 2,
+				(floor + top) / 2,
 				distanceFor(span, distance * Constants.CAMERA_CHECKPOINT_PULLBACK)
 			)
 		end

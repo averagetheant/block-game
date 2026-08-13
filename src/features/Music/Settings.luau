@@ -6,6 +6,15 @@
 return function(Settings)
 	local Constants = require(script.Parent.Constants)
 
+	-- A row nobody reads is worse than no row: with the controller switched off
+	-- (Constants.ENABLED), this toggle sat in the Audio section doing nothing
+	-- while TowerGame's playlist played over the top of it. Register the setting
+	-- only when there's a controller behind it to honour it — whichever feature
+	-- is actually making the noise registers the "Music" toggle.
+	if not Constants.ENABLED then
+		return
+	end
+
 	Settings.registerCategory({
 		id = "audio",
 		title = "Audio",

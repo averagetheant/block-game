@@ -65,8 +65,26 @@ dropping back to SmoothPlastic. Because the part is anchored, tweening `Size`
 grows it evenly about its center instead of dragging one face.
 
 Checkpoints are tracked in their own list, separate from `blocks` — they have no
-physics but still count toward the tower's top. Earlier platforms are left where
-they are, so the floors you've cleared stay visible below.
+physics but still count toward the tower's top.
+
+**Only the newest platform survives.** When a floor lands, every earlier one goes
+out with the scaffolding under it: `blastPlatformsBelow` un-anchors them, turns
+off their collision and queries (so a tumbling slab can't shove a surviving block
+or swallow the landing preview's raycast on its way past), shoves them with the
+same blast the blocks get, and destroys them a second later. A platform is the
+ground only until the next one lands above it; after that it's a slab in dead air
+that nothing can reach, and leaving the stack standing meant the overview shot
+framed the whole dead column instead of the tower being built.
+
+They come out of the `platforms` list *before* they're shoved, for the same
+reason `blastBlocksBelow` empties its list first — that list feeds `restingTopY`,
+and a slab thrown upward by the blast would otherwise read as the top of the
+tower and fire the next piece's spawn into orbit.
+
+The **base is not a platform** and is never demolished: it's where the run
+restarts after the storm, and in a Studio-built place it's the user's own tagged
+part rather than something the service made. It just ends up permanently out of
+frame, since every shot is now measured from the current floor.
 
 ## The checkpoint cutscene
 
@@ -310,6 +328,12 @@ than as escalation.
 | **Bouncy** | Bounces! | Lands with `BOUNCY_PHYSICS` instead of the dead default. |
 | **Burning** | Burns blocks, careful! | Arrives alight; chars black over `BURN_SECONDS` (20) and disintegrates, spreading to whatever it touches. |
 | **Noob** | Places a Noob. | Replaces the tetromino with a Noob that walks and jumps until something lands on it. |
+| **Anvil** | Heavy! | Ten times the density (`ANVIL_PHYSICS`). Ploughs through what it lands on, immovable afterwards. |
+| **Ice** | Nothing sticks. | `ICE_PHYSICS` — friction taken out, high `frictionWeight` kept so the ice wins the contact and things slide *on* it. |
+| **Anchor** | Locks itself in place. | Anchors every one of its parts on settle. Holds itself, welds nothing. |
+| **Mystery** | ??? | Lands as a question mark, then rolls one of the landing types and fires it. |
+| **Crate** | Breaks apart! | Cuts its own welds on settle and collapses into the loose cubes it was pretending to be. |
+| **Feather** | Takes its time. | Terminal velocity of `FEATHER_FALL_SPEED` (12 studs/s) on the way down, and light enough to shove nothing. |
 
 Details worth knowing:
 
@@ -346,11 +370,53 @@ Details worth knowing:
   The rig is a **Studio asset**; a missing one silently rolls an ordinary block
   instead, so a Noob costs you the joke rather than the turn.
 
+- **Anchor** is the one type that is straightforwardly *good news*, and it cuts
+  both ways: it freezes where it stopped, so a lucky placement becomes permanent
+  scaffolding and a bad one becomes permanent clutter. It anchors **itself**, not
+  its neighbours — a bomb can still clear the blocks around it, leaving a ledge
+  hanging in the air. `unanchorModel` is what stops it surviving a demolition:
+  neither the checkpoint blast nor the storm is something a block gets to opt out
+  of.
+- **Crate** breaks on **settle**, like Glue and Clone, and for the same reason —
+  a crate that came apart the instant it grazed something would scatter on the way
+  down and read as the piece failing to exist. Landing first and *then* falling
+  apart is one beat the room can watch. The cells stay inside one model and one
+  `Block` entry (same tower mass, destroyed together by the demolition), and the
+  `shattered` flag is what tells the plane clamp to hold each cell to the plane
+  separately now that they're no longer one welded assembly. A one-cell piece has
+  no welds and is left alone.
+- **Feather** is a **velocity clamp**, not a density. Gravity is an acceleration,
+  so a light block falls at exactly the same speed as a heavy one — the drift is
+  `FEATHER_FALL_SPEED` capping downward velocity in the plane poll, folded into
+  the write that clamp was already making. Only the downward half is capped, so a
+  blast can still throw one. It buys the holder several extra seconds of steering
+  at the cost of the same seconds off their turn clock.
+- **Mystery** is a bluff: you place it exactly as carefully as you'd place the
+  worst thing it could be. It rolls from the types flagged `viaMystery` — Bomb,
+  Glue, Clone, Burning, Anchor, Crate — weighted by the same `weight` the ordinary
+  roll uses, so a type that's rare as a piece stays rare as a reveal. The physics
+  types are deliberately excluded: an Anvil reveal would be a word with no event
+  behind it, since the block has already fallen at ordinary weight. The reveal
+  re-tints the `Highlight` and puts a **fresh name plate** up for
+  `MYSTERY_REVEAL_SECONDS`, because the original was dismissed on settle a moment
+  earlier. Bomb is reachable only this way at settle time — a block *dealt* as a
+  Bomb arms on impact instead.
+
 A special block is marked with a `Highlight` in its type's color rather than by
-repainting it — the skin already owns the color. `Bouncy` is the one type that
-owns its own `CustomPhysicalProperties`; `basePhysics` is what keeps that from
-being clobbered when a zone re-dresses the tower (Snowy still wins, because a
-slippery zone is the whole point of it).
+repainting it — the skin already owns the color.
+
+Bouncy, Anvil, Ice and Feather own their own `CustomPhysicalProperties`, resolved
+through the `TYPE_PHYSICS` table `basePhysics` reads — adding another physics type
+is a line in that table, not a branch. `applyZoneLook` is what keeps them from
+being clobbered when a zone re-dresses the tower, with one carve-out: Snowy wins
+on **friction and elasticity** (a slippery zone is the whole point of it) but
+**density survives the weather**, because density isn't a surface. Without that,
+an Anvil would stop being heavy the moment it started snowing, which reads as the
+type having broken rather than as the weather.
+
+Note that adding six types roughly halved how often each *individual* type comes
+up — the overall odds that a piece is special are unchanged (that's the curve
+above), but the pool it rolls from is now twice as deep.
 
 ## Name plates
 
@@ -489,8 +555,44 @@ and the `Assets.Sounds` library.)
 - **Streaming.** New places ship with `StreamingEnabled` on, and this game
   disables characters — so nothing would give the client a replication focus and
   the player would see a live HUD over an empty sky. `TowerService` sets
-  `player.ReplicationFocus` to the base on join. Turning `StreamingEnabled` off in
-  Workspace works too, and makes that line redundant.
+  `player.ReplicationFocus` on join, to a shared invisible `StreamingFocus` part
+  that **rides the tower** (see below). Turning `StreamingEnabled` off in
+  Workspace works too, and makes all of it redundant.
+
+#### The streaming focus rides the tower
+
+A client is only sent parts within `StreamingTargetRadius` (1024 studs by
+default) of its replication focus. Pinning the focus to the *base* — which is
+what this used to do — meant the sphere never moved: past roughly 800–1000 studs
+of altitude the blocks at the top stopped being replicated at all, and the tower
+went invisible while the HUD kept counting.
+
+`updateStreamingFocus` runs on the poll and parks one shared part at the middle
+of the **live span** — the current floor (`zoneBaseHeight`) up to the top. One
+part serves everyone because everyone is looking at the same tower.
+
+Centring on the live span is what makes this safe indefinitely rather than just
+buying more headroom. Every checkpoint demolishes the floors below it, so what
+exists at any moment is *one stage's climb* (`stormGap`, 60 studs and growing by
+5) — a few hundred studs at most, comfortably inside the radius no matter how
+high the run's absolute altitude has got. Pieces spawn above the top and debris
+flies past it; both are well within the sphere at that distance.
+
+It's updated outside `updateHeight` on purpose: that returns early through a
+checkpoint or a round break, and the focus has to keep tracking through both —
+the demolition and the wreck are the parts of the game most worth seeing.
+
+The part is `CanQuery = false` as well as invisible, because the landing preview
+casts straight down the play plane and a marker sitting in it would read as a
+surface the piece could land on.
+
+**What this does *not* fix** is float precision, which is a property of absolute
+altitude rather than of the tower's size. Roblox is comfortable to a few thousand
+studs and starts visibly jittering somewhere past ~10,000; with gaps growing 5
+per checkpoint that's about **50 checkpoints** into a single unbroken run. If
+runs ever get that long, the fix is to periodically shift the whole arena back
+down and keep the displayed height as an offset — a real technique, but one that
+buys nothing until a run actually reaches that altitude.
 
 `Constants.DISABLE_CHARACTERS` is what turns avatars off (`CharacterAutoLoads`).
 Flip it to `false` if you want walking players; nothing else depends on it.
@@ -560,10 +662,10 @@ devices.
 | `Shapes.luau` | shared | The seven tetrominoes as grid cells (ids are wire-stable) |
 | `Packets.luau` | shared | ByteNet: `Place`, `Release`, `State` |
 | `BlockSkins.luau` | shared | Look + sounds per skin, with rarity weights |
-| `BlockTypes.luau` | shared | The six block types, their descriptions, and the odds curve |
+| `BlockTypes.luau` | shared | The twelve block types, their descriptions, the odds curve, and the Mystery pool |
 | `BlockLabel.luau` | shared | The world-space name plate, and `titleFor` — the one place a piece is named |
 | `NoobBlock.luau` | shared | The Noob rig: build, wander, squash. Server-only in practice |
-| `Zones.luau` | shared | The five zones, their skies, and their gravity |
+| `Zones.luau` | shared | The seven zones, their skies, and their gravity |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `Gamemodes.luau` | shared | The three votable modes and the stage numbers each one sets |
 | `Gamemode.luau` | shared | Registers those modes into GamemodeVote (auto-discovered) |
@@ -684,6 +786,10 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `BURN_SECONDS`, `BURN_SPREAD_RADIUS`, `BURN_SPREAD_DELAY` | How long a burning block lasts and how eagerly it passes it on |
 | `CLONE_RISE`, `CLONE_OFFSET_X` | Where a Clone's copy drops in from |
 | `BOUNCY_PHYSICS` | How much a Bouncy block bounces |
+| `ANVIL_PHYSICS`, `ICE_PHYSICS`, `FEATHER_PHYSICS` | The other three physics types. Density survives a Snowy zone; friction and elasticity don't |
+| `FEATHER_FALL_SPEED` | A Feather's terminal velocity (12). The actual mechanic — density can't slow a fall |
+| `CRATE_SCATTER`, `CRATE_LIFT`, `CRATE_SPIN` | How far a broken Crate's cells throw themselves apart. In-plane only |
+| `MYSTERY_REVEAL_SECONDS` | How long the revealed name hangs over a Mystery block |
 | `NOOB_*` | Walk speed, jump odds, and how long a squashed Noob lies there |
 | `SETTLE_CONFIRM_SECONDS`, `UNSETTLE_SPEED/SPIN` | How long a block has to hold still to count, and what knocks it back out |
 | `IMPACT_MIN_SPEED`, `IMPACT_LOUD_SPEED` | What counts as a landing, and what counts as a hard one |
@@ -982,10 +1088,19 @@ Registered from `Commands.luau`; the enum arguments (`blockType`, `blockSkin`,
 | `CashSound` | just you | on the cash value rising |
 | `Explosion` | everyone, positionally | on a throwaway marker, since the block is about to be destroyed |
 
-`Sfx.luau` clones from `Assets.Sounds` rather than referencing raw asset ids, so
+Cues are cloned from `Assets.Sounds` rather than referencing raw asset ids, so
 re-tuning a cue's volume or pitch is a Studio edit and not a code change. A
 missing sound warns once and is otherwise a no-op — audio going quiet should
 never take gameplay down with it.
+
+That loading, cloning and cleanup now lives in the **framework**
+(`Boil.audio.playCue` / `playCueAt` / `playCueAtPosition`), since a Studio sound
+library isn't a TowerGame idea and GamemodeVote wanted one too — it couldn't
+reach this file without a cycle, because TowerGame registers *into* GamemodeVote.
+`Sfx.luau` survives as a ~20-line binding for one reason: every TowerGame cue
+carries the same falloff (`SOUND_RANGE`), and threading that through a dozen call
+sites would repeat a decision that belongs in one place. Call sites are
+unchanged.
 
 Music is **one track per zone**: a zone is the game's chapter, so it's the thing
 worth scoring. The track loops until the zone changes rather than handing off
@@ -993,6 +1108,18 @@ partway through, and the playlist is shuffled (and reshuffled once exhausted) so
 a long session doesn't repeat in a fixed order. Client-side, so each player
 drives their own. Boil's own Music feature is switched off
 (`Music/Constants.ENABLED`) so the two don't fight over the mix.
+
+Gated on the **`tower.music`** toggle, registered under Audio in this feature's
+`Settings.luau`. TowerGame owns that row rather than reading Music's
+`music.enabled`: naming another feature's setting id breaks when that feature is
+uninstalled, and the two constants would drift silently in the meantime. Music
+registers its row only while its own controller is live, so the player sees
+exactly one "Music" switch whichever combination is installed.
+
+Switching music off destroys the playing clone but keeps the *template* loaded,
+and zone changes keep advancing the playlist silently. So toggling doesn't burn
+through the shuffle, and switching back on gives you the track for the zone
+you're actually in rather than resuming one from three checkpoints ago.
 
 ## Camera
 
@@ -1034,6 +1161,19 @@ the usual `CAMERA_MAX_DISTANCE` ceiling. The floor matters: a short leg already 
 the ordinary framing, and fitting it isn't enough — the move has to *read* as
 stepping back to look at what was built. It eases at `CAMERA_CHECKPOINT_LERP`
 rather than tracking at `CAMERA_LERP`.
+
+**The overview toggle** (the HUD's magnifier, bottom right) frames the current
+tower: `zoneBaseHeight` — the floor the run is standing on — up to `height`, plus
+`CAMERA_OVERVIEW_PADDING`. It measures from the current floor rather than from the
+base because everything below that floor has been demolished (see [the checkpoint
+platform](#the-storm)); framing from the base would spend most of the shot on the
+empty column where old stages used to be and squeeze the tower into a sliver at
+the top. On the first stage the two are the same thing. Its height minimum is a
+span *above the floor*, not an absolute altitude — `height` is measured from the
+base, so by floor five it's already hundreds of studs and a floor on `height`
+would never bite. The toggle is a **preference, not an override**: `target` checks
+phase first, so an overview left switched on can't eat the checkpoint cutscene's
+shot or the round break's.
 
 The server sends no camera cue for any of this. It broadcasts `PHASE.CHECKPOINT`
 and this file decides what that looks like, which is what keeps the camera a
@@ -1103,10 +1243,14 @@ pushes `stormEndsAt` back out.
   end-to-end in a real run. The code paths are short, but they haven't been watched.
   Temporarily zeroing the normal zone's `weight` in `Zones.luau` is the quickest way
   to force one.
-- **The new block types haven't been watched in a real run either.** Bomb, Glue,
-  Clone, Bouncy, Burning and Noob are all wired end-to-end, but the odds curve is
-  deliberately stingy (3% on the first floor), so forcing one means either raising
-  `BlockTypes.BASE_CHANCE` or zeroing every other type's `weight`.
+- **The block types haven't been watched in a real run either.** All twelve are
+  wired end-to-end, but the odds curve is deliberately stingy (3% on the first
+  floor), so forcing one means the `block` Cmdr command, raising
+  `BlockTypes.BASE_CHANCE`, or zeroing every other type's `weight`. The six newest
+  (Anvil, Ice, Anchor, Mystery, Crate, Feather) have had no play-testing at all —
+  in particular `ANVIL_PHYSICS`'s density and `FEATHER_FALL_SPEED` are first
+  guesses, and a Feather's drift is slow enough that it may want its own turn
+  clock.
 - **Name plates disappear on settle**, so there's no way to tell a Glue block from
   an ordinary one once it's part of the tower. That's the intended trade — fifty
   plates is a wall of text — but if a type ever needs to be readable *in* the

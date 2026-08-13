@@ -44,9 +44,9 @@ local LINES: { [string]: { string } } = {
 -- / LB / RB"). The lists are fixed strings, so this is sized once against the
 -- worst of them rather than measured at runtime — but it does mean a longer line
 -- added below needs this raised with it.
-local WIDTH = 380
-local LINE_HEIGHT = 26
-local TEXT_SIZE = 22
+local WIDTH = 435
+local LINE_HEIGHT = 30
+local TEXT_SIZE = 25
 local PADDING = 10
 
 return function(props: Props)

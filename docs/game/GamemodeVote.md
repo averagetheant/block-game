@@ -111,8 +111,33 @@ Gate either surface off in `Constants.Presentations`.
 
 ## Studio assets
 
-None. Panel icons are `rbxassetid://` literals on the registered modes, and the
-voters are `rbxthumb://` headshots Roblox resolves without a web call from us.
+| Path | What | If it's missing |
+| ---- | ---- | --------------- |
+| `Assets.Sounds.Stamp` | A short `Sound` — the thud a stamp makes | The stamps still land, silently |
+
+Panel icons are `rbxassetid://` literals on the registered modes, and the voters
+are `rbxthumb://` headshots Roblox resolves without a web call from us.
+
+The cue is played through `Boil.audio.playCue` at `STAMP_VOLUME` (0.7) — quieter
+than full, because on a busy server this can fire once per voter in quick
+succession and at full weight it sounds like hail.
+
+**The sound is fired from the controller, not the view.** `playStamps` diffs the
+incoming `voters` list against the last packet's, which is exactly when the view
+mounts a new stamp (it keys them by user id, so a voter moving to another panel
+is a real unmount and does stamp again). Doing it in the render body instead
+would replay the cue on any unrelated re-render. Three cases the diff has to get
+right:
+
+- **Joining mid-vote.** The first packet of a poll you haven't seen is absorbed
+  silently, or arriving would open with a burst of stamps for votes cast before
+  you got there. Tracked by comparing `endsAt` against the poll last stamped.
+- **Several votes in one packet** fire the cue **once**. Votes arrive one at a
+  time in practice, and firing per-voter on the packet where several don't reads
+  as a stutter rather than as several people voting.
+- **Taking a vote back** unmounts a stamp rather than landing one, so it's
+  silent — but the voter has to be dropped from the seen-set, or re-voting for
+  the same option afterwards would be silent too.
 
 ## Packets
 

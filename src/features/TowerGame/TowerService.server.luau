@@ -89,6 +89,10 @@ type Block = {
 	speed: number,
 	-- One-shot latch for the block type's effect.
 	resolved: boolean,
+	-- True once a Crate has been broken open. The cells are no longer one welded
+	-- assembly, so the plane clamp has to hold each of them to the plane
+	-- separately instead of steering the whole piece by its root.
+	shattered: boolean,
 	lastImpactAt: number,
 	-- When this block caught fire, or nil if it hasn't. Burning is a state a
 	-- block can be given by a neighbour, not just something the Burning type has.
@@ -266,6 +270,40 @@ local function findOrBuildBase(): BasePart
 	return part
 end
 
+-- Where streaming is centred, for every player at once.
+--
+-- With StreamingEnabled a client is only sent parts within
+-- `StreamingTargetRadius` (1024 studs by default) of its replication focus. This
+-- game spawns no characters, so there's no focus unless the server names one —
+-- and naming the *base* meant the sphere never moved: once the tower climbed
+-- past the radius the blocks at the top stopped being replicated at all and the
+-- players were building into an empty sky.
+--
+-- So the focus rides the tower instead. One shared invisible part is enough
+-- because everyone is looking at the same tower; `updateStreamingFocus` keeps it
+-- at the middle of the *live* span, which is the whole of what exists — every
+-- checkpoint demolishes the floors below it, so the distance from the current
+-- ground to the top is one stage's climb rather than the run's total altitude.
+local streamingFocus: BasePart? = nil
+
+local function buildStreamingFocus(): BasePart
+	local part = Instance.new("Part")
+	part.Name = "StreamingFocus"
+	part.Anchored = true
+	part.CanCollide = false
+	-- Invisible to raycasts as well as to the eye: the landing preview casts
+	-- straight down the play plane, and a marker sitting in it would read as a
+	-- surface the piece could land on.
+	part.CanQuery = false
+	part.CanTouch = false
+	part.CastShadow = false
+	part.Transparency = 1
+	part.Size = Vector3.one
+	part.Position = Vector3.new(0, baseTopY, Constants.PLANE_Z)
+	part.Parent = arena
+	return part
+end
+
 local function buildArena()
 	arena = workspace:FindFirstChild(Constants.ARENA_NAME) :: Folder
 	if not arena then
@@ -278,6 +316,8 @@ local function buildArena()
 	baseTopY = base.Position.Y + base.Size.Y / 2
 	-- Published for the client camera; see Constants.BASE_TOP_ATTRIBUTE.
 	arena:SetAttribute(Constants.BASE_TOP_ATTRIBUTE, baseTopY)
+
+	streamingFocus = buildStreamingFocus()
 end
 
 -- --------------------------------------------------------------- the pieces --
@@ -362,6 +402,10 @@ local function labelPiece(model: Model, root: BasePart, shape: Shapes.Shape?, bl
 	BlockLabel.attach(model, root, title, if blockType then blockType.description else nil)
 end
 
+-- The Highlight that marks a special block. Named because Mystery re-tints it
+-- in place when it reveals what it turned out to be.
+local TYPE_TELL_NAME = "TypeTell"
+
 local function buildPiece(
 	shape: Shapes.Shape,
 	skin: BlockSkins.Skin,
@@ -416,7 +460,7 @@ local function buildPiece(
 	-- of whatever look the skin picked.
 	if blockType then
 		local highlight = Instance.new("Highlight")
-		highlight.Name = "TypeTell"
+		highlight.Name = TYPE_TELL_NAME
 		highlight.FillColor = blockType.tell
 		highlight.OutlineColor = blockType.tell
 		highlight.FillTransparency = 0.65
@@ -551,13 +595,21 @@ end
 -- whole room — including the placer's skin pack, which rides on the block and so
 -- shows the same way on every screen. The pack outranks the zone: "a Retro zone
 -- can't dull it" is the thing being sold.
--- What a block would feel like with no zone in play: bouncy blocks are the one
--- type that owns its own physics.
+-- What a block would feel like with no zone in play. Most types don't care; the
+-- four that do each own one line of this table and nothing else in the file —
+-- adding another is an entry here, not a branch somewhere.
+local TYPE_PHYSICS: { [string]: PhysicalProperties } = {
+	bouncy = Constants.BOUNCY_PHYSICS,
+	anvil = Constants.ANVIL_PHYSICS,
+	ice = Constants.ICE_PHYSICS,
+	feather = Constants.FEATHER_PHYSICS,
+}
+
 local function basePhysics(blockType: BlockTypes.BlockType?): PhysicalProperties
-	if blockType and blockType.kind == "bouncy" then
-		return Constants.BOUNCY_PHYSICS
+	if blockType == nil then
+		return Constants.BLOCK_PHYSICS
 	end
-	return Constants.BLOCK_PHYSICS
+	return TYPE_PHYSICS[blockType.kind] or Constants.BLOCK_PHYSICS
 end
 
 local function applyZoneLook(
@@ -579,6 +631,25 @@ local function applyZoneLook(
 	-- and the two overrides don't have to fight.
 	local retro = zone.kind == "retro" and (pack == nil or pack.material == nil)
 
+	-- Snow wins over everything the *surface* controls: a slippery zone is the
+	-- whole point of it, so friction and elasticity are snow's whichever type the
+	-- block is. Density isn't a surface, though — it's how much block there is —
+	-- so it survives the zone. Without that carve-out an Anvil stops being heavy
+	-- the moment it starts snowing, which reads as the type having broken rather
+	-- than as the weather. Bouncy is unaffected either way; its density is the
+	-- ordinary one.
+	local base = basePhysics(blockType)
+	local snow = Constants.SNOWY_PHYSICS
+	local physics = if zone.kind == "snowy"
+		then PhysicalProperties.new(
+			base.Density,
+			snow.Friction,
+			snow.Elasticity,
+			snow.FrictionWeight,
+			snow.ElasticityWeight
+		)
+		else base
+
 	for _, part in modelParts(model) do
 		if retro then
 			part.Material = Enum.Material.Plastic
@@ -587,10 +658,7 @@ local function applyZoneLook(
 			part.Material = if pack and pack.material then pack.material else skin.material
 			setSurfaces(part, Enum.SurfaceType.Smooth)
 		end
-		-- Snow wins over everything: a slippery zone is the whole point of it.
-		part.CustomPhysicalProperties = if zone.kind == "snowy"
-			then Constants.SNOWY_PHYSICS
-			else basePhysics(blockType)
+		part.CustomPhysicalProperties = physics
 	end
 end
 
@@ -978,6 +1046,7 @@ local function registerBlock(
 			else nil,
 		speed = 0,
 		resolved = false,
+		shattered = false,
 		lastImpactAt = 0,
 		burnStartedAt = nil,
 	}
@@ -1206,10 +1275,42 @@ end
 
 -- ---------------------------------------------------------------- the plane --
 
+-- Hold one loose part of a broken-open Crate to the play plane.
+--
+-- The ordinary clamp steers a whole piece by its root, which works because the
+-- cells are welded into one assembly and share the root's drift. Cut the welds
+-- and that stops being true: each cell is its own assembly and wanders on its
+-- own. This is the same Z correction, just applied per part — and only to the
+-- handful of blocks that have actually been broken open.
+--
+-- No straightening: a pile of loose cubes is *supposed* to sit at angles. The
+-- flat silhouette the tilt clamp protects is a property of a piece, and a broken
+-- crate isn't a piece any more.
+local function clampLooseCell(part: BasePart)
+	local velocity = part.AssemblyLinearVelocity
+	if velocity.Z ~= 0 then
+		part.AssemblyLinearVelocity = Vector3.new(velocity.X, velocity.Y, 0)
+	end
+
+	local drift = part.Position.Z - Constants.PLANE_Z
+	if math.abs(drift) > Constants.PLANE_TOLERANCE then
+		part.CFrame = part.CFrame - Vector3.new(0, 0, drift)
+	end
+end
+
 local function clampToPlane(deltaTime: number)
 	for _, block in blocks do
 		local root = block.root
 		if root.Parent == nil then
+			continue
+		end
+
+		-- A broken crate has no single assembly to steer, so every cell is held
+		-- to the plane on its own and the piece-shaped clamp below is skipped.
+		if block.shattered then
+			for _, part in modelParts(block.model) do
+				clampLooseCell(part)
+			end
 			continue
 		end
 
@@ -1227,8 +1328,23 @@ local function clampToPlane(deltaTime: number)
 		-- Velocity only needs clamping while there *is* velocity, and writing it
 		-- to a sleeping assembly would wake it every frame for nothing.
 		if not resting then
-			if velocity.Z ~= 0 then
-				root.AssemblyLinearVelocity = Vector3.new(velocity.X, velocity.Y, 0)
+			-- A Feather has a terminal velocity: it never falls faster than a
+			-- drift, however far it has to come down. Only the downward half is
+			-- capped, so it can still be thrown by a blast — and only while it's
+			-- falling, so a settled one is never written to.
+			--
+			-- Folded into the Z clamp's write rather than done separately: one
+			-- AssemblyLinearVelocity assignment per block per frame, same as before.
+			local fall = velocity.Y
+			if
+				block.blockType ~= nil
+				and block.blockType.kind == "feather"
+				and fall < -Constants.FEATHER_FALL_SPEED
+			then
+				fall = -Constants.FEATHER_FALL_SPEED
+			end
+			if velocity.Z ~= 0 or fall ~= velocity.Y then
+				root.AssemblyLinearVelocity = Vector3.new(velocity.X, fall, 0)
 			end
 			-- Only in-plane spin (about Z) survives; tipping toward or away from
 			-- the camera is what we're suppressing. Custom models are exempt: a
@@ -1320,6 +1436,17 @@ end
 --
 -- The blocks are taken out of `blocks` immediately, which is what lets them
 -- scatter in 3D: the plane clamp only holds on to live blocks.
+-- Nothing survives a demolition, including an Anchor block — it holds itself up
+-- against the tower, not against the storm. An assembly is only loose once every
+-- part of it is, so this is all of them rather than the root.
+local function unanchorModel(model: Model)
+	for _, part in modelParts(model) do
+		if part.Anchored then
+			part.Anchored = false
+		end
+	end
+end
+
 local function blastBlocksBelow(cutoffY: number): { Block }
 	local debris = {}
 	for index = #blocks, 1, -1 do
@@ -1333,6 +1460,7 @@ local function blastBlocksBelow(cutoffY: number): { Block }
 		if root.Parent == nil then
 			continue
 		end
+		unanchorModel(block.model)
 		root.AssemblyLinearVelocity = Vector3.new(
 			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_HORIZONTAL,
 			Constants.CHECKPOINT_BLAST_UP * (0.5 + math.random()),
@@ -1347,11 +1475,62 @@ local function blastBlocksBelow(cutoffY: number): { Block }
 	return debris
 end
 
+-- The floors under the new one, thrown clear the same way the scaffolding is.
+--
+-- A checkpoint platform is the ground only until the next one lands above it.
+-- After that it's a slab hanging in dead air with nothing standing on it and
+-- nothing able to reach it — and the overview shot would frame the whole dead
+-- stack instead of the tower the players are actually building.
+--
+-- Taken out of `platforms` *before* they're shoved, for the same reason
+-- `blastBlocksBelow` empties its list first: that list feeds `restingTopY`, and
+-- a slab thrown upward by the blast would otherwise read as the top of the tower
+-- and fire the next piece's spawn into orbit.
+--
+-- The base is not a platform and is never in this list. It stays: it's where the
+-- run restarts after the storm, and in a Studio-built place it's the user's own
+-- tagged part rather than something this file made.
+local function blastPlatformsBelow(cutoffY: number): { BasePart }
+	local debris = {}
+	for index = #platforms, 1, -1 do
+		local platform = platforms[index]
+		if partTopY(platform) > cutoffY then
+			continue
+		end
+		table.remove(platforms, index)
+		table.insert(debris, platform)
+
+		platform.Anchored = false
+		-- Straight through the new floor and anything else on the way down. These
+		-- are deleted in a moment, and a tumbling slab that still collides would
+		-- shove a block that survived the cutoff or swallow the landing preview's
+		-- raycast on its way past.
+		platform.CanCollide = false
+		platform.CanQuery = false
+		platform.CanTouch = false
+		platform.AssemblyLinearVelocity = Vector3.new(
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_HORIZONTAL,
+			Constants.CHECKPOINT_BLAST_UP * (0.5 + math.random()),
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_HORIZONTAL * 0.5
+		)
+		platform.AssemblyAngularVelocity = Vector3.new(
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_SPIN,
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_SPIN,
+			(math.random() * 2 - 1) * Constants.CHECKPOINT_BLAST_SPIN
+		)
+	end
+	return debris
+end
+
 local function spawnCheckpoint(topY: number): BasePart
 	local full = Constants.PLATFORM_SIZE
 
 	local part = Instance.new("Part")
-	part.Name = `Checkpoint{#platforms + 1}`
+	-- Numbered by the floor it is, not by how many are currently standing —
+	-- previous ones are demolished, so `#platforms` would name every floor after
+	-- the first "Checkpoint2". `state.checkpoints` is still the count *behind*
+	-- this one at spawn time; it's incremented once the demolition finishes.
+	part.Name = `Checkpoint{state.checkpoints + 1}`
 	part.Anchored = true
 	part.Material = Enum.Material.Neon
 	part.Color = Constants.PLATFORM_SPAWN_COLOR
@@ -1405,6 +1584,7 @@ local function breakTower()
 		if root.Parent == nil then
 			continue
 		end
+		unanchorModel(block.model)
 		-- Out of the play plane on purpose: this is the one moment the game stops
 		-- being 2D, so the wreck scatters instead of sliding sideways.
 		local shove = Vector3.new(
@@ -1514,11 +1694,18 @@ local function runCheckpoint(height: number)
 		-- readout doesn't move when they go.
 		local cutoff = platform.Position.Y - Constants.PLATFORM_SIZE.Y / 2
 		local debris = blastBlocksBelow(cutoff)
+		-- The floors the run has already climbed past go with it. The new platform
+		-- was pushed onto `platforms` a moment ago and its top sits above the
+		-- cutoff, so it isn't caught by its own demolition.
+		local oldFloors = blastPlatformsBelow(cutoff)
 		Sfx.playAtPosition("Explosion", Vector3.new(0, cutoff, Constants.PLANE_Z), Constants.EXPLOSION_VOLUME)
 
 		task.wait(Constants.CHECKPOINT_BLAST_SECONDS)
 		for _, block in debris do
 			block.model:Destroy()
+		end
+		for _, floor in oldFloors do
+			floor:Destroy()
 		end
 
 		-- Only now does the stage actually advance.
@@ -1706,6 +1893,143 @@ end
 
 -- --------------------------------------------------------------- the height --
 
+-- Anchor blocks: the moment one comes to rest it stops being physics and starts
+-- being architecture. Anchored rather than welded to its neighbours, so it holds
+-- *itself* and nothing else — a bomb can still clear the blocks around it, and
+-- what's left is a ledge hanging in the air where the anchor was.
+--
+-- Every part, not just the root: the cells are welded into one assembly, and an
+-- assembly is only anchored if all of it is.
+local function anchorBlock(block: Block)
+	block.root.AssemblyLinearVelocity = Vector3.zero
+	block.root.AssemblyAngularVelocity = Vector3.zero
+	for _, part in modelParts(block.model) do
+		part.Anchored = true
+	end
+end
+
+-- Crate blocks: the welds come out and the piece collapses into the loose cubes
+-- it was pretending to be.
+--
+-- Breaking on *settle* rather than on impact is deliberate. A crate that came
+-- apart the instant it grazed something would scatter its cells on the way down
+-- and read as the piece failing to exist; landing first, then falling apart, is
+-- one beat the room can watch — and it's the same "where it ends up, not where
+-- it first grazed" rule Glue and Clone already follow.
+--
+-- The cells stay inside the one model and the one Block entry: they're still
+-- the same tower mass, they still get destroyed together by the demolition, and
+-- `shattered` is what tells the plane clamp to hold each of them separately now
+-- that they're no longer one assembly.
+local function shatterBlock(block: Block)
+	local cells = modelParts(block.model)
+	-- A one-cell piece has no welds and nothing to break into. Nothing to do
+	-- beats a Crate that visibly does nothing.
+	if #cells < 2 then
+		return
+	end
+	block.shattered = true
+
+	for _, descendant in block.model:GetDescendants() do
+		if descendant:IsA("WeldConstraint") then
+			descendant:Destroy()
+		end
+	end
+
+	-- Out and up, never sideways in Z: a scatter with any depth in it would throw
+	-- cells out of the play plane faster than the clamp pulls them back.
+	for _, part in cells do
+		part.AssemblyLinearVelocity = Vector3.new(
+			(math.random() * 2 - 1) * Constants.CRATE_SCATTER,
+			Constants.CRATE_LIFT * math.random(),
+			0
+		)
+		part.AssemblyAngularVelocity = Vector3.new(0, 0, (math.random() * 2 - 1) * Constants.CRATE_SPIN)
+	end
+
+	-- The skin's own landing sound, played a second time. A crate coming apart is
+	-- a percussive event and the skin already has the right noise for one, so this
+	-- costs no new Studio asset.
+	if block.impactSound then
+		block.impactSound:Play()
+	end
+end
+
+-- Run a type's landing effect. Shared by the types that resolve on settle and by
+-- Mystery, which needs to be able to fire any of them after the fact.
+local function applySettleEffect(block: Block, blockType: BlockTypes.BlockType)
+	local kind = blockType.kind
+	if kind == "glue" then
+		glueBlock(block)
+	elseif kind == "clone" then
+		spawnCloneOf(block)
+	elseif kind == "anchor" then
+		anchorBlock(block)
+	elseif kind == "crate" then
+		shatterBlock(block)
+	elseif kind == "burning" then
+		igniteBlock(block)
+	elseif kind == "explosion" then
+		-- Only reachable through a Mystery reveal. A block that was *dealt* as a
+		-- Bomb arms on impact instead, and by the time it settles that has already
+		-- happened; a revealed one has no impact left to wait for.
+		armBomb(block)
+	end
+end
+
+-- Mystery blocks: dealt as a question mark, and only on landing does anyone find
+-- out what they were holding. The whole piece is a bluff — you place it exactly
+-- as carefully as you'd place the worst thing it could be.
+--
+-- The reveal is a fresh name plate plus a re-tint of the Highlight, because the
+-- original plate has already been dismissed by the time this runs (that happens
+-- on the first settle, above). Physics types are excluded from the pool: an
+-- Anvil reveal would be a word with no event behind it, since the block has
+-- already fallen at ordinary weight.
+local function revealMystery(block: Block)
+	local revealed = BlockTypes.rollMystery()
+	if revealed == nil then
+		return
+	end
+	block.blockType = revealed
+
+	local highlight = block.model:FindFirstChild(TYPE_TELL_NAME)
+	if highlight and highlight:IsA("Highlight") then
+		highlight.FillColor = revealed.tell
+		highlight.OutlineColor = revealed.tell
+	end
+
+	BlockLabel.attach(
+		block.model,
+		block.root,
+		BlockLabel.titleFor(revealed.name, if block.shape then block.shape.name else nil),
+		revealed.description
+	)
+	task.delay(Constants.MYSTERY_REVEAL_SECONDS, function()
+		if block.model.Parent ~= nil then
+			BlockLabel.dismiss(block.model)
+		end
+	end)
+
+	applySettleEffect(block, revealed)
+end
+
+-- The types that resolve when the block comes to rest.
+--
+-- Bomb is deliberately absent: it resolves on *impact* (see `watchLanding`), and
+-- one that reaches settle without having armed is one that landed too gently to
+-- trigger it. Burning is absent for the opposite reason — it arrives already
+-- alight, lit in `registerBlock`. The physics types (Bouncy, Anvil, Ice,
+-- Feather) have nothing to resolve at all: their whole effect is the
+-- PhysicalProperties they were built with.
+local SETTLE_RESOLVED: { [string]: boolean } = {
+	glue = true,
+	clone = true,
+	anchor = true,
+	crate = true,
+	mystery = true,
+}
+
 -- What a block does the moment it comes to rest. Everything here is once-only:
 -- a block that gets knocked loose and re-settles must not glue itself twice or
 -- hand the players a second clone.
@@ -1734,19 +2058,20 @@ local function onSettled(block: Block)
 	end
 
 	local blockType = block.blockType
-	if block.resolved or blockType == nil then
+	if block.resolved or blockType == nil or not SETTLE_RESOLVED[blockType.kind] then
 		return
 	end
+	block.resolved = true
 
-	-- Glue sets where the block ends up, not where it first grazed. Clone waits
-	-- for the same moment, so the copy has something solid to land on.
-	if blockType.kind == "glue" then
-		block.resolved = true
-		glueBlock(block)
-	elseif blockType.kind == "clone" then
-		block.resolved = true
-		spawnCloneOf(block)
+	-- Glue sets where the block ends up, not where it first grazed. Clone, Anchor
+	-- and Crate wait for the same moment — the copy needs something solid to land
+	-- on, and the other two have nothing to lock or break until the block has
+	-- stopped moving.
+	if blockType.kind == "mystery" then
+		revealMystery(block)
+		return
 	end
+	applySettleEffect(block, blockType)
 end
 
 -- Settling is a *sustained* state, not an instant. A block only counts toward
@@ -1775,6 +2100,25 @@ local function updateSettle(block: Block, now: number)
 	end
 	block.settled = true
 	onSettled(block)
+end
+
+-- Keep the streaming sphere centred on the live tower — the current floor up to
+-- the top, which is everything that exists.
+--
+-- Read off `state` rather than re-walking the blocks: the poll has just written
+-- both numbers, and centring on the span means each end sits half a stage's
+-- climb from the focus instead of a whole one. Pieces spawn above the top and
+-- debris flies past it; both are well inside the radius at that distance.
+local function updateStreamingFocus()
+	local part = streamingFocus
+	if part == nil or part.Parent == nil then
+		return
+	end
+	local floor = baseTopY + math.max(state.zoneBaseHeight, 0)
+	-- `height` counts the current platform, so it's never below the floor — but
+	-- it *is* zero for the first frames of a run, before the first poll lands.
+	local top = baseTopY + math.max(state.height, state.zoneBaseHeight, 0)
+	part.Position = Vector3.new(0, (floor + top) / 2, Constants.PLANE_Z)
 end
 
 local function updateHeight()
@@ -1938,10 +2282,15 @@ local function addPlayer(player: Player)
 	table.insert(queue, player)
 	-- With StreamingEnabled (the default for new places) the client only receives
 	-- parts near its replication focus, and the focus normally comes from the
-	-- character — which this game doesn't spawn. Without this the player sees a
+	-- character — which this game doesn't spawn. Without one, the player sees a
 	-- live HUD over an empty sky.
-	if base then
-		player.ReplicationFocus = base
+	--
+	-- Every player shares the one focus part, because every player is looking at
+	-- the same tower. It rides the tower rather than sitting on the base: pinned
+	-- to the base, the sphere stopped reaching the top of a tall run and the
+	-- blocks up there simply stopped arriving. See `updateStreamingFocus`.
+	if streamingFocus then
+		player.ReplicationFocus = streamingFocus
 	end
 	-- The joiner's controller isn't listening yet; the 1s heartbeat in
 	-- updateHeight is what actually gets them their first state.
@@ -1997,6 +2346,11 @@ function TowerService.Start()
 		while true do
 			task.wait(Constants.POLL_INTERVAL)
 			updateHeight()
+			-- Outside updateHeight on purpose: that returns early through a
+			-- checkpoint or a round break, and the streaming focus has to keep
+			-- tracking through both — the demolition and the wreck are the parts
+			-- of the game most worth actually seeing.
+			updateStreamingFocus()
 		end
 	end)
 

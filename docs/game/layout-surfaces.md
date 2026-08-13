@@ -26,6 +26,35 @@ Honor the standing rules: pad against a stroked edge with `padding +
 strokeThickness`, and center new feature UIs by default (off-center is for large
 content surfaces).
 
+## Viewport scale
+
+Arrangement is authored in **pixels against a 1280×720 reference** — a `62`-tall
+panel, a `20` edge margin, `textSize = 30`. Pixels are absolute, so left alone
+those numbers eat a phone screen whole. `src/client/init.client.luau` mounts one
+`ui.ScaleLayer` as the React root: a Frame holding a single `UIScale` fitted to
+the viewport (`min` of the two axis ratios, clamped to `[0.5, 1]`).
+
+Everything below it shrinks together — sizes, margins, TextSize, stroke, padding
+— and stays anchored where it was: a bottom-right panel stays bottom-right, just
+smaller, with a proportionally smaller gap to the corner.
+
+That last part is only true because the layer is **sized `1 / scale` of the
+screen**, not `1, 1`. A `UIScale` transforms its parent's whole subtree about the
+parent's `AnchorPoint` — `Scale` positions included, not just offsets — so a
+full-screen layer at `0.58` would squeeze the entire HUD into the top-left 58% of
+the display. Sizing the layer as an oversized *virtual canvas* and scaling it back
+down maps it onto the viewport exactly instead. (Same trap `UIShell.Frame` avoids
+by injecting its enter-tween UIScale into the child rather than the wrapper — a
+UIScale on a full-screen wrapper "scales from the screen, not the child's own
+center.")
+
+So: **keep writing plain pixel offsets.** Don't reach for `UDim2.fromScale` sizes,
+per-screen breakpoints, or `UIAspectRatioConstraint` to "make it responsive", and
+don't mount a second `ScaleLayer` inside a feature. The one exception is a
+measurement that crosses into the tree from real screen space (an
+`AbsolutePosition` from another ScreenGui, a raw input coordinate) — divide it by
+`ui.useViewportScale()` first. See [reference.md](../reference.md) § Viewport scale.
+
 ## Studio-extract skeleton (deferred design)
 
 When a hero screen is painful to arrange in code, the plan is to let the user build

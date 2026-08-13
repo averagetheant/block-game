@@ -23,6 +23,14 @@ return {
 	-- closes and play resumes.
 	RESULT_SECONDS = 3,
 
+	-- The thud a landing stamp makes. A Studio-authored Sound of this name under
+	-- `ReplicatedStorage.Assets.Sounds`, played through `Boil.audio.playCue` — a
+	-- missing one costs the cue and nothing else.
+	STAMP_SOUND = "Stamp",
+	-- Quieter than a full-volume cue: during a poll this can fire once per voter
+	-- in quick succession, and at full weight a busy server sounds like hail.
+	STAMP_VOLUME = 0.7,
+
 	-- Which presentations are active. The screen is the vote; the command only
 	-- *starts* one, so a dev doesn't have to play out a whole storm stage to see
 	-- it. A world part can't express "pick one of three, now", so there's none.

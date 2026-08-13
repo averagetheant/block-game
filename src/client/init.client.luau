@@ -51,12 +51,14 @@ screen.Parent = playerGui
 
 local root = ReactRoblox.createRoot(screen)
 
--- The root Frame's children are whatever presentations registered — the HUD host,
--- the Health widget, etc. — so this file names no content feature.
-local rootFrame = React.createElement("Frame", {
-	Size = UDim2.fromScale(1, 1),
-	BackgroundTransparency = 1,
-}, UIRegistry.getRoots())
+-- The root's children are whatever presentations registered — the HUD host, the
+-- Health widget, etc. — so this file names no content feature.
+--
+-- ScaleLayer is the root rather than a plain Frame because every offset in the UI
+-- is authored in pixels against one design resolution; on a phone those same
+-- numbers would be two to three times too big for the screen. One UIScale here
+-- fits the whole tree to the viewport, so no feature has to think about it.
+local rootFrame = React.createElement(ui.ScaleLayer, {}, UIRegistry.getRoots())
 
 -- Wrap the tree in every feature-registered provider (e.g. UIShell's
 -- FrameProvider, registered from a *Presentation above). First registered ends up

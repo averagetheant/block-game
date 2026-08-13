@@ -143,6 +143,32 @@ return {
 	-- ordinary, completely inelastic blocks it lands on.
 	-- (density, friction, elasticity, frictionWeight, elasticityWeight)
 	BOUNCY_PHYSICS = PhysicalProperties.new(0.8, 0.35, 0.72, 1, 10),
+	-- Anvil blocks: ten times the density of an ordinary block, everything else
+	-- untouched. Gravity is an acceleration, so this doesn't make it *fall*
+	-- faster — it makes it refuse to be pushed. It ploughs through a stack it
+	-- lands on and is immovable to build against afterwards.
+	ANVIL_PHYSICS = PhysicalProperties.new(8, 0.9, 0, 10, 1),
+	-- Ice blocks: BLOCK_PHYSICS with the friction taken out. The high
+	-- frictionWeight is inherited on purpose — it's what makes the ice win the
+	-- contact, so things slide *on* it rather than gripping normally.
+	ICE_PHYSICS = PhysicalProperties.new(0.8, 0.02, 0, 10, 1),
+	-- Feather blocks: light, so they shove nothing on the way past.
+	FEATHER_PHYSICS = PhysicalProperties.new(0.2, 0.9, 0, 10, 1),
+	-- …and a terminal velocity, which is the actual mechanic. Density can't slow
+	-- a fall (gravity is an acceleration), so the drift is a clamp on downward
+	-- speed applied in the plane poll. Low enough to hand the holder several
+	-- extra seconds of steering, at the cost of the same seconds off their clock.
+	FEATHER_FALL_SPEED = 12,
+	-- Crate blocks: the welds are cut when it settles and the loose cells are
+	-- nudged apart. In-plane only — a scatter with any Z in it would push cells
+	-- out of the play plane faster than the clamp pulls them back.
+	CRATE_SCATTER = 7,
+	CRATE_LIFT = 4,
+	CRATE_SPIN = 6,
+	-- Mystery blocks: how long the revealed name hangs over the block before the
+	-- plate fades. The plate has already been dismissed by the time this runs
+	-- (that happens on the first settle), so the reveal puts a fresh one up.
+	MYSTERY_REVEAL_SECONDS = 2.5,
 	-- Burning blocks. A lit block blackens over BURN_SECONDS and then falls
 	-- apart, and anything resting against it catches too — so the hazard isn't
 	-- the block, it's the hole it leaves in the tower.
@@ -495,6 +521,16 @@ return {
 	-- piece worth landing on (it's aimed off the side), and the ghost hides
 	-- rather than sitting at the bottom of the cast.
 	LANDING_MAX_DROP = 400,
+
+	-- ------------------------------------------------------------------ music --
+	-- Setting id (registered in Settings.luau) for the zone playlist. TowerGame
+	-- owns this row rather than reading the Music feature's `music.enabled`,
+	-- because a feature that names another feature's setting id breaks the moment
+	-- that feature is uninstalled — and the two constants would drift silently in
+	-- the meantime. Music's own row registers only while its controller is live
+	-- (see that feature's Constants.ENABLED), so exactly one "Music" toggle is
+	-- ever on screen.
+	SETTING_MUSIC = "tower.music",
 
 	-- ------------------------------------------------------------- spectating --
 	-- Setting id (registered in Settings.luau). On, the turn queue skips this

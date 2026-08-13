@@ -4,7 +4,7 @@ Plays a single looping background track on the client while the persisted `music
 
 ## What it does
 
-- **Registers** an "Audio" category and a `music.enabled` toggle setting (default on) via the Settings feature. The registration lives in `Settings.luau` and is picked up by the Settings feature's auto-discovery loop on both realms.
+- **Registers** an "Audio" category and a `music.enabled` toggle setting (default on) via the Settings feature. The registration lives in `Settings.luau` and is picked up by the Settings feature's auto-discovery loop on both realms — **but only while `Constants.ENABLED` is true**. A toggle with no controller behind it is worse than no toggle: with this feature dormant under TowerGame, that row sat in the Audio section doing nothing while TowerGame's playlist played over the top of it. Whichever feature is making the noise registers the "Music" switch.
 - **Plays** `Shared.audio.Music.lobby` at volume `0.2` via `audio.playMusic` whenever the setting is on. When the setting flips off, calls `audio.stopMusic`.
 - **Reacts** to `PlayerDataController.DataChanged`, then re-reads the current value via `SettingsController.get`. Idempotent `playMusic` / `stopMusic` calls make redundant fires harmless.
 
@@ -23,6 +23,7 @@ None directly. Toggle writes go through the Settings feature's `SetToggle` packe
 | `DEFAULT_TRACK` | `"lobby"` | Must be a key in `Shared.audio.Music`. Swap to any other entry to change the loop. |
 | `VOLUME` | `0.2` | Music mix volume. The audio module's `DEFAULT_MUSIC_VOLUME` matches; passed explicitly so a change here is local to Music. |
 | `SETTING_ID` | `"music.enabled"` | The persisted Settings id. Read elsewhere via `SettingsController.get(Music.Constants.SETTING_ID)`. |
+| `ENABLED` | `false` | Off under TowerGame, which runs its own zone playlist. Gates the controller **and** the Settings row, so only one "Music" toggle is ever registered. Flip on if you drop TowerGame's music controller. |
 
 ## Changing the track
 

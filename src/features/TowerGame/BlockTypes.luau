@@ -17,7 +17,20 @@
 -- `id` goes over the wire and is what a name plate looks up — append, don't
 -- renumber.
 
-export type Kind = "plain" | "explosion" | "glue" | "clone" | "bouncy" | "burning" | "noob"
+export type Kind =
+	"plain"
+	| "explosion"
+	| "glue"
+	| "clone"
+	| "bouncy"
+	| "burning"
+	| "noob"
+	| "anvil"
+	| "ice"
+	| "anchor"
+	| "mystery"
+	| "crate"
+	| "feather"
 
 export type BlockType = {
 	id: number,
@@ -33,6 +46,11 @@ export type BlockType = {
 	-- skip the shape entirely: no cells, no skin dressing, no shape suffix on the
 	-- name plate. TowerService hands the build off to the type's own module.
 	overridesModel: boolean?,
+	-- True for types a Mystery block may turn into. Only types whose effect still
+	-- means something *after* a landing qualify: a Mystery that revealed itself as
+	-- Anvil would have already fallen at ordinary weight, so the reveal would be a
+	-- word with no event behind it. See `rollMystery`.
+	viaMystery: boolean?,
 }
 
 local BlockTypes = {}
@@ -50,6 +68,7 @@ BlockTypes.List = {
 		description = "Explodes.",
 		tell = Color3.fromRGB(255, 92, 72),
 		weight = 3,
+		viaMystery = true,
 	},
 	{
 		id = 2,
@@ -58,6 +77,7 @@ BlockTypes.List = {
 		description = "Glues parts together.",
 		tell = Color3.fromRGB(126, 240, 138),
 		weight = 3,
+		viaMystery = true,
 	},
 	{
 		id = 3,
@@ -66,6 +86,7 @@ BlockTypes.List = {
 		description = "Duplicates itself.",
 		tell = Color3.fromRGB(120, 214, 255),
 		weight = 2,
+		viaMystery = true,
 	},
 	{
 		id = 4,
@@ -82,6 +103,7 @@ BlockTypes.List = {
 		description = "Burns blocks, careful!",
 		tell = Color3.fromRGB(255, 152, 48),
 		weight = 2,
+		viaMystery = true,
 	},
 	{
 		id = 6,
@@ -92,17 +114,99 @@ BlockTypes.List = {
 		weight = 2,
 		overridesModel = true,
 	},
+	-- Anvil / Ice / Feather are the *physics* types: each changes one number in
+	-- the block's own PhysicalProperties (or, for Feather, how fast it may fall)
+	-- and has nothing to resolve on landing. What they do is felt on the way down
+	-- and for the rest of the run, which is why none of them is in the Mystery
+	-- pool — a reveal has to be an event.
+	{
+		id = 7,
+		kind = "anvil",
+		name = "Anvil",
+		description = "Heavy!",
+		tell = Color3.fromRGB(128, 136, 152),
+		weight = 3,
+	},
+	{
+		id = 8,
+		kind = "ice",
+		name = "Ice",
+		description = "Nothing sticks.",
+		tell = Color3.fromRGB(196, 244, 255),
+		weight = 3,
+	},
+	{
+		id = 9,
+		kind = "anchor",
+		name = "Anchor",
+		description = "Locks itself in place.",
+		tell = Color3.fromRGB(86, 104, 200),
+		weight = 2,
+		viaMystery = true,
+	},
+	-- Not in its own pool, for the obvious reason.
+	{
+		id = 10,
+		kind = "mystery",
+		name = "Mystery",
+		description = "???",
+		tell = Color3.fromRGB(196, 118, 255),
+		weight = 2,
+	},
+	{
+		id = 11,
+		kind = "crate",
+		name = "Crate",
+		description = "Breaks apart!",
+		tell = Color3.fromRGB(190, 140, 84),
+		weight = 3,
+		viaMystery = true,
+	},
+	{
+		id = 12,
+		kind = "feather",
+		name = "Feather",
+		description = "Takes its time.",
+		tell = Color3.fromRGB(255, 240, 200),
+		weight = 2,
+	},
 } :: { BlockType }
 
 local byId: { [number]: BlockType } = {}
 local totalWeight = 0
+-- What a Mystery block may turn into, and the weight to roll it against. Built
+-- from the same `weight` the ordinary roll uses, so a type that's rare as a
+-- piece stays rare as a reveal.
+local mysteryPool: { BlockType } = {}
+local mysteryWeight = 0
 for _, blockType in BlockTypes.List do
 	byId[blockType.id] = blockType
 	totalWeight += blockType.weight
+	if blockType.viaMystery then
+		table.insert(mysteryPool, blockType)
+		mysteryWeight += blockType.weight
+	end
 end
 
 function BlockTypes.get(id: number): BlockType?
 	return byId[id]
+end
+
+-- What a Mystery block turns out to have been, rolled the moment it comes to
+-- rest. nil when nothing is eligible — with an empty pool the block simply
+-- stays a dud, which is a duller outcome than a reveal but not a broken one.
+function BlockTypes.rollMystery(): BlockType?
+	if #mysteryPool == 0 then
+		return nil
+	end
+	local roll = math.random() * mysteryWeight
+	for _, blockType in mysteryPool do
+		roll -= blockType.weight
+		if roll <= 0 then
+			return blockType
+		end
+	end
+	return mysteryPool[#mysteryPool]
 end
 
 -- `scale` multiplies the odds before the cap — the hook a gamemode uses to make

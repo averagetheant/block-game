@@ -48,6 +48,13 @@ end
 -- The generic "one equipped pack per kind" tab. The first card is always
 -- "None": unequipping has to be as reachable as equipping, or a bought skin is
 -- a one-way door.
+--
+-- None is a *choice in the grid*, not an escape hatch bolted onto it — so its
+-- button reads "Equip" like every other card's, and shows the same green
+-- "Equipped" badge when it's the one in use. It said "Unequip" before, which
+-- described the code's intent (`onUnequip`) rather than the player's: in a row
+-- of cards where you pick one, the odd verb out reads as a different kind of
+-- control. The action it fires is still unequip.
 local function packTab(kind: string, props: Props): { [string]: any }
 	local ownedPacks = {}
 	for _, pack in Catalog.listPacks(kind) do
@@ -73,7 +80,7 @@ local function packTab(kind: string, props: Props): { [string]: any }
 				})
 				else React.createElement(ui.Button, {
 					variant = "white",
-					text = "Unequip",
+					text = "Equip",
 					textSize = ACTION_TEXT_SIZE,
 					size = UDim2.new(1, 0, 0, ACTION_HEIGHT),
 					onClick = function()

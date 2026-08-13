@@ -32,11 +32,15 @@ local Zones = require(script.Parent.Zones)
 
 local PHASE = Constants.PHASE
 
-local COLUMN_WIDTH = 420
-local STATS_HEIGHT = 62
-local STATUS_HEIGHT = 34
-local STAT_TEXT_SIZE = 30
-local STATUS_TEXT_SIZE = 26
+-- Text sizes and the boxes that hold them move together. Every height here is
+-- sized against the text inside it, so bumping a size without its box is what
+-- clips a descender or crops a status line — and the column width is what a long
+-- one ("SomePlayer is placing the Bomb T-Shape") has to fit inside.
+local COLUMN_WIDTH = 460
+local STATS_HEIGHT = 66
+local STATUS_HEIGHT = 38
+local STAT_TEXT_SIZE = 34
+local STATUS_TEXT_SIZE = 30
 local TOP_MARGIN = 10
 local STACK_GAP = 6
 
@@ -49,18 +53,18 @@ local CONTROL_ROW_HEIGHT = 88
 -- and the buttons.
 local CONTROL_ROW_WIDTH = Constants.STICK_TRACK_WIDTH + 110 + 160 + CONTROL_GAP * 4
 
-local STORM_LABEL_HEIGHT = 24
-local STORM_LABEL_TEXT_SIZE = 22
+local STORM_LABEL_HEIGHT = 28
+local STORM_LABEL_TEXT_SIZE = 25
 local PROGRESS_HEIGHT = 26
 local PANEL_RESIZE = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 -- The camera toggle, sitting above the cash panel on the right edge.
 local CAMERA_BUTTON = 62
-local CASH_WIDTH = 190
-local CASH_HEIGHT = 54
-local CASH_TEXT_SIZE = 28
+local CASH_WIDTH = 205
+local CASH_HEIGHT = 58
+local CASH_TEXT_SIZE = 32
 local CASH_ICON = 34
 local WARNING_WIDTH = 460
-local WARNING_HEIGHT = 96
+local WARNING_HEIGHT = 104
 
 -- The storm's white-out covers the screen, and the HUD is part of the screen —
 -- so it sits above every other child rather than among them.
@@ -333,21 +337,21 @@ return function(props: Props)
 			Stack = React.createElement(ui.Stack, { gap = 2, padding = 8 }, {
 				Title = React.createElement(ui.Text, {
 					text = props.zoneWarning.name,
-					textSize = 34,
+					textSize = 38,
 					weight = Enum.FontWeight.Heavy,
 					shadow = true,
 					color = props.zoneWarning.tint,
 					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(1, 0, 0, 42),
+					size = UDim2.new(1, 0, 0, 46),
 					layoutOrder = 1,
 				}),
 				Detail = React.createElement(ui.Text, {
 					text = props.zoneWarning.warning or "",
-					textSize = 24,
+					textSize = 27,
 					weight = Enum.FontWeight.Bold,
 					shadow = true,
 					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(1, 0, 0, 30),
+					size = UDim2.new(1, 0, 0, 34),
 					layoutOrder = 2,
 				}),
 			}),

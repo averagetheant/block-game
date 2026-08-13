@@ -247,6 +247,23 @@ React.createElement(ui.Stack, { gap = 12, padding = 10, fillHorizontal = true },
 | `ui.Grid` | UIGridLayout | cell size/padding, columns; children are **direct** cells |
 | `ui.Slot` | named transparent Frame | a positioned region; future portal-bridge target |
 
+### Viewport scale (`ui.ScaleLayer` / `ui.useViewportScale`)
+
+Every offset in the kit is authored in pixels against a 1280×720 reference. `src/client/init.client.luau` mounts one `ui.ScaleLayer` as the React root, which holds a single `UIScale` fitted to the viewport — so those pixels mean the same *fraction of the screen* on a phone as on a monitor. Nothing else has to opt in.
+
+```lua
+scale = clamp(min(viewport.X / 1280, viewport.Y / 720), 0.5, 1)
+```
+
+Capped at `1` so a large monitor keeps the desktop look rather than inflating; floored at `0.5` so a small phone gets a slightly-too-big UI instead of unreadable text and unhittable buttons. The constants live at the top of `src/shared/ui/useViewportScale.luau`; the story's `scale` slider previews any value without leaving Studio.
+
+**Why the layer is bigger than the screen.** A `UIScale` doesn't only shrink the offsets beneath it — it uniformly transforms the whole subtree about its parent's `AnchorPoint`, `Scale`-based positions included. Put one on a plain full-screen Frame and the entire HUD collapses into the top-left corner of the display, corner anchors and all (the same trap [UIShell.Frame](game/UIShell.md) documents when it injects its enter-tween's UIScale into the child instead of the wrapper). So `ScaleLayer` sizes itself at `UDim2.fromScale(1 / scale, 1 / scale)` — a *virtual canvas* larger than the viewport — and the UIScale maps that canvas back down onto the real screen exactly. Children lay out against the canvas in the units they were authored in; the transform puts them where they belong.
+
+Two consequences worth knowing:
+
+- Inside the layer, offsets are **scaled units, not screen pixels**. A real screen-pixel measurement crossing in from outside — an `AbsolutePosition` read by a *different* ScreenGui, a raw input coordinate — must be divided by `ui.useViewportScale()` first. Ratios of two absolutes (SteerStick's deflection) are scale-free and need nothing.
+- A ScreenGui mounted outside the root tree (PickupFX's overlay) isn't scaled. That's deliberate there — it positions icons from HUD `AbsolutePosition`s, which are already real pixels — but its icon *sizes* don't shrink with the rest.
+
 ### Importing from Studio (`src/shared/dev/Inspect`)
 
 Studio-built templates can be dumped to clipboard with a one-liner — select the root instance(s) in Explorer, then paste in the command bar:
@@ -277,7 +294,11 @@ Passing a bare list (`{ "red", "blue" }`) gives "Malformed control object" — a
 
 ## Audio (src/shared/audio/)
 
-Centralized sound and music registry plus thin playback helpers. **Client-side**: UI sounds use `SoundService:PlayLocalSound` (errors if called from the server); the looping music Sound is parented to the client's `SoundService` so each player drives their own track. For server-broadcast audio (a global jingle), use a Sound parented to Workspace replicated over ByteNet instead.
+Two sources of sound, and which you want depends on who authored it.
+
+**The registry** (`Audio.UI` / `Audio.Music`) is rbxassetids written in `init.luau` — no Studio setup, and **client-side**: UI sounds use `SoundService:PlayLocalSound` (errors if called from the server); the looping music Sound is parented to the client's `SoundService` so each player drives their own track.
+
+**The cue library** (`playCue*`) is Sounds a human built and tuned in Studio, under `ReplicatedStorage.Assets.Sounds`, cloned by name. The instance carries its own Volume and PlaybackSpeed, so re-tuning a cue is a Studio edit and not a code change — that's the whole reason to prefer it for game audio over a raw asset id. Rojo doesn't sync that folder, so a missing cue **warns once and is otherwise a no-op**; audio going quiet should never take gameplay down with it. `playCueAt` / `playCueAtPosition` parent a real Sound into the world, so a *server* call is heard by everyone — which is what a world event wants.
 
 **Roblox does not play audio inside Studio plugins**, so the Audio UI Labs story below is silent in-edit. Audition the registry by Play-testing the game, not from UI Labs.
 
@@ -292,6 +313,11 @@ audio.stopMusic()
 audio.currentTrack()               -- nil | the active music Sound
 audio.currentTrackName()           -- nil | the key passed to playMusic
 audio.playSoundId("rbxassetid://…", 0.6) -- arbitrary one-shot outside the registry
+
+audio.playCue("Stamp")                   -- Studio-authored one-shot, heard locally
+audio.playCue("Stamp", { volumeScale = 0.7 })
+audio.playCueAt("Drop", part)            -- positional; from the server, heard by all
+audio.playCueAtPosition("Explosion", position) -- outlives whatever caused it
 ```
 
 | Function                              | Behavior                                                                                            |
@@ -301,8 +327,15 @@ audio.playSoundId("rbxassetid://…", 0.6) -- arbitrary one-shot outside the reg
 | `playMusic(name, volume?)`            | Swap looping background. No-op when the requested track is already playing. Returns the active Sound.|
 | `stopMusic()`                         | Destroy the current looping Sound.                                                                  |
 | `currentTrack()` / `currentTrackName()` | The active Sound / registry key, or `nil` when no music is playing.                                |
+| `playCue(name, options?)`             | Clone a Studio-authored Sound from the cue library and play it 2D (client-side).                    |
+| `playCueAt(name, part, options?)`     | Same, parented to a part so it carries with distance falloff. Server-side use.                      |
+| `playCueAtPosition(name, pos, options?)` | Same, on a throwaway anchored marker, so it survives the thing that caused it being destroyed.   |
 
-Add new SFX/music by extending `Audio.UI` or `Audio.Music` in `src/shared/audio/init.luau`. Update the corresponding `UISoundKey` / `MusicKey` union so callers get autocomplete.
+`CueOptions` is `{ volumeScale?, rollOffMaxDistance?, rollOffMode? }`. `volumeScale` **multiplies** the Volume the Sound was tuned with rather than replacing it — the point of the library is that a human set that. Where the library lives is `Audio.CUE_FOLDER` / `Audio.CUE_SUBFOLDER` (`Assets` / `Sounds`), fields rather than constants so a project laid out differently can repoint them at boot without forking the file.
+
+Add new SFX/music by extending `Audio.UI` or `Audio.Music` in `src/shared/audio/init.luau`. Update the corresponding `UISoundKey` / `MusicKey` union so callers get autocomplete. Cues need no code change at all — drop a named Sound in the folder.
+
+A feature that gives every one of its cues the same treatment can bind once instead of repeating it: `TowerGame/Sfx.luau` is a ~20-line wrapper that supplies its own `SOUND_RANGE` to every positional call, and does nothing else.
 
 The **Audio** UI Labs story (`src/shared/audio/Audio.story.luau`) mounts a button per UI sound and per music track plus a stop-music button — useful as a manifest, but silent in-edit (see plugin-audio caveat above). Use it during Play-test.
 

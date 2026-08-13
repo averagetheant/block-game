@@ -24,8 +24,8 @@ return function(Sidebar)
 	if Constants.Presentations.inventory then
 		Sidebar.registerEntry({
 			id = "Inventory",
-			label = "Bag",
-			icon = assets.Icons.book,
+			label = "Inventory",
+			icon = assets.Icons.backpack,
 			frameId = Constants.INVENTORY_FRAME_ID,
 			windowTitle = "Inventory",
 			titleVariant = "green",

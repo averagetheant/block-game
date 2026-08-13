@@ -18,7 +18,7 @@ return function(Sidebar)
 	Sidebar.registerEntry({
 		id = "Settings",
 		label = "Settings",
-		icon = assets.Icons.wheel,
+		icon = assets.Icons.settings,
 		frameId = Constants.FRAME_ID,
 		titleVariant = "purple",
 		-- Below Shop (1) and Bag (2): the things you open to play come first.

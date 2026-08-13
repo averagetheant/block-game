@@ -284,7 +284,7 @@ return function(props: Props)
 	-- On the right on purpose: the left rail is navigation (things that open a
 	-- window), and this changes the view rather than opening anything.
 	children.CameraToggle = React.createElement(ui.IconButton, {
-		icon = Constants.CASH_IMAGE,
+		icon = ui.assets.Icons.magnifyingGlass,
 		variant = if props.overview then "green" else "blue",
 		size = UDim2.fromOffset(CAMERA_BUTTON, CAMERA_BUTTON),
 		position = UDim2.new(1, -EDGE_MARGIN, 1, -(CASH_HEIGHT + EDGE_MARGIN * 2)),

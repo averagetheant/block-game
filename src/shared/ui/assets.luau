@@ -120,6 +120,9 @@ Assets.Icons = {
 	nuke = "rbxassetid://79284503652764",
 	arrowRightOutline = "rbxassetid://119025660074097",
 	cursor = "rbxassetid://95026136302607",
+	backpack = "rbxassetid://73009031682956",
+	settings = "rbxassetid://139496600596425",
+	magnifyingGlass = "rbxassetid://113138051010111",
 }
 
 -- Brainrot character image icons. Kept separate from `Icons` because they're

@@ -47,12 +47,20 @@ local function planeXAt(screenX: number, screenY: number): number?
 	return ray.Origin.X + ray.Direction.X * distance
 end
 
--- Touch: tapping the world sends the piece to where you tapped.
+-- Touch: tapping or dragging the world sends the piece to where you touched.
 --
--- `gameProcessed` is doing the load-bearing work. Every HUD control is a GUI
--- element, so a tap on the steering stick, TURN, DROP or the reaction bar
--- arrives already processed and is ignored here — without that check, dragging
--- the stick would also fling the piece at the stick's own screen position.
+-- The subtlety is which touches are *ours*. `gameProcessed` is true for a touch
+-- on a GUI control — but only while the finger is still over it. Drag the
+-- steering stick to the edge of the screen and the moves start arriving
+-- unprocessed, at which point this would happily read them as "point the piece
+-- here" and snap it to wherever the thumb had got to. That's what made the piece
+-- jump to the edge of the arena whenever the stick was pushed to either end.
+--
+-- So a gesture is claimed once, at InputBegan, and that claim holds for the
+-- whole life of the InputObject. A touch that starts on the HUD belongs to the
+-- HUD until the finger lifts, wherever it wanders.
+local claimedByGui: { [InputObject]: boolean } = {}
+
 local function startTouch()
 	local function moveTo(input: InputObject)
 		if not TowerController.isMyTurn() then
@@ -66,20 +74,29 @@ local function startTouch()
 	end
 
 	UserInputService.InputBegan:Connect(function(input, gameProcessed)
-		if gameProcessed or input.UserInputType ~= Enum.UserInputType.Touch then
+		if input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		if gameProcessed then
+			claimedByGui[input] = true
 			return
 		end
 		moveTo(input)
 	end)
 
-	-- A held finger keeps steering, so a tap and a drag are the same gesture and
-	-- neither needs explaining. Still gated on `gameProcessed` at the *start*
-	-- only — a drag that began on the world shouldn't die crossing a button.
-	UserInputService.InputChanged:Connect(function(input, gameProcessed)
-		if gameProcessed or input.UserInputType ~= Enum.UserInputType.Touch then
+	-- A held finger keeps aiming, so a tap and a drag are the same gesture and
+	-- neither needs explaining. `gameProcessed` is deliberately *not* re-checked
+	-- here: a drag that began on the world shouldn't die crossing a button, and
+	-- one that began on the HUD is already excluded by its claim.
+	UserInputService.InputChanged:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.Touch or claimedByGui[input] then
 			return
 		end
 		moveTo(input)
+	end)
+
+	UserInputService.InputEnded:Connect(function(input)
+		claimedByGui[input] = nil
 	end)
 end
 

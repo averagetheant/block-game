@@ -62,12 +62,26 @@ Two predicates, and the gap between them is deliberate:
 
 | | Condition | |
 | --- | --- | --- |
-| `usesStickCursor()` | `GamepadEnabled and not MouseEnabled` | Which input *drives* the cursor. A mouse outranks a pad — someone on a PC with a controller plugged in is still pointing with the mouse. |
+| `usesStickCursor()` | No pad → false. No mouse → true. Both → **whichever was used last**. | Which input *drives* the cursor. |
 | `showsOwnCursor()` | `GamepadEnabled` | Whether the player *sees* their own. Any connected pad gets it. |
 
 The invariant that matters is one-way: `showsOwnCursor` must never be **narrower**
 than `usesStickCursor`, or a player could be steering a cursor they can't see. A
 superset is safe — the worst case is an arrow trailing your own mouse.
+
+A mouse still outranks a pad, but on *capability* that test used to be absolute
+(`GamepadEnabled and not MouseEnabled`) — false on every machine that has both,
+so a PC with a controller plugged in could never move the cursor with the stick
+whatever the player did, and Studio always reports a mouse, which made the branch
+unreachable in a Play test. The intent was "they're almost certainly still
+pointing with the mouse"; following the input they actually used last *is* that
+intent rather than a proxy for it. A console has no mouse to disagree with, so
+it's unconditional there and nothing about it changed. This is the same
+last-input-wins rule `TowerView.useDevice` follows for the controls hint.
+
+Handing over mid-session seeds the stick's position from the cursor already on
+screen, so it continues from where the pointer is rather than snapping back to
+wherever the stick was last left.
 
 The local cursor is drawn from **`localCursor()`, not the server's echo** — the
 live per-frame value. A pointer the player is actively pushing has to answer the
@@ -93,6 +107,19 @@ Three devices, one answer — a point on the plane.
 **The right stick belongs to the cursor alone.** TowerGame deliberately reads
 only the *left* stick, and puts rotate on L3 / L2 / Y instead, so nothing
 competes for the one input that is a console player's only pointer.
+
+**Every connected pad is scanned, not `Gamepad1`.** A controller isn't
+necessarily on slot 1 — reconnect one, or be the second player to pick one up,
+and it isn't — and `GetGamepadState(Gamepad1)` then returns an empty list, so the
+search for `Thumbstick2` finds nothing and the cursor sits still. Steering keeps
+working throughout, because `TowerInputController.stickPosition` scans the
+connected pads; this didn't, which is what made it look like a cursor bug rather
+than a gamepad one.
+
+**The integrated position is clamped** to `LIMIT_X` / `MIN_Y` / `MAX_Y`. Held
+into a corner it would otherwise walk off the plane forever, and since the server
+clamps what it's told to those same bounds, the cursor you were pushing would end
+up somewhere nobody else could see it.
 
 The position is recomputed **every frame**, separately from the send throttle.
 The gamepad branch integrates the stick by `deltaTime`, so sampling it only at

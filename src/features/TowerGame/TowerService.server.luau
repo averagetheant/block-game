@@ -31,6 +31,7 @@ local BlockLabel = require(ReplicatedStorage.Features.TowerGame.BlockLabel)
 local BlockSkins = require(ReplicatedStorage.Features.TowerGame.BlockSkins)
 local BlockTypes = require(ReplicatedStorage.Features.TowerGame.BlockTypes)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+local Gamemodes = require(ReplicatedStorage.Features.TowerGame.Gamemodes)
 local NoobBlock = require(ReplicatedStorage.Features.TowerGame.NoobBlock)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
@@ -40,6 +41,11 @@ local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 -- Server-realm siblings (ServerScriptService.Features.TowerGame.*).
 local CashService = require(script.Parent.CashService)
 local TowerStatsService = require(script.Parent.TowerStatsService)
+
+-- The between-stages vote. TowerGame is the consumer here: GamemodeVote owns the
+-- poll and knows nothing about towers, TowerGame owns the modes (Gamemodes.luau,
+-- registered through Gamemode.luau) and decides when to ask.
+local GamemodeVoteService = require(script.Parent.Parent.GamemodeVote.GamemodeVoteService)
 
 type Block = {
 	model: Model,
@@ -134,7 +140,26 @@ local state = {
 	checkpoints = 0,
 	zoneId = Zones.DEFAULT_ID,
 	zoneSky = 1,
+	-- The stage's clocks, broadcast rather than read from Constants on the
+	-- client: a gamemode can change them, and the HUD's turn ring and storm bar
+	-- are both fractions of these.
+	turnSeconds = Gamemodes.DEFAULT.turnSeconds,
+	stormSeconds = Gamemodes.DEFAULT.stormSeconds,
 }
+
+-- How the stage now being played was voted to behave. Set from the winner of the
+-- between-stages vote (see runCheckpoint) and back to DEFAULT on a fresh run.
+local stage: Gamemodes.Modifier = Gamemodes.DEFAULT
+
+-- Switch the rules the stage is played by. The two clocks are mirrored into
+-- `state` because the HUD draws them as fractions — a turn ring against the turn
+-- length, the storm bar against the stage length — and a client reading those off
+-- Constants would draw the wrong shape for every voted stage.
+local function applyStage(modifier: Gamemodes.Modifier)
+	stage = modifier
+	state.turnSeconds = modifier.turnSeconds
+	state.stormSeconds = modifier.stormSeconds
+end
 
 -- Direction the storm-zone wind is currently leaning, and when it next drifts.
 local windDirection = 1
@@ -779,7 +804,7 @@ local function beginTurn(player: Player)
 	-- Rolled per piece. Skin is pure flavour; type is the hazard, and it gets
 	-- likelier the more floors the run has cleared.
 	local skin = BlockSkins.random()
-	local blockType = BlockTypes.roll(state.checkpoints)
+	local blockType = BlockTypes.roll(state.checkpoints, stage.blockTypeScale)
 
 	local model: Model?, root: BasePart?, color: Color3? = nil, nil, nil
 
@@ -828,7 +853,7 @@ local function beginTurn(player: Player)
 
 	state.phase = PHASE.AIMING
 	state.holderUserId = player.UserId
-	state.turnEndsAt = workspace:GetServerTimeNow() + Constants.TURN_SECONDS
+	state.turnEndsAt = workspace:GetServerTimeNow() + stage.turnSeconds
 	-- 0 for a piece with no silhouette; the HUD names it from blockTypeId instead.
 	state.shapeId = if shape then shape.id else 0
 	state.blockTypeId = if blockType then blockType.id else 0
@@ -1054,7 +1079,9 @@ local function resetRun()
 	state.zoneId = Zones.DEFAULT_ID
 	state.zoneSky = math.random(1, 255)
 	workspace.Gravity = Zones.gravityOf(state.zoneId)
-	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
+	-- A run starts un-voted; last run's gamemode doesn't carry over.
+	applyStage(Gamemodes.DEFAULT)
+	state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
 	-- maxHeight deliberately survives: it's the server's best-ever record, not
 	-- part of the run, and TowerStatsService has already banked it per player.
 end
@@ -1126,6 +1153,13 @@ local function runCheckpoint(height: number)
 		applyZoneToTower()
 		CashService.awardZone()
 
+		-- The stage is cleared and the next one hasn't started: the queue is
+		-- parked, the height poll is off, and the camera is still holding the wide
+		-- shot of what they built. That's the moment the vote gets, and it yields
+		-- here for the length of the poll. An unregistered or skipped vote comes
+		-- back nil and the stage plays straight.
+		applyStage(Gamemodes.modifierFor(GamemodeVoteService.startVote()))
+
 		-- Each floor is a little further out than the last.
 		stormGap += Constants.STORM_GAP_GROWTH
 		-- The next bar is measured from what they actually reached, not from the
@@ -1134,7 +1168,7 @@ local function runCheckpoint(height: number)
 		-- starts from.
 		state.zoneBaseHeight = height
 		state.targetHeight = height + stormGap
-		state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
+		state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
 		state.phase = PHASE.SETTLING
 		broadcast()
 
@@ -1144,6 +1178,19 @@ local function runCheckpoint(height: number)
 	end)
 end
 
+-- Clear the current stage as if the tower had reached the target, from wherever
+-- it actually is. The full checkpoint sequence runs — cutscene, platform, blast,
+-- zone roll, gamemode vote — which is the point: it's the only way to reach any
+-- of that without playing a stage out, and testing a shortcut isn't testing the
+-- thing. Returns false if a checkpoint is already running.
+function TowerService.clearStage(): boolean
+	if checkpointActive then
+		return false
+	end
+	runCheckpoint(state.height)
+	return true
+end
+
 -- Returns true when the stage changed and clients need to hear about it.
 local function updateStorm(height: number): boolean
 	local now = workspace:GetServerTimeNow()
@@ -1151,7 +1198,7 @@ local function updateStorm(height: number): boolean
 	-- Nobody playing: hold the clock rather than letting it expire against an
 	-- empty server.
 	if #queue == 0 then
-		state.stormEndsAt = now + Constants.STORM_SECONDS
+		state.stormEndsAt = now + stage.stormSeconds
 		return false
 	end
 
@@ -1413,7 +1460,7 @@ function TowerService.Start()
 	-- Zones own gravity (Space drops it to a sixth), so the run starts from the
 	-- default rather than from whatever the place file was saved with.
 	workspace.Gravity = Zones.gravityOf(state.zoneId)
-	state.stormEndsAt = workspace:GetServerTimeNow() + Constants.STORM_SECONDS
+	state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
 
 	Packets.Place.listen(function(payload, player)
 		TowerService.applyPlacement(player, payload.x, payload.turns)

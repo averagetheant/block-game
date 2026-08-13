@@ -76,6 +76,13 @@ return ByteNet.defineNamespace("TowerGame", function()
 				-- up, so every client paints the same world.
 				zoneId = ByteNet.uint8,
 				zoneSky = ByteNet.uint8,
+				-- The stage's two clock lengths. Constants until a gamemode vote
+				-- changes them (see Gamemodes.luau), and the HUD draws both as
+				-- fractions — the turn ring against one, the storm bar against the
+				-- other — so a client reading them off Constants would draw the
+				-- wrong shape for a voted stage.
+				turnSeconds = ByteNet.uint8,
+				stormSeconds = ByteNet.uint16,
 			}),
 			reliabilityType = "reliable",
 		}),

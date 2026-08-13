@@ -87,7 +87,9 @@ world over for about five seconds:
    the air rather than the cap on a growing pile, which is what keeps a long
    session from dragging hundreds of physics parts behind it. The height readout
    doesn't flinch, because the platform's own top is what the measurement lands on.
-5. The stage numbers advance, the zone rolls, the camera comes back, and
+5. The zone rolls, and **the players vote on how the next stage plays** (see
+   below). The vote yields here, with the camera still holding the wide shot.
+6. The stage numbers advance, the camera comes back, and
    `CHECKPOINT_RESUME_SECONDS` later the queue starts again.
 
 **The stage numbers are deliberately advanced last.** `zoneBaseHeight` and
@@ -98,6 +100,39 @@ server sends no camera cue at all — it says `PHASE.CHECKPOINT` and
 
 Freezing the height poll is also what stops the demolition from clearing the
 *next* checkpoint off its own debris.
+
+## The gamemode vote
+
+Between stages the players pick how the next one plays. TowerGame doesn't own the
+poll — the [GamemodeVote](GamemodeVote.md) feature does — but it owns the modes
+and it's what asks:
+
+- `Gamemodes.luau` is the content: three modes and, for each, a complete set of
+  stage numbers. A modifier is a full set rather than a diff, so there's one
+  place to look to know how a stage will play and nothing compounds across
+  stages. `DEFAULT` is the un-voted stage — what the game did before any of this
+  existed, and what a fresh run (or a skipped vote) falls back to.
+- `Gamemode.luau` is the registration hook GamemodeVote auto-discovers. It just
+  hands the list over, so nothing in TowerGame requires GamemodeVote to register.
+- `TowerService.runCheckpoint` calls `GamemodeVoteService.startVote()`, which
+  **yields** for the length of the poll, and feeds the winner to `applyStage`.
+
+| Mode | What the next stage does |
+| ---- | ------------------------ |
+| Tower Rush | Two thirds of the usual storm clock for the same target. |
+| Blitz Builder | Half the turn clock. The storm clock is left alone, so shorter turns buy the players *more* attempts, not fewer. |
+| Mystery Mode | Special-piece odds ×6. Still capped by `BlockTypes.MAX_CHANCE`, so it's "most pieces", not "all". |
+
+The moment is chosen for what's already true: the stage is cleared, the queue is
+parked, the height poll is off (so the storm can't expire mid-vote), and the
+camera is holding the wide shot. The vote has the board to itself and needs no
+state of its own to get it.
+
+**Both clocks ride in the `State` packet.** The HUD draws them as fractions — the
+turn ring against the turn length, the storm bar against the stage length — so a
+client reading them off `Constants` would draw the wrong shape for every voted
+stage. `applyStage` is the one place that writes `stage` and mirrors those two
+numbers into `state`.
 
 ## Aiming
 
@@ -245,15 +280,16 @@ slippery zone is the whole point of it).
 
 ## Name plates
 
-Every piece wears its own name (`BlockLabel.luau`), a `BillboardGui` hanging off
-the **top-right corner** of the block: the title in bold white, and for a typed
+Every piece wears its own name (`BlockLabel.luau`), a `BillboardGui` sitting
+**straight above** the block: the title in bold white, centred, and for a typed
 block its one-line description under it in a lighter weight.
 
 ```
-                          Bomb T-Shape
-                          Explodes.
-        ▓▓▓▓▓▓
-          ▓▓
+        Bomb T-Shape
+          Explodes.
+
+           ▓▓▓▓▓▓
+             ▓▓
 ```
 
 The title composes as `{Type} {Shape}-Shape`, or just `{Shape}-Shape` for a plain
@@ -267,9 +303,17 @@ Three things about the implementation:
   block and it has to be the same for everybody, so one server-owned instance
   covers every player and the plate can't disagree between clients. (This is why
   it has no UI Labs story — there's no React component to put in one.)
-- **Adorned to an `Attachment` at the model's bounding-box centre**, pushed out by
-  a *world-space* offset. Adorning the root cell instead would drag the plate
-  around the piece as it rotates, because the root cell moves within the model.
+- **Adorned to an `Attachment` at the model's bounding-box centre.** Adorning the
+  root cell instead would drag the plate around the piece as it rotates, because
+  the root cell moves within the model.
+- **The lift above the block is `StudsOffset` (camera space), not
+  `StudsOffsetWorldSpace`.** The world-space one turns with the adornee, which
+  swung the plate around the piece as it spun and tumbled. Camera space means
+  "above" is above on screen whatever the block is doing. The clearance is
+  measured off the piece's *longest* side, because the bounding box is sampled
+  once at build time and a quarter turn swaps width for height — an I-piece stood
+  on end is 4 tall and 1 wide, and one rotation later a height-based offset would
+  put the plate inside it.
 - **It's dismissed when the block settles.** The plate is a *piece* affordance,
   not a tower one — fifty blocks wearing fifty of them is a wall of text. The
   holder's own plate is the preview clone's; the real piece's is `Enabled = false`
@@ -399,6 +443,8 @@ devices.
 | `NoobBlock.luau` | shared | The Noob rig: build, wander, squash. Server-only in practice |
 | `Zones.luau` | shared | The five zones, their skies, and their gravity |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
+| `Gamemodes.luau` | shared | The three votable modes and the stage numbers each one sets |
+| `Gamemode.luau` | shared | Registers those modes into GamemodeVote (auto-discovered) |
 | `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
 | `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
 | `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the wire |
@@ -464,6 +510,9 @@ The piece in play is described by the pair `shapeId` + `blockTypeId`. A type tha
 overrides the model sends `shapeId = 0` and is named from the type alone, which is
 what lets `BlockLabel.titleFor` produce the same string on the block and in the
 HUD from one packet.
+
+`turnSeconds` and `stormSeconds` ride along because a gamemode vote can change
+either, and both are denominators for the HUD's clocks.
 
 The client's turn check in `TowerController` is a traffic optimization only;
 `TowerService` re-validates the holder on every intent.

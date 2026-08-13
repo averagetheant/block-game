@@ -5,11 +5,15 @@
 -- BillboardGui parented to the piece replicates with it, so one instance covers
 -- every player and the plate can't disagree between clients.
 --
--- Anchored to an Attachment at the piece's bounding-box centre and pushed out by
--- a **world-space** offset, so the plate stays up and to the right no matter how
--- many quarter turns the holder has spun the piece through. (Adorning the root
--- cell instead would drag the plate around the piece as it rotates, because the
--- root cell moves within the model.)
+-- Anchored to an Attachment at the piece's bounding-box centre — adorning the
+-- root cell instead would drag the plate around the piece as it rotates, because
+-- the root cell moves within the model.
+--
+-- The plate sits **straight above** that centre, and the offset that puts it
+-- there is `StudsOffset` (camera-facing space) rather than
+-- `StudsOffsetWorldSpace`, which turns with the adornee — that's what used to
+-- swing the plate around the piece as it spun and tumbled. Camera space means
+-- "above" is above on screen no matter what the block is doing.
 --
 -- The plate is a *piece* affordance, not a tower one: it's removed once the
 -- block settles, or a fifty-block tower would be a wall of text.
@@ -25,9 +29,7 @@ BlockLabel.NAME = "BlockLabel"
 local FONT_FAMILY = "rbxasset://fonts/families/GothamSSm.json"
 local WHITE = Color3.fromRGB(255, 255, 255)
 
--- Studs of clearance past the piece's bounding box. The plate is centred on this
--- point with its text left-aligned, so it reads as a tag hanging off the corner.
-local OFFSET_X = 7
+-- Studs of clearance between the top of the piece and the plate.
 local OFFSET_Y = 2.5
 
 local WIDTH = 240
@@ -74,7 +76,7 @@ local function text(
 	label.TextColor3 = WHITE
 	label.TextSize = size
 	label.TextTransparency = transparency
-	label.TextXAlignment = Enum.TextXAlignment.Left
+	label.TextXAlignment = Enum.TextXAlignment.Center
 	label.TextYAlignment = Enum.TextYAlignment.Center
 	label.FontFace = Font.new(FONT_FAMILY, weight, Enum.FontStyle.Normal)
 
@@ -103,7 +105,12 @@ function BlockLabel.attach(model: Model, root: BasePart, title: string, descript
 	billboard.Name = BlockLabel.NAME
 	billboard.Adornee = anchor
 	billboard.Size = UDim2.fromOffset(WIDTH, TITLE_HEIGHT + (if description then DESCRIPTION_HEIGHT else 0))
-	billboard.StudsOffsetWorldSpace = Vector3.new(size.X / 2 + OFFSET_X, size.Y / 2 + OFFSET_Y, 0)
+	-- Clearance is measured off the piece's *longest* side rather than its height,
+	-- because the bounding box is sampled once at build time and a quarter turn
+	-- swaps those two — an I-piece stood on end is 4 tall and 1 wide, and one
+	-- rotation later the plate would be sitting inside it.
+	local reach = math.max(size.X, size.Y) / 2 + OFFSET_Y
+	billboard.StudsOffset = Vector3.new(0, reach, 0)
 	billboard.AlwaysOnTop = true
 	billboard.LightInfluence = 0
 	billboard.MaxDistance = 500
@@ -111,7 +118,7 @@ function BlockLabel.attach(model: Model, root: BasePart, title: string, descript
 
 	local layout = Instance.new("UIListLayout")
 	layout.FillDirection = Enum.FillDirection.Vertical
-	layout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+	layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
 	layout.SortOrder = Enum.SortOrder.LayoutOrder
 	layout.Parent = billboard
 

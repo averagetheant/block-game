@@ -105,13 +105,17 @@ function BlockTypes.get(id: number): BlockType?
 	return byId[id]
 end
 
-function BlockTypes.chanceAt(checkpoints: number): number
-	return math.min(BlockTypes.BASE_CHANCE + BlockTypes.PER_CHECKPOINT * checkpoints, BlockTypes.MAX_CHANCE)
+-- `scale` multiplies the odds before the cap — the hook a gamemode uses to make
+-- a stage all hazards. 1 (the default) is the plain curve, and MAX_CHANCE still
+-- applies however high it's scaled, so a stage can't be *only* special pieces.
+function BlockTypes.chanceAt(checkpoints: number, scale: number?): number
+	local chance = (BlockTypes.BASE_CHANCE + BlockTypes.PER_CHECKPOINT * checkpoints) * (scale or 1)
+	return math.min(chance, BlockTypes.MAX_CHANCE)
 end
 
 -- nil for an ordinary block. `checkpoints` drives how often that isn't the case.
-function BlockTypes.roll(checkpoints: number): BlockType?
-	if math.random() > BlockTypes.chanceAt(checkpoints) then
+function BlockTypes.roll(checkpoints: number, scale: number?): BlockType?
+	if math.random() > BlockTypes.chanceAt(checkpoints, scale) then
 		return nil
 	end
 

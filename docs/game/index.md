@@ -27,6 +27,7 @@ Features and skins are also **distributable packages** — one folder, one
 | Doc | Feature |
 | --- | ------- |
 | [TowerGame.md](TowerGame.md) | Turn-based co-op block stacker (the game) |
+| [GamemodeVote.md](GamemodeVote.md) | Between-stages gamemode poll + the `Gamemode.luau` registration convention |
 | [PlayerData.md](PlayerData.md) | Profile persistence + the `registerTemplate` discovery convention |
 | [Settings.md](Settings.md) | Settings registry, server validation, the `Settings.luau` discovery convention |
 | [Notes.md](Notes.md) | Persisted per-player note (full-stack reference feature) |

@@ -302,5 +302,8 @@ return {
 		input = true,
 		-- Mouse aiming + click-to-drop. PC only; ignored on touch.
 		pointer = true,
+		-- `skipstage` — a dev handle on the stage clear. Gated by Cmdr's username
+		-- allowlist like every other command; turn it off for a public build.
+		command = true,
 	},
 }

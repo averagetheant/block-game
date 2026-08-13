@@ -34,6 +34,9 @@ export type State = {
 	checkpoints: number,
 	zoneId: number,
 	zoneSky: number,
+	-- The stage's clock lengths. Constants until a gamemode vote changes them.
+	turnSeconds: number,
+	stormSeconds: number,
 }
 
 local TowerController = {}
@@ -57,6 +60,8 @@ local data: State = {
 	checkpoints = 0,
 	zoneId = 1,
 	zoneSky = 1,
+	turnSeconds = Constants.TURN_SECONDS,
+	stormSeconds = Constants.STORM_SECONDS,
 }
 
 function TowerController.GetData(): State

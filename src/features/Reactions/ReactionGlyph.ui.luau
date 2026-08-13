@@ -15,7 +15,10 @@ local Constants = require(script.Parent.Constants)
 
 type Props = {
 	reactionId: string,
-	-- Text glyph size. Images scale to GLYPH_IMAGE_SCALE of the container.
+	-- Text glyph size. Size this against the container by `Constants.GLYPH_FIT`
+	-- rather than to the container itself — an emoji drawn at its box's full
+	-- height loses its top and bottom to any parent that clips. Images scale to
+	-- GLYPH_IMAGE_SCALE of the container instead and don't have the problem.
 	textSize: number?,
 	size: UDim2?,
 	position: UDim2?,

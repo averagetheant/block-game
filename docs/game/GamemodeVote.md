@@ -1,6 +1,6 @@
 # GamemodeVote
 
-The between-stages poll. Three-ish panels, one vote per player, a clock, and a
+The between-rounds poll. A handful of panels, one vote per player, a clock, and a
 winner handed back to whoever asked for the vote.
 
 The feature owns the **mechanism** and no content: it has no gamemodes of its
@@ -12,9 +12,10 @@ ballot is empty; remove GamemodeVote and TowerGame stops asking (see
 ## The loop
 
 1. Something calls `GamemodeVoteService.startVote()`. In game that's
-   `TowerService.runCheckpoint`, right after a storm stage is cleared — the
-   queue is parked, the height poll is off, and the camera is holding the wide
-   shot of what the players built, so the vote has the board to itself.
+   `TowerService.runRoundBreak`, right after the storm has taken the tower and
+   ended the round — the turn queue is parked, the storm clock is frozen and the
+   height poll is off (`intermission`), so the vote has the board to itself and
+   isn't a screen over a game still running underneath it.
 2. The server broadcasts the ballot and a deadline stamp. Every client's
    `GamemodeVoteView` sees `endsAt ~= 0` and opens the UIShell frame — which is
    what gives the vote the single-frame invariant (it takes over from whatever
@@ -27,8 +28,13 @@ ballot is empty; remove GamemodeVote and TowerGame stops asking (see
    means for it.
 
 `startVote()` **yields** for the whole poll. That's deliberate: the caller reads
-as a step in a sequence ("clear the stage, ask what's next, start the stage")
+as a step in a sequence ("wreck the tower, ask what's next, start the round")
 rather than a callback dropped into the middle of one.
+
+The winner applies to the **whole round** — every stage of it, across as many
+checkpoints as the players clear. Clearing a checkpoint deliberately does *not*
+re-vote: changing the rules out from under a run in progress is the thing this
+placement avoids.
 
 ## Adding a gamemode
 
@@ -70,12 +76,12 @@ additionally pulls in the React UI, which the server has no use for.
 | Kind | File | What it does |
 | ---- | ---- | ------------ |
 | Screen | `GamemodeVotePresentation.client.luau` | Registers `GamemodeVoteView` as a **root** (not a HUD window slot — nothing in the sidebar opens a vote). The container is always mounted and renders nothing until a poll arrives, then opens its own UIShell frame. |
-| Command | `GamemodeVoteCommand.server.luau` | `startvote` opens a poll on demand. The natural trigger is a cleared storm stage, minutes of play away; this gets the screen up in a second. |
+| Command | `GamemodeVoteCommand.server.luau` | `startvote` opens a poll on demand. The natural trigger is the storm ending a round, minutes of play away; this gets the screen up in a second. |
 
 Both route through `GamemodeVoteService.startVote`. Note that a vote started
 from the command has **no consumer** — the winner comes back to the Cmdr console
-and nothing applies it. Only TowerGame's checkpoint call feeds the result into a
-stage.
+and nothing applies it. Only TowerGame's round-break call feeds the result into a
+round.
 
 Gate either surface off in `Constants.Presentations`.
 
@@ -127,7 +133,7 @@ TowerGame → GamemodeVote, one way, in two places:
 - `TowerGame/Gamemode.luau` registers the modes (soft — auto-discovered, and
   inert if GamemodeVote isn't installed).
 - `TowerService` **hard-requires** `GamemodeVoteService` to call `startVote()`
-  at a checkpoint. Removing GamemodeVote without removing that call breaks
+  in the round break. Removing GamemodeVote without removing that call breaks
   TowerGame, the same way removing PlayerData would break Notes.
 
 GamemodeVote names neither TowerGame nor any other feature.

@@ -83,7 +83,7 @@ whether the sender owns it, and whether they're allowed to send it yet:
 
 - the id has to be in the catalog;
 - if the reaction belongs to a pack, `StoreService.owns` has to say yes;
-- at most one reaction per player per `SEND_COOLDOWN` (0.6s).
+- at most one reaction per player per `SEND_COOLDOWN` (0.2s).
 
 All three exist because a reaction is a **broadcast**. An unvalidated one is a
 client drawing on everyone else's screen; an unthrottled one is a client doing it
@@ -141,8 +141,9 @@ mood.
 | Key | Default | What it controls |
 | --- | --- | --- |
 | `SLOT_COUNT` | `4` | Reactions in the bar. Safe to change — Reconcile fills, the bar clamps. |
-| `SEND_COOLDOWN` | `0.6` | Minimum seconds between one player's reactions. |
-| `BUTTON_SIZE` / `BAR_PADDING` / `BAR_CORNER` | `62` / `12` / `18` | Bar geometry. |
+| `SEND_COOLDOWN` | `0.2` | Minimum seconds between one player's reactions. |
+| `BUTTON_SIZE` / `BAR_PADDING` / `BAR_CORNER` | `40` / `7` / `12` | Bar geometry. |
+| `GLYPH_FIT` | `0.58` | Most of a container an emoji's text size may take. Emoji render taller than their nominal `TextSize`, so a glyph sized to its box gets clipped — every glyph size is derived against this. |
 | `SLIDE_TWEEN_INFO` | `0.28s Quad Out` | The open/close slide. |
 | `BAR_COLOR` / `BUTTON_COLOR` / `OUTLINE_COLOR` | white-ish | The bar's palette. |
 | `FLOAT_SECONDS` / `FLOAT_RISE` | `2.4` / `0.55` | How long a reaction lives and how far up it travels (scale). |

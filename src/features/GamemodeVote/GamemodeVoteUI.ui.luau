@@ -16,9 +16,14 @@ local Registry = require(script.Parent.Registry)
 
 local theme = ui.theme
 
-local PANEL_WIDTH = 240
+-- Sized so a full ballot fits a narrow screen rather than so one panel looks its
+-- best: the row auto-sizes on X and is centered, so N panels take
+-- N * PANEL_WIDTH + (N-1) * contentSpacing and anything past the viewport is
+-- simply off it. TowerGame's ballot is four (Classic plus three twists), which
+-- at this width lands around 800px — comfortable on a phone in landscape.
+local PANEL_WIDTH = 190
 local PANEL_HEIGHT = 280
-local ICON_SIZE = 96
+local ICON_SIZE = 78
 local NAME_HEIGHT = 40
 local BLURB_HEIGHT = 26
 local AVATAR_SIZE = 34

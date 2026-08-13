@@ -8,12 +8,17 @@
 -- `modifier` back and plays the stage by those numbers.
 --
 -- A modifier is a complete set of stage numbers rather than a diff, so there's
--- one place to look to know how a stage will play and no compounding across
--- stages. `DEFAULT` is the un-voted stage — what the game did before any of
+-- one place to look to know how a round will play and no compounding across
+-- rounds. `DEFAULT` is the un-voted round — what the game did before any of
 -- this existed, and what it falls back to when there's no vote (server start,
--- an aborted poll, a fresh run).
+-- an aborted poll).
+--
+-- The vote runs between *rounds*, so a winning modifier holds for every stage of
+-- the round that follows it — clearing a checkpoint doesn't re-roll the rules
+-- mid-run. See `runRoundBreak` in TowerService.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local assets = require(ReplicatedStorage.Shared.Boil).assets
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 
 export type Modifier = {
@@ -44,11 +49,25 @@ Gamemodes.DEFAULT = {
 } :: Modifier
 
 Gamemodes.List = {
+	-- Always the first panel on the ballot (order 0, and nothing else claims it).
+	-- A vote whose options are all twists has no "leave it alone" answer, so the
+	-- players can't decline a modifier — Classic is that answer, and putting it
+	-- in a fixed position means it's the one panel you can pick without reading.
+	{
+		id = "classic",
+		name = "Classic",
+		blurb = "The game, played straight.",
+		icon = assets.Icons.book,
+		order = 0,
+		-- Literally the un-voted numbers: winning Classic and skipping the vote
+		-- have to land on the same round, or one of them is lying.
+		modifier = Gamemodes.DEFAULT,
+	},
 	{
 		id = "towerRush",
 		name = "Tower Rush",
 		blurb = "Beat a faster storm.",
-		icon = "rbxassetid://137349421699691",
+		icon = assets.Icons.rocket,
 		order = 1,
 		-- The stage clock is the pressure, so this stage turns it up: two thirds
 		-- of the usual window to reach the same target.
@@ -62,7 +81,7 @@ Gamemodes.List = {
 		id = "blitz",
 		name = "Blitz Builder",
 		blurb = "Half the turn clock.",
-		icon = "rbxassetid://92211074359779",
+		icon = assets.Icons.wheel,
 		order = 2,
 		-- Same stage, less thinking. The storm clock is left alone so the
 		-- shortened turns actually buy the players more attempts, not fewer.
@@ -76,7 +95,7 @@ Gamemodes.List = {
 		id = "mystery",
 		name = "Mystery Mode",
 		blurb = "Bombs. Lots of bombs.",
-		icon = "rbxassetid://120234519496461",
+		icon = assets.Icons.questionMark,
 		order = 3,
 		-- Special pieces go from a garnish to the point of the stage. Still
 		-- capped by BlockTypes.MAX_CHANCE, so it's "most pieces", not "all".

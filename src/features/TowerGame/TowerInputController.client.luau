@@ -1,10 +1,14 @@
 -- Keyboard + gamepad presentation for TowerGame.
 --
 -- ContextActionService binds one action per intent across every input device it
--- covers, so PC and console are the same three lines. Touch is deliberately NOT
+-- covers, so PC and console are the same few lines. Touch is deliberately NOT
 -- handled here: the HUD renders real skinned buttons for it (TowerHUD) rather
 -- than CAS's default touch buttons, so mobile gets the same look as everything
 -- else in the game.
+--
+-- Every bind here is an *alternative* to the others, never a mode: rotate is on
+-- W / Up / R / ButtonY and the scroll wheel at once, and a player can move
+-- between them mid-turn without the game caring which one they used last.
 
 local ContextActionService = game:GetService("ContextActionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -77,6 +81,21 @@ function TowerInputController.Start()
 	end)
 
 	bind("TowerRotate", TowerAimController.rotate, Enum.KeyCode.W, Enum.KeyCode.Up, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
+
+	-- Scroll wheel as an alternate rotate: the hand that's already aiming with the
+	-- mouse (TowerPointerController) shouldn't have to reach for a key to spin the
+	-- piece. It can't ride on `bind` — a wheel notch arrives as a `Change` with the
+	-- direction in Position.Z, never as a `Begin`. Both directions turn the same
+	-- way, because `rotate` is a single quarter-turn and the keys do the same.
+	-- Sinking it costs nothing here: the camera is scriptable, so there's no
+	-- default zoom to preserve.
+	ContextActionService:BindAction("TowerRotateScroll", function(_, inputState)
+		if inputState ~= Enum.UserInputState.Change then
+			return Enum.ContextActionResult.Pass
+		end
+		TowerAimController.rotate()
+		return Enum.ContextActionResult.Sink
+	end, false, Enum.UserInputType.MouseWheel)
 	bind(
 		"TowerDrop",
 		TowerAimController.drop,

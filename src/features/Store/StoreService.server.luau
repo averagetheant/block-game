@@ -96,6 +96,20 @@ function StoreService.owns(player: Player, packId: string): boolean
 	return typeof(owned) == "table" and owned[packId] == true
 end
 
+-- The pack equipped in `kind`'s slot, or nil for none. The server-side mirror of
+-- StoreController.equipped, for features whose cosmetic has to be applied
+-- authoritatively — a skin everyone in the room can see is a server decision,
+-- not something each client paints for itself.
+function StoreService.equipped(player: Player, kind: string): string?
+	local saved = slice(player)
+	local map = if saved then saved.Equipped else nil
+	if typeof(map) ~= "table" then
+		return nil
+	end
+	local packId = map[kind]
+	return if typeof(packId) == "string" and #packId > 0 then packId else nil
+end
+
 -- Register what a non-currency developer product actually does. The handler
 -- returns true when the effect was applied; false means "not now" and the
 -- receipt is left for Roblox to re-deliver rather than being eaten.

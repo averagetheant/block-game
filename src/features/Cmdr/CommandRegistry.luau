@@ -71,6 +71,59 @@ local function definitionsFrom(mod: ModuleScript): { any }?
 	return result
 end
 
+-- Register every feature's custom Cmdr argument types — enums with validation
+-- and autocompletion — the same auto-discovery convention as commands: a
+-- feature drops a sibling `CmdrTypes.luau` returning a list of `{ Name, Values }`
+-- pairs and this turns each into a Cmdr type via `Util.MakeEnumType`. Call
+-- this before `registerAll` on both realms, since a command's `Args` can name
+-- one of these types and the client needs the type registered too — that's
+-- what drives the console's autocomplete dropdown, not just server validation.
+--
+-- Deliberately `CmdrTypes`, not `Types`: `Types.luau` is already a convention
+-- for pure Luau type exports (see PickupFX/Types.luau, UIShell/Types.luau),
+-- and this discovery loop would otherwise `require` those too.
+function CommandRegistry.registerTypes(cmdr: any)
+	local features = ReplicatedStorage:FindFirstChild("Features")
+	if features == nil then
+		return
+	end
+
+	for _, featureModule in features:GetChildren() do
+		local mod = featureModule:FindFirstChild("CmdrTypes")
+		if mod == nil or not mod:IsA("ModuleScript") then
+			continue
+		end
+
+		local ok, definitions = pcall(require, mod)
+		if not ok then
+			warn(`[Cmdr] failed to require {mod:GetFullName()}: {definitions}`)
+			continue
+		end
+		if typeof(definitions) ~= "table" then
+			warn(`[Cmdr] {mod:GetFullName()} must return a list of type definitions; got {typeof(definitions)}`)
+			continue
+		end
+
+		for _, definition in definitions do
+			if
+				typeof(definition) ~= "table"
+				or typeof(definition.Name) ~= "string"
+				or typeof(definition.Values) ~= "table"
+			then
+				warn(`[Cmdr] {mod:GetFullName()} contains a type entry with no Name/Values; skipped`)
+				continue
+			end
+
+			local ok2, err = pcall(function()
+				cmdr.Registry:RegisterType(definition.Name, cmdr.Util.MakeEnumType(definition.Name, definition.Values))
+			end)
+			if not ok2 then
+				warn(`[Cmdr] failed to register type "{definition.Name}" from {mod:GetFullName()}: {err}`)
+			end
+		end
+	end
+end
+
 -- Register every feature's commands into `cmdr` — the server Cmdr on the server,
 -- CmdrClient on the client. Safe to call once per realm; a second call would
 -- just overwrite the same names.

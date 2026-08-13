@@ -31,7 +31,13 @@ local SLOT_SIZE = 84
 local TILE_WIDTH = 124
 local TILE_HEIGHT = 146
 local TILE_GAP = 12
+-- The glyph's *box*. Its text is sized against GLYPH_FIT rather than filling the
+-- box, or an emoji's ascenders get shaved off at the top — see that constant.
 local TILE_GLYPH = 62
+local TILE_GLYPH_TEXT = math.floor(TILE_GLYPH * Constants.GLYPH_FIT)
+-- The bar's own glyph size is tuned for the bar's much smaller button, so the
+-- inventory's larger slots derive their own instead of borrowing it.
+local SLOT_GLYPH_TEXT = math.floor(SLOT_SIZE * Constants.GLYPH_FIT)
 local NAME_HEIGHT = 26
 local NAME_TEXT_SIZE = 20
 local HEADER_TEXT_SIZE = 28
@@ -86,7 +92,7 @@ return function(props: Props)
 			}, {
 				Glyph = React.createElement(ReactionGlyph, {
 					reactionId = reactionId,
-					textSize = Constants.GLYPH_TEXT_SIZE,
+					textSize = SLOT_GLYPH_TEXT,
 				}),
 			}),
 		})
@@ -122,7 +128,7 @@ return function(props: Props)
 			}, {
 				Glyph = React.createElement(ReactionGlyph, {
 					reactionId = reaction.id,
-					textSize = TILE_GLYPH,
+					textSize = TILE_GLYPH_TEXT,
 					size = UDim2.fromOffset(TILE_GLYPH, TILE_GLYPH),
 					position = UDim2.new(0.5, 0, 0, 14),
 					anchorPoint = Vector2.new(0.5, 0),

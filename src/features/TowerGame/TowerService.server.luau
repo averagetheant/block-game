@@ -36,11 +36,16 @@ local NoobBlock = require(ReplicatedStorage.Features.TowerGame.NoobBlock)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
+local SkinPacks = require(ReplicatedStorage.Features.TowerGame.SkinPacks)
 local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 -- Server-realm siblings (ServerScriptService.Features.TowerGame.*).
 local CashService = require(script.Parent.CashService)
 local TowerStatsService = require(script.Parent.TowerStatsService)
+
+-- Whose skin pack is on the piece. Read once per turn, on the server, so the
+-- block everyone sees carries the look its placer paid for.
+local StoreService = require(script.Parent.Parent.Store.StoreService)
 
 -- The between-stages vote. TowerGame is the consumer here: GamemodeVote owns the
 -- poll and knows nothing about towers, TowerGame owns the modes (Gamemodes.luau,
@@ -62,6 +67,10 @@ type Block = {
 	-- nil for a piece that brought its own model (the Noob).
 	shape: Shapes.Shape?,
 	skin: BlockSkins.Skin,
+	-- The skin pack the placer had equipped, or nil if they had none. Overrides
+	-- the rolled skin's material and outranks the zone's dressing, and it lives
+	-- on the block rather than on the viewer — see `applyZoneLook`.
+	pack: SkinPacks.SkinPack?,
 	blockType: BlockTypes.BlockType?,
 	-- The colour every cell was painted, kept so effects that repaint the block
 	-- (a bomb's flash, a burn's charring) can put it back or lerp from it.
@@ -88,6 +97,7 @@ type Held = {
 	root: BasePart,
 	shape: Shapes.Shape?,
 	skin: BlockSkins.Skin,
+	pack: SkinPacks.SkinPack?,
 	blockType: BlockTypes.BlockType?,
 	baseColor: Color3,
 	custom: boolean,
@@ -126,6 +136,13 @@ local held: Held? = nil
 -- Distance to the next checkpoint. Grows by STORM_GAP_GROWTH every time one is
 -- cleared, so each floor is a little further than the last.
 local stormGap = Constants.STORM_FIRST_TARGET
+-- One-shot override for the next piece's type/skin, set by the "block" cmdr
+-- command. Consumed (and reset) the moment `beginTurn` reads it, so it only
+-- ever affects the very next piece rather than sticking around.
+local blockTypeForced = false
+local forcedBlockType: BlockTypes.BlockType? = nil
+local skinForced = false
+local forcedSkin: BlockSkins.Skin? = nil
 -- Who dropped the piece that's currently settling. Whoever that is gets paid for
 -- any height the tower gains, since they're the one who put it there.
 local lastDropper: Player? = nil
@@ -322,7 +339,12 @@ local function labelPiece(model: Model, root: BasePart, shape: Shapes.Shape?, bl
 	BlockLabel.attach(model, root, title, if blockType then blockType.description else nil)
 end
 
-local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType: BlockTypes.BlockType?): (Model, BasePart, Color3)
+local function buildPiece(
+	shape: Shapes.Shape,
+	skin: BlockSkins.Skin,
+	blockType: BlockTypes.BlockType?,
+	pack: SkinPacks.SkinPack?
+): (Model, BasePart, Color3)
 	local model = Instance.new("Model")
 	model.Name = `Piece_{shape.name}`
 	-- The skin keeps its material and its sounds; only the colour is rolled.
@@ -334,7 +356,7 @@ local function buildPiece(shape: Shapes.Shape, skin: BlockSkins.Skin, blockType:
 		part.Name = `Cell{index}`
 		part.Size = Vector3.new(Constants.BLOCK_SIZE, Constants.BLOCK_SIZE, Constants.BLOCK_DEPTH)
 		part.Color = color
-		part.Material = skin.material
+		part.Material = if pack then pack.material else skin.material
 		part.Transparency = skin.transparency or 0
 		part.TopSurface = Enum.SurfaceType.Smooth
 		part.BottomSurface = Enum.SurfaceType.Smooth
@@ -498,9 +520,9 @@ end
 -- world rather than of whichever zone a block happened to spawn in.
 --
 -- This is the *server's* say on how a block looks, and it's the same for the
--- whole room. A player who owns a material skin pack overrides it on their own
--- screen only (TowerSkinController) — a bought cosmetic can't be allowed to
--- change what everyone else sees.
+-- whole room — including the placer's skin pack, which rides on the block and so
+-- shows the same way on every screen. The pack outranks the zone: "a Retro zone
+-- can't dull it" is the thing being sold.
 -- What a block would feel like with no zone in play: bouncy blocks are the one
 -- type that owns its own physics.
 local function basePhysics(blockType: BlockTypes.BlockType?): PhysicalProperties
@@ -510,7 +532,12 @@ local function basePhysics(blockType: BlockTypes.BlockType?): PhysicalProperties
 	return Constants.BLOCK_PHYSICS
 end
 
-local function applyZoneLook(model: Model, skin: BlockSkins.Skin, blockType: BlockTypes.BlockType?)
+local function applyZoneLook(
+	model: Model,
+	skin: BlockSkins.Skin,
+	blockType: BlockTypes.BlockType?,
+	pack: SkinPacks.SkinPack?
+)
 	-- A Noob isn't scenery. Studding one over, or handing it snow friction, turns
 	-- a character back into a prop.
 	if model:GetAttribute(Constants.RAW_MODEL_ATTRIBUTE) then
@@ -518,14 +545,16 @@ local function applyZoneLook(model: Model, skin: BlockSkins.Skin, blockType: Blo
 	end
 
 	local zone = Zones.get(state.zoneId)
-	local retro = zone.kind == "retro"
+	-- A pack keeps its material through every zone, so Retro only gets to stud
+	-- the blocks whose placer wasn't wearing one.
+	local retro = zone.kind == "retro" and pack == nil
 
 	for _, part in modelParts(model) do
 		if retro then
 			part.Material = Enum.Material.Plastic
 			setSurfaces(part, Enum.SurfaceType.Studs)
 		else
-			part.Material = skin.material
+			part.Material = if pack then pack.material else skin.material
 			setSurfaces(part, Enum.SurfaceType.Smooth)
 		end
 		-- Snow wins over everything: a slippery zone is the whole point of it.
@@ -543,12 +572,23 @@ local function applyZoneToTower()
 	workspace.Gravity = Zones.gravityOf(state.zoneId)
 
 	for _, block in blocks do
-		applyZoneLook(block.model, block.skin, block.blockType)
+		applyZoneLook(block.model, block.skin, block.blockType, block.pack)
 	end
 	local piece = held
 	if piece then
-		applyZoneLook(piece.model, piece.skin, piece.blockType)
+		applyZoneLook(piece.model, piece.skin, piece.blockType, piece.pack)
 	end
+end
+
+-- Force the tower straight into a given zone, outside the usual "roll one on
+-- checkpoint clear" path. Used by the "zone" cmdr command — everything a real
+-- zone change does (re-dress the tower, re-roll the sky, flip gravity), just
+-- triggered on demand rather than by clearing a stage.
+function TowerService.setZone(zoneId: number)
+	state.zoneId = zoneId
+	state.zoneSky = math.random(1, 255)
+	applyZoneToTower()
+	broadcast()
 end
 
 -- A steady lean rather than a gale: enough to make a tall stack argue with
@@ -783,7 +823,8 @@ local function registerBlock(
 	skin: BlockSkins.Skin,
 	blockType: BlockTypes.BlockType?,
 	baseColor: Color3,
-	custom: boolean
+	custom: boolean,
+	pack: SkinPacks.SkinPack?
 ): Block
 	local block: Block = {
 		model = model,
@@ -793,6 +834,7 @@ local function registerBlock(
 		settledOnce = false,
 		shape = shape,
 		skin = skin,
+		pack = pack,
 		blockType = blockType,
 		baseColor = baseColor,
 		custom = custom,
@@ -826,8 +868,10 @@ local function spawnCloneOf(block: Block)
 		return
 	end
 
-	local model, root, color = buildPiece(shape, block.skin, nil)
-	applyZoneLook(model, block.skin, nil)
+	-- The copy inherits the original's pack, so a neon block clones into a neon
+	-- one rather than quietly reverting to the stock look mid-tower.
+	local model, root, color = buildPiece(shape, block.skin, nil, block.pack)
+	applyZoneLook(model, block.skin, nil, block.pack)
 
 	-- The block's own root, not the model's pivot: a model's WorldPivot doesn't
 	-- track parts the physics engine moved, so the pivot is still wherever the
@@ -844,7 +888,7 @@ local function spawnCloneOf(block: Block)
 	for _, part in modelParts(model) do
 		part.Anchored = false
 	end
-	registerBlock(model, root, shape, block.skin, nil, color, false)
+	registerBlock(model, root, shape, block.skin, nil, color, false, block.pack)
 end
 
 -- Burning spreads by contact, checked from the poll rather than from Touched:
@@ -920,7 +964,16 @@ function TowerService.release()
 		part.Anchored = false
 	end
 
-	registerBlock(piece.model, piece.root, piece.shape, piece.skin, piece.blockType, piece.baseColor, piece.custom)
+	registerBlock(
+		piece.model,
+		piece.root,
+		piece.shape,
+		piece.skin,
+		piece.blockType,
+		piece.baseColor,
+		piece.custom,
+		piece.pack
+	)
 	-- Everyone hears the drop from where it happened. The holder also gets their
 	-- own confirmation cue locally (Drop2, played client-side).
 	Sfx.playAt("Drop", piece.root)
@@ -941,9 +994,17 @@ local function beginTurn(player: Player)
 	nextShape = Shapes.random()
 
 	-- Rolled per piece. Skin is pure flavour; type is the hazard, and it gets
-	-- likelier the more floors the run has cleared.
-	local skin = BlockSkins.random()
-	local blockType = BlockTypes.roll(state.checkpoints, stage.blockTypeScale)
+	-- likelier the more floors the run has cleared. Either can be pinned for
+	-- exactly this one piece by the "block" cmdr command.
+	local skin = if skinForced then forcedSkin :: BlockSkins.Skin else BlockSkins.random()
+	local blockType = if blockTypeForced then forcedBlockType else BlockTypes.roll(state.checkpoints, stage.blockTypeScale)
+	skinForced = false
+	blockTypeForced = false
+
+	-- Read once, here, and carried on the piece for the rest of its life. Taking
+	-- it per-frame would let a block change look under the room when its placer
+	-- swapped packs after dropping it.
+	local pack = SkinPacks.get(StoreService.equipped(player, SkinPacks.KIND))
 
 	local model: Model?, root: BasePart?, color: Color3? = nil, nil, nil
 
@@ -962,7 +1023,7 @@ local function beginTurn(player: Player)
 
 	if model == nil then
 		shape = shape :: Shapes.Shape
-		model, root, color = buildPiece(shape, skin, blockType)
+		model, root, color = buildPiece(shape, skin, blockType, pack)
 	else
 		-- No silhouette to name, so the plate is just the type.
 		shape = nil
@@ -970,7 +1031,7 @@ local function beginTurn(player: Player)
 	end
 
 	local piece = model :: Model
-	applyZoneLook(piece, skin, blockType)
+	applyZoneLook(piece, skin, blockType, pack)
 	local halfHeight = pieceHalfHeight(piece)
 	local pivot = spawnPivot(halfHeight)
 	piece:PivotTo(pivot)
@@ -986,6 +1047,7 @@ local function beginTurn(player: Player)
 		root = root :: BasePart,
 		shape = shape,
 		skin = skin,
+		pack = pack,
 		blockType = blockType,
 		baseColor = color :: Color3,
 		custom = shape == nil,
@@ -1211,7 +1273,9 @@ local function resetRun()
 	state.zoneId = Zones.DEFAULT_ID
 	state.zoneSky = math.random(1, 255)
 	workspace.Gravity = Zones.gravityOf(state.zoneId)
-	-- A run starts un-voted; last run's gamemode doesn't carry over.
+	-- A run starts un-voted; last run's gamemode doesn't carry over. The round
+	-- break overwrites this with whatever the players then vote for — this is the
+	-- baseline for the paths that reset without a vote (server start).
 	applyStage(Gamemodes.DEFAULT)
 	state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
 	-- maxHeight deliberately survives: it's the server's best-ever record, not
@@ -1232,6 +1296,11 @@ end
 -- shot to nothing.
 
 local checkpointActive = false
+-- True from the moment the storm takes the tower until the next round starts:
+-- the wreck, the white fade, and the gamemode vote all live inside it. Declared
+-- here beside `checkpointActive` because the two gate the same things, and every
+-- one of those gates has to name both. See `runRoundBreak`.
+local intermission = false
 
 -- The holder loses the piece rather than the turn being played out under a
 -- camera that's looking somewhere else. Their client sees the turn end and tears
@@ -1286,12 +1355,10 @@ local function runCheckpoint(height: number)
 		applyZoneToTower()
 		CashService.awardZone()
 
-		-- The stage is cleared and the next one hasn't started: the queue is
-		-- parked, the height poll is off, and the camera is still holding the wide
-		-- shot of what they built. That's the moment the vote gets, and it yields
-		-- here for the length of the poll. An unregistered or skipped vote comes
-		-- back nil and the stage plays straight.
-		applyStage(Gamemodes.modifierFor(GamemodeVoteService.startVote()))
+		-- Note what does *not* happen here: the gamemode is not re-voted. The vote
+		-- belongs to the round break (`runRoundBreak`), so the modifier the players
+		-- picked holds for every stage of the round — clearing a checkpoint
+		-- shouldn't change the rules out from under a run in progress.
 
 		-- Each floor is a little further out than the last.
 		stormGap += Constants.STORM_GAP_GROWTH
@@ -1311,40 +1378,105 @@ local function runCheckpoint(height: number)
 	end)
 end
 
--- Clear the current stage as if the tower had reached the target, from wherever
--- it actually is. The full checkpoint sequence runs — cutscene, platform, blast,
--- zone roll, gamemode vote — which is the point: it's the only way to reach any
--- of that without playing a stage out, and testing a shortcut isn't testing the
--- thing. Returns false if a checkpoint is already running.
+-- Clear the current stage by jumping straight to the target height — the
+-- altitude the players haven't actually built to yet. The full checkpoint
+-- sequence still runs (cutscene, platform, blast, zone roll), so this is the
+-- same event a stage clear would have been, just reached without playing it
+-- out. That's the point for a paying "Skip"/"Next Checkpoint" purchase: it
+-- buys the players the climb, not merely a floor wherever they happened to
+-- stop. Returns false if a checkpoint is already running.
 function TowerService.clearStage(): boolean
-	if checkpointActive then
+	if checkpointActive or intermission then
 		return false
 	end
-	runCheckpoint(state.height)
+	runCheckpoint(state.targetHeight)
 	return true
 end
 
--- Blow the tower apart on demand: exactly what the storm does when its clock
--- runs out, without the clock. Routed through the same `resetRun` rather than a
--- parallel teardown, so the wreck, the checkpoint wipe and the fresh stage all
--- behave the way players have already seen them behave.
+-- Pin the very next piece's type and/or skin, overriding the usual roll. Used
+-- by the "block" cmdr command. `blockType = nil` forces a plain piece (the
+-- command's "normal" default); `skin = nil` leaves the skin to roll normally.
+-- One-shot: `beginTurn` consumes and clears both flags the moment it reads them.
+function TowerService.forceNextBlock(blockType: BlockTypes.BlockType?, skin: BlockSkins.Skin?)
+	blockTypeForced = true
+	forcedBlockType = blockType
+	skinForced = skin ~= nil
+	forcedSkin = skin
+end
+
+-- ---------------------------------------------------------- the round break --
 --
--- Returns false while a checkpoint is running — that sequence owns the world
--- for its duration, and detonating the tower under a camera holding a wide shot
--- of it would read as a bug. The caller (a Robux purchase) treats false as
--- "not now" and leaves the receipt for redelivery.
+-- The storm taking the tower ends the round. What follows is the one moment the
+-- whole game is stopped: the wreck flies, clients fade the screen white off
+-- PHASE.GAMEOVER, the players vote on how the next round plays, and only then
+-- does a fresh run start on the numbers they picked.
+--
+-- `intermission` is what makes "paused" true rather than cosmetic. It parks the
+-- turn queue, freezes the storm clock, stops the height poll from measuring
+-- debris, and refuses every placement intent — so the vote isn't a screen over a
+-- game still running underneath it.
+--
+-- The modifier is applied *here* and nowhere else, which is what makes a voted
+-- mode last a whole round: `runCheckpoint` deliberately doesn't touch it.
+
+local function runRoundBreak()
+	if intermission then
+		return
+	end
+	intermission = true
+
+	-- The holder loses the piece rather than being left aiming at a tower that's
+	-- being blown apart under them.
+	cancelHeldPiece()
+	resetRun()
+	state.phase = PHASE.GAMEOVER
+	broadcast()
+
+	task.spawn(function()
+		-- Let the wreck read as a consequence before a UI opens over it.
+		task.wait(Constants.ROUND_BREAK_WRECK_SECONDS)
+
+		-- Yields for the length of the poll. An unregistered or skipped vote comes
+		-- back nil, and `modifierFor` turns that into the Classic numbers — the
+		-- same round winning the Classic panel would have produced.
+		applyStage(Gamemodes.modifierFor(GamemodeVoteService.startVote()))
+
+		-- The new round's clock starts once the rules are known, so the players
+		-- don't lose any of it to the vote they were made to sit through.
+		state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
+		state.phase = PHASE.SETTLING
+		broadcast()
+
+		task.wait(Constants.ROUND_BREAK_RESUME_SECONDS)
+		intermission = false
+	end)
+end
+
+-- Blow the tower apart on demand: exactly what the storm does when its clock
+-- runs out, without the clock. Routed through the same round break rather than a
+-- parallel teardown, so the wreck, the vote and the fresh round all behave the
+-- way players have already seen them behave.
+--
+-- Returns false while a checkpoint or a round break is running — those sequences
+-- own the world for their duration, and detonating the tower under a camera
+-- holding a wide shot of it would read as a bug. The caller (a Robux purchase)
+-- treats false as "not now" and leaves the receipt for redelivery.
 function TowerService.nuke(): boolean
-	if checkpointActive then
+	if checkpointActive or intermission then
 		return false
 	end
-	resetRun()
-	broadcast()
+	runRoundBreak()
 	return true
 end
 
 -- Returns true when the stage changed and clients need to hear about it.
 local function updateStorm(height: number): boolean
 	local now = workspace:GetServerTimeNow()
+
+	-- Nothing here runs during a checkpoint or a round break: `updateHeight`
+	-- returns before it gets this far, which is also what freezes the storm clock
+	-- through the vote — `runRoundBreak` sets `stormEndsAt` fresh when the new
+	-- round's rules are known, so no part of the round is spent on the poll.
 
 	-- Nobody playing: hold the clock rather than letting it expire against an
 	-- empty server.
@@ -1359,7 +1491,7 @@ local function updateStorm(height: number): boolean
 	end
 
 	if now >= state.stormEndsAt then
-		resetRun()
+		runRoundBreak()
 		return true
 	end
 
@@ -1440,10 +1572,10 @@ local function updateSettle(block: Block, now: number)
 end
 
 local function updateHeight()
-	-- The checkpoint cutscene owns the world while it runs. Measuring a tower
-	-- that's mid-demolition would spike the readout off flying debris and could
-	-- clear the next stage from the wreckage of the last one.
-	if checkpointActive then
+	-- The checkpoint cutscene and the round break each own the world while they
+	-- run. Measuring a tower that's mid-demolition would spike the readout off
+	-- flying debris and could clear the next stage from the wreckage of the last.
+	if checkpointActive or intermission then
 		if os.clock() - lastBroadcast > 1 then
 			broadcast()
 		end
@@ -1556,8 +1688,9 @@ end
 
 local function runTurns()
 	while true do
-		-- Nobody gets a piece while the checkpoint cutscene is playing.
-		while checkpointActive do
+		-- Nobody gets a piece while the checkpoint cutscene is playing, or while
+		-- the round break is between the storm and the next round's first turn.
+		while checkpointActive or intermission do
 			task.wait(0.1)
 		end
 

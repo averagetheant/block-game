@@ -7,6 +7,7 @@ return {
 	-- Exact Roblox usernames allowed to run any Cmdr command.
 	AllowedUsernames = {
 		"Encryptal",
+		"realaverageant",
 	},
 
 	-- Keys that open the Cmdr console on the client.

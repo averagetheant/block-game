@@ -7,6 +7,12 @@ return {
 	-- routed from SettingsService.
 	PROFILE_KEY = "Settings",
 
+	-- The UIShell frame id the Settings window opens on. Lives here rather than
+	-- only on the feature table so the shared discovery files (Sidebar.luau) can
+	-- name it without requiring `Features.Settings` — that init pulls in the React
+	-- UI, which the server has no use for. `Settings.FRAME_ID` re-exports it.
+	FRAME_ID = "Settings",
+
 	-- Defensive cap on inbound packet ids (the client is the source of these,
 	-- so we don't trust their length).
 	MAX_SETTING_ID_LENGTH = 128,
@@ -21,6 +27,9 @@ return {
 	Presentations = {
 		screen = true,
 		world = true,
+		-- The left-rail entry that opens the window. Off = Settings is still
+		-- reachable (the world station, `Settings.linkTo`) but has no icon.
+		sidebar = true,
 	},
 
 	-- CollectionService tag a part must carry to become a Settings toggle

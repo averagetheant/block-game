@@ -189,6 +189,27 @@ return {
 	STORM_BLAST_SPIN = 12,
 	-- How long the debris is left flying before it's cleared and the run resets.
 	STORM_BLAST_SECONDS = 2.5,
+	-- The storm announces itself before it arrives: the camera starts shaking
+	-- this many seconds out and builds until it hits. Client-side (the camera is
+	-- a presentation), driven off the same `stormEndsAt` the clock reads, so
+	-- nothing extra goes over the wire for it.
+	STORM_SHAKE_LEAD_SECONDS = 30,
+	-- Peak jitter at the moment the storm lands: studs of positional shake, and
+	-- degrees of roll. Small numbers — the camera is close to the tower, so a
+	-- stud reads as a lot more movement than it sounds like.
+	STORM_SHAKE_OFFSET = 1.1,
+	STORM_SHAKE_TILT_DEGREES = 0.7,
+	-- How fast the shake oscillates. Sampled from math.noise rather than random
+	-- per frame, so it reads as rumble rather than static.
+	STORM_SHAKE_FREQUENCY = 17,
+	-- The white-out when the storm takes the tower. The delay is what lets the
+	-- players actually see the wreck fly before the screen goes: blocks first,
+	-- then white, then it clears onto the empty arena and the vote.
+	STORM_FADE_DELAY_SECONDS = 0.8,
+	STORM_FADE_IN_SECONDS = 1.2,
+	-- How long full white is held before it starts clearing.
+	STORM_FADE_HOLD_SECONDS = 0.5,
+	STORM_FADE_OUT_SECONDS = 1.3,
 	-- Checkpoint platform entrance: stretches out from a sliver, glowing white,
 	-- then cools to black.
 	PLATFORM_GROW_SECONDS = 0.45,
@@ -217,6 +238,22 @@ return {
 	CHECKPOINT_BLAST_HORIZONTAL = 65,
 	CHECKPOINT_BLAST_UP = 45,
 	CHECKPOINT_BLAST_SPIN = 9,
+
+	-- --------------------------------------------------------- the round break --
+	-- The storm taking the tower ends the *round*, and the round break is the
+	-- pause that follows: the wreck flies, the screen goes white, the players vote
+	-- on how the next round plays, and then a fresh run starts on those numbers.
+	--
+	-- Everything is parked for the whole of it — the turn queue, the storm clock,
+	-- and the height poll — so the vote isn't a thing happening *over* a game
+	-- that's still running underneath it.
+	--
+	-- How long the wreck is left to fly before the vote opens over it. Long enough
+	-- to read as a consequence; the blast itself is STORM_BLAST_SECONDS.
+	ROUND_BREAK_WRECK_SECONDS = 3,
+	-- Beat after the vote closes before the first piece of the new round appears,
+	-- so the fade back in has somewhere to land.
+	ROUND_BREAK_RESUME_SECONDS = 1,
 
 	-- --------------------------------------------------------------- physics --
 	-- Grippy and dead: high friction so a stack doesn't slide itself apart, zero
@@ -307,17 +344,14 @@ return {
 		-- Throws the whole tower off the plane and starts the run over — the
 		-- storm's outcome, bought.
 		NUKE = 3707809217,
-		-- Clears the current stage from wherever the tower is, cutscene and all.
+		-- Jumps the tower up to the target height and clears the stage there,
+		-- cutscene and all — buys the climb, not just a floor wherever play
+		-- happened to stop.
 		NEXT_CHECKPOINT = 3707809233,
 	},
 	-- The soft currency id this feature registers with the Store. Its balance
 	-- lives at { PROFILE_KEY, "Cash" } — Store debits it through that path.
 	CURRENCY_ID = "coins",
-	-- How often the local skin override re-asserts itself. The server owns
-	-- block materials and re-dresses the tower on every zone change, so an
-	-- equipped material pack has to keep putting its own material back. Cheap:
-	-- one walk of the arena, and only while such a pack is equipped.
-	SKIN_SWEEP_INTERVAL = 0.4,
 
 	-- ------------------------------------------------------------ persistence --
 	-- Top-level profile key this feature owns (registered in PlayerData.luau).
@@ -333,6 +367,11 @@ return {
 		AIMING = 1, -- a player holds a piece and the clock is running
 		SETTLING = 2, -- piece dropped, physics resolving
 		CHECKPOINT = 3, -- stage cleared: play is paused for the demolition
+		-- The storm took the tower. The round is over and the next one hasn't
+		-- started: the wreck is flying, the screen is fading white, and the vote
+		-- for the next round's rules runs inside this phase. Nothing may be
+		-- placed while it's up — see `intermission` in TowerService.
+		GAMEOVER = 4,
 	},
 
 	-- Which surfaces this feature renders. Flip one off to drop that surface
@@ -350,7 +389,5 @@ return {
 		-- server handlers behind them. Off = the products stop being offered and
 		-- any receipt for one is left undelivered rather than silently eaten.
 		actions = true,
-		-- Client-side material override for an equipped skin pack.
-		skins = true,
 	},
 }

@@ -11,6 +11,10 @@ function CmdrController.Start()
 	local CmdrClient = require(ReplicatedStorage:WaitForChild("CmdrClient"))
 	CmdrClient:SetActivationKeys(Constants.ActivationKeys)
 
+	-- Custom argument types before the commands that reference them by name —
+	-- this is also what makes the console autocomplete their values.
+	CommandRegistry.registerTypes(CmdrClient)
+
 	-- The console checks what you type against *this* registry, so a feature
 	-- command that only ever registered on the server reads as "not a valid
 	-- command name". Registering the same definitions here (minus Run) is what

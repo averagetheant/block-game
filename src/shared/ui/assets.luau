@@ -117,6 +117,9 @@ Assets.Icons = {
 	wheel = "rbxassetid://92211074359779",
 	rocket = "rbxassetid://137349421699691",
 	book = "rbxassetid://76948871632136",
+	nuke = "rbxassetid://79284503652764",
+	arrowRightOutline = "rbxassetid://119025660074097",
+	cursor = "rbxassetid://95026136302607",
 }
 
 -- Brainrot character image icons. Kept separate from `Icons` because they're

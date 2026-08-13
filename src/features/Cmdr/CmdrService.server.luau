@@ -34,6 +34,10 @@ function CmdrService.Start()
 		return nil
 	end)
 
+	-- Custom argument types (enums with autocompletion) before the commands that
+	-- reference them by name.
+	CommandRegistry.registerTypes(Cmdr)
+
 	-- Every feature's `Commands.luau`, with their Run functions — this is the
 	-- realm that executes them. The client registers the same definitions minus
 	-- Run (see CommandRegistry).

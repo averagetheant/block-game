@@ -104,11 +104,26 @@ function TowerCameraController.Start()
 		)
 	end
 
+	-- How hard the camera should be shaking, 0–1. Ramps from nothing at
+	-- STORM_SHAKE_LEAD_SECONDS out to full as the storm lands, then stops: the
+	-- server pushes `stormEndsAt` back out the moment it hits, so the rumble ends
+	-- on the blast rather than trailing through the wreck.
+	--
+	-- Squared, so the first twenty of the thirty seconds are a faint unease and
+	-- the tell arrives late. A linear ramp reads as "the camera is broken".
+	local function shakeIntensity(data: TowerController.State): number
+		local secondsOut = data.stormEndsAt - workspace:GetServerTimeNow()
+		if secondsOut <= 0 or secondsOut >= Constants.STORM_SHAKE_LEAD_SECONDS then
+			return 0
+		end
+		local approach = 1 - secondsOut / Constants.STORM_SHAKE_LEAD_SECONDS
+		return approach * approach
+	end
+
 	task.spawn(function()
 		local baseTopY = waitForBaseTop()
 
-		local function target(): (CFrame, number)
-			local data = TowerController.GetData()
+		local function target(data: TowerController.State): (CFrame, number)
 			if data.phase == Constants.PHASE.CHECKPOINT then
 				return wideShot(baseTopY, data), Constants.CAMERA_CHECKPOINT_LERP
 			end
@@ -118,8 +133,14 @@ function TowerCameraController.Start()
 		local camera = workspace.CurrentCamera
 		camera.CameraType = Enum.CameraType.Scriptable
 		camera.FieldOfView = Constants.CAMERA_FOV
-		local opening = target()
-		camera.CFrame = opening
+		-- The smoothed shot, kept apart from what the camera is actually showing.
+		-- The shake is composed on top of this rather than written into it: fold
+		-- the jitter back into the value the next frame lerps from and the shake
+		-- feeds into the follow, which turns a rumble into a drift.
+		local base = target(TowerController.GetData())
+		camera.CFrame = base
+
+		local shakeClock = 0
 
 		RunService:BindToRenderStep(RENDER_NAME, Enum.RenderPriority.Camera.Value, function(deltaTime)
 			local current = workspace.CurrentCamera
@@ -128,13 +149,34 @@ function TowerCameraController.Start()
 			if current.CameraType ~= Enum.CameraType.Scriptable then
 				current.CameraType = Enum.CameraType.Scriptable
 			end
+
+			local data = TowerController.GetData()
 			-- Framerate-independent exponential follow: the tower can grow by a
 			-- whole block between frames and this stays smooth either way. The
 			-- checkpoint pull-back returns a slower rate, so the move eases out
 			-- instead of tracking.
-			local goal, rate = target()
+			local goal, rate = target(data)
 			local alpha = 1 - math.exp(-rate * deltaTime)
-			current.CFrame = current.CFrame:Lerp(goal, alpha)
+			base = base:Lerp(goal, alpha)
+
+			local intensity = shakeIntensity(data)
+			if intensity <= 0 then
+				current.CFrame = base
+				return
+			end
+
+			-- Two different slices of the noise field so the axes don't move
+			-- together, which would read as a slide rather than a shake.
+			shakeClock += deltaTime * Constants.STORM_SHAKE_FREQUENCY
+			local offset = Vector3.new(
+				math.noise(shakeClock, 0.5) * Constants.STORM_SHAKE_OFFSET * intensity,
+				math.noise(0.5, shakeClock) * Constants.STORM_SHAKE_OFFSET * intensity,
+				0
+			)
+			local roll = math.noise(shakeClock, shakeClock)
+				* math.rad(Constants.STORM_SHAKE_TILT_DEGREES)
+				* intensity
+			current.CFrame = base * CFrame.new(offset) * CFrame.Angles(0, 0, roll)
 		end)
 	end)
 end

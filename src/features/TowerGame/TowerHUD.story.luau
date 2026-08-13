@@ -20,7 +20,8 @@ local Constants = require(TowerGame:WaitForChild("Constants"))
 local TowerHUD = require(TowerGame:WaitForChild("TowerHUD"))
 local Zones = require(TowerGame:WaitForChild("Zones"))
 
-local PHASE_NAMES = { "aiming (yours)", "aiming (someone else)", "settling", "checkpoint", "idle" }
+local PHASE_NAMES =
+	{ "aiming (yours)", "aiming (someone else)", "settling", "checkpoint", "game over", "idle" }
 
 -- Stands in for TowerFeedbackController.CashAwarded. The story fires it on a
 -- timer so the bill burst plays on a loop while you tune it.
@@ -88,6 +89,8 @@ return {
 			phase = Constants.PHASE.SETTLING
 		elseif selected == "checkpoint" then
 			phase = Constants.PHASE.CHECKPOINT
+		elseif selected == "game over" then
+			phase = Constants.PHASE.GAMEOVER
 		elseif selected == "idle" then
 			phase = Constants.PHASE.IDLE
 		end

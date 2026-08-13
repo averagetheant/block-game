@@ -6,13 +6,11 @@
 -- below the Shop / Bag column with a gap — a one-shot purchase reads as a
 -- different sort of thing from a window you open.
 --
--- Icon: the cash bill, as a placeholder. Swap it for real art per button when
--- you have some; the ids they prompt are already the live ones.
-
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Sidebar = require(ReplicatedStorage.Features.Sidebar)
+local assets = require(ReplicatedStorage.Shared.Boil).assets
 
 -- Client-realm sibling from another feature (StarterPlayerScripts.Features).
 local StoreController = require(script.Parent.Parent.Store.StoreController)
@@ -21,7 +19,7 @@ if Constants.Presentations.actions then
 	Sidebar.registerEntry({
 		id = "TowerNuke",
 		label = "Nuke",
-		icon = Constants.CASH_IMAGE,
+		icon = assets.Icons.nuke,
 		group = "actions",
 		order = 1,
 		onClick = function()
@@ -32,7 +30,7 @@ if Constants.Presentations.actions then
 	Sidebar.registerEntry({
 		id = "TowerNextCheckpoint",
 		label = "Skip",
-		icon = Constants.CASH_IMAGE,
+		icon = assets.Icons.arrowRightOutline,
 		group = "actions",
 		order = 2,
 		onClick = function()

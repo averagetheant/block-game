@@ -24,7 +24,7 @@ export type Props = {
 local LINES: { [string]: { string } } = {
 	pc = {
 		"Move — A / D, or aim with the mouse",
-		"Rotate — W",
+		"Rotate — W or scroll",
 		"Drop — click or Space",
 	},
 	touch = {

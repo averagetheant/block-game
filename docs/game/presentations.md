@@ -14,6 +14,15 @@ Presentations are **peers**. They never reference each other; they stay in sync
 because they all read/write the same replicated state through the feature's core
 intent. Adding or removing one is local to the feature.
 
+> **The suffix is load-bearing.** The entry files match on these names and
+> nothing else — a client module that ends in none of `Presentation`,
+> `WorldInteraction` or `Controller` is **never required at all**. There is no
+> warning, because nothing knows it was supposed to exist. The failure looks like
+> a feature that is wired correctly and simply does nothing: packets arrive,
+> controllers run, and the surface never appears. If a presentation seems inert,
+> check its filename first. (Cursors shipped its renderer as `CursorsWorld` and
+> lost exactly this way.)
+
 ## Zero edits to the root client file
 
 `src/client/init.client.luau` names **no content feature**. It:

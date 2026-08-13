@@ -87,8 +87,9 @@ world over for about five seconds:
    the air rather than the cap on a growing pile, which is what keeps a long
    session from dragging hundreds of physics parts behind it. The height readout
    doesn't flinch, because the platform's own top is what the measurement lands on.
-5. The zone rolls, and **the players vote on how the next stage plays** (see
-   below). The vote yields here, with the camera still holding the wide shot.
+5. The zone rolls. The gamemode is **not** re-voted here — that belongs to the
+   [round break](#the-round-break), so the mode the players picked holds for every
+   stage of the round.
 6. The stage numbers advance, the camera comes back, and
    `CHECKPOINT_RESUME_SECONDS` later the queue starts again.
 
@@ -103,30 +104,40 @@ Freezing the height poll is also what stops the demolition from clearing the
 
 ## The gamemode vote
 
-Between stages the players pick how the next one plays. TowerGame doesn't own the
-poll — the [GamemodeVote](GamemodeVote.md) feature does — but it owns the modes
-and it's what asks:
+Between **rounds** the players pick how the next one plays. TowerGame doesn't own
+the poll — the [GamemodeVote](GamemodeVote.md) feature does — but it owns the
+modes and it's what asks:
 
-- `Gamemodes.luau` is the content: three modes and, for each, a complete set of
+- `Gamemodes.luau` is the content: four modes and, for each, a complete set of
   stage numbers. A modifier is a full set rather than a diff, so there's one
-  place to look to know how a stage will play and nothing compounds across
-  stages. `DEFAULT` is the un-voted stage — what the game did before any of this
-  existed, and what a fresh run (or a skipped vote) falls back to.
+  place to look to know how a round will play and nothing compounds across
+  rounds. `DEFAULT` is the un-voted round — what the game did before any of this
+  existed, and what a skipped vote falls back to.
 - `Gamemode.luau` is the registration hook GamemodeVote auto-discovers. It just
   hands the list over, so nothing in TowerGame requires GamemodeVote to register.
-- `TowerService.runCheckpoint` calls `GamemodeVoteService.startVote()`, which
+- `TowerService.runRoundBreak` calls `GamemodeVoteService.startVote()`, which
   **yields** for the length of the poll, and feeds the winner to `applyStage`.
 
-| Mode | What the next stage does |
+| Mode | What the next round does |
 | ---- | ------------------------ |
+| Classic | Nothing. The un-voted numbers, exactly. |
 | Tower Rush | Two thirds of the usual storm clock for the same target. |
 | Blitz Builder | Half the turn clock. The storm clock is left alone, so shorter turns buy the players *more* attempts, not fewer. |
 | Mystery Mode | Special-piece odds ×6. Still capped by `BlockTypes.MAX_CHANCE`, so it's "most pieces", not "all". |
 
-The moment is chosen for what's already true: the stage is cleared, the queue is
-parked, the height poll is off (so the storm can't expire mid-vote), and the
-camera is holding the wide shot. The vote has the board to itself and needs no
-state of its own to get it.
+**Classic is always the first panel** (`order = 0`, and nothing else claims it). A
+ballot of nothing but twists gives the players no way to decline one; Classic is
+that answer, and a fixed position makes it the one panel you can pick without
+reading. Its modifier *is* `Gamemodes.DEFAULT` — winning Classic and skipping the
+vote have to produce the same round, or one of them is lying.
+
+**The winner holds for the whole round**, across as many checkpoints as the
+players clear. `runCheckpoint` deliberately doesn't re-vote: changing the rules
+out from under a run in progress is what this placement avoids.
+
+The moment is chosen for what's already true: the round is over, the tower is
+wreckage, the queue is parked and the storm clock is frozen (`intermission`), so
+the vote has the board to itself and needs no state of its own to get it.
 
 **Both clocks ride in the `State` packet.** The HUD draws them as fractions — the
 turn ring against the turn length, the storm bar against the stage length — so a
@@ -474,7 +485,7 @@ device is additive.
 | `setSteer(-1)` | hold A / ← | DPadLeft | **LEFT** button (pulse) |
 | `setSteer(1)` | hold D / → | DPadRight | **RIGHT** button (pulse) |
 | `aim(x)` | move the mouse | — | — |
-| `rotate` | W / ↑ / R | ButtonY | **TURN** button |
+| `rotate` | W / ↑ / R / scroll wheel | ButtonY | **TURN** button |
 | `drop` | Space / S / ↓ / left click | ButtonA | **DROP** button |
 
 The HUD shows the matching list in the bottom-left corner for `HINT_SECONDS`
@@ -507,18 +518,19 @@ devices.
 | `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
 | `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
 | `TowerProductsService.server.luau` | server | What the Nuke / Next Checkpoint products actually do |
-| `TowerSkinController.client.luau` | client | Local material override for an equipped skin pack |
 | `TowerProductsPresentation.client.luau` | client | The two Robux buttons in the rail's "actions" cluster |
 | `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the wire |
 | `TowerAimController.client.luau` | client | The local preview and everything that makes aiming feel instant |
 | `TowerInputController.client.luau` | client | Keyboard + gamepad binds |
 | `TowerPointerController.client.luau` | client | Mouse aiming + click-to-drop (PC) |
-| `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude, plus the checkpoint pull-back |
+| `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude, the checkpoint pull-back, and the storm shake |
 | `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the clocks, picks the device |
 | `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
 | `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
+| `StormFade.ui.luau` | shared | The storm's one-shot white-out, played on `PHASE.GAMEOVER` |
 | `TowerHUD.story.luau` | shared | UI Labs story — every prop on a slider, including both clocks |
+| `StormFade.story.luau` | shared | UI Labs story — replays the white-out on demand |
 | `TowerPresentation.client.luau` | client | Registers the HUD as a UIRegistry **root** |
 
 ## The HUD
@@ -714,28 +726,28 @@ thing that pays out, and `StoreService` is the only thing that debits.
 | ---- | ----- | ------ |
 | `skins.neon` — Neon Blocks | 100 coins | Every block part becomes `Enum.Material.Neon` |
 
-A skin pack overrides the material of every block **on the owner's screen**,
-including whatever the current zone had dressed them in — a Retro zone can't dull
-a neon tower. That override is the product.
+A skin pack overrides the material of **the blocks its owner drops**, including
+whatever the current zone had dressed them in — a Retro zone can't dull a neon
+block. That override is the product.
 
-It's **local, not server**. The tower is shared, so a cosmetic one player bought
-must not change what the room sees; writing `Material` on a replicated part from
-the client changes it on that screen and nowhere else, which is exactly the reach
-a bought skin should have.
+It's **server, not local**. The pack rides on the block, so the look a player
+bought is one the whole room sees on *their* blocks — it doesn't repaint anyone
+else's. `TowerService.beginTurn` reads the placer's equipped pack once (via
+`StoreService.equipped`) and carries it on the `Held`, then on the `Block`, for
+the life of the piece. Reading it per-frame instead would let a block change look
+under the room when its placer swapped packs after dropping it.
 
-`TowerSkinController` re-asserts it on a `SKIN_SWEEP_INTERVAL` (0.4s) sweep
-rather than once, because the server owns block materials: it dresses each piece
-as it spawns and re-dresses the whole tower on every zone change, and each of
-those replicates down and stomps the override. The sweep only runs while a pack
-is equipped — unequipped, the controller costs one signal connection.
+Because the pack is a property of the block, it survives everything the server
+does to materials afterwards: `applyZoneLook` checks for a pack before it studs a
+block over for Retro, and a Clone block inherits the original's pack rather than
+reverting to the stock look mid-tower.
 
-Unequipping restores what the server would be showing: the material each part
-spawned with, or `Plastic` if the current zone is Retro (the one zone that
-overrides materials itself).
+Unequipping changes nothing already standing — blocks placed under a pack keep
+it. It only affects the next piece the player is handed.
 
 The list is the single source of truth — `Store.luau` builds the shop card from
-it and `TowerSkinController` reads the material from it, so the price and the
-look can't drift apart. `id` is persisted on the profile: append, don't rename.
+it and `TowerService` reads the material from it, so the price and the look can't
+drift apart. `id` is persisted on the profile: append, don't rename.
 
 ## Robux products
 
@@ -753,16 +765,43 @@ the place or the purchase prompt throws.
 The three bundles appear as cards in the shop's Robux tab. The two actions never
 appear in the shop — `group = "action"` keeps them out — because their button is
 a rail entry, registered by `TowerProductsPresentation` into the "actions"
-cluster with the cash bill as a placeholder icon.
+cluster — Nuke on `assets.Icons.nuke`, Skip on `assets.Icons.arrowRightOutline`.
 
-`TowerService.nuke()` routes through the same `resetRun` the storm uses when its
-clock expires, rather than a parallel teardown: the wreck, the checkpoint wipe
-and the fresh stage all behave the way players have already seen them behave.
+`TowerService.nuke()` routes through the same round break the storm uses when its
+clock expires, rather than a parallel teardown: the wreck, the gamemode vote and
+the fresh round all behave the way players have already seen them behave. Note
+that this means buying a Nuke also puts the next round to a vote.
 
-Both handlers **return false while a checkpoint cutscene is running**. That isn't
+`TowerService.clearStage()` runs the checkpoint at `state.targetHeight`, not
+wherever the tower actually stands — the same full sequence (cutscene, platform,
+blast, zone roll) the storm's own "reached the target" path runs, just triggered
+without playing the climb out. That's what buying Skip is: the players are paid
+the altitude they haven't built to yet, not a floor wherever the tower happened
+to stop.
+
+Both handlers **return false while a checkpoint cutscene or a round break is
+running**. That isn't
 a failure — Store leaves the receipt undelivered, Roblox re-delivers it, and the
 player gets what they paid for a moment later instead of losing it. Detonating
 the tower under a camera holding a wide shot of it would read as a bug.
+
+## Cmdr commands
+
+Gated by `Presentations.command` and, on top of that, by Cmdr's own username
+allowlist (`Cmdr/Constants.luau`) — see [presentations.md](presentations.md).
+Registered from `Commands.luau`; the enum arguments (`blockType`, `blockSkin`,
+`zoneName`) come from a sibling `CmdrTypes.luau`, auto-discovered by
+`CommandRegistry.registerTypes` the same way `Commands.luau` is — see
+`src/features/Cmdr/CommandRegistry.luau` for why it isn't named `Types.luau`
+(that name is already taken by the pure-Luau-type-export convention).
+
+| Command | Args | Does |
+| ------- | ---- | ---- |
+| `skipstage` (alias `skiplevel`) | — | `TowerService.clearStage()` — the dev-testing handle on a stage clear |
+| `skip` | — | The same call, under the name that reads as "replicate the Skip purchase" |
+| `block` | `[blocktype]` `[blockskin]` | Pins the **next** piece's type (default: Normal, i.e. no hazard) and/or skin (default: random) via `TowerService.forceNextBlock` — one-shot, consumed by the next `beginTurn` |
+| `zone` | `zoneName` | `TowerService.setZone(id)` — forces the tower straight into a zone, outside the usual "roll one on checkpoint clear" path |
+| `givecash` | `player` `amount` | `CashService.award(player, amount)` — the same path zone/interval awards pay through |
 
 ## Sound
 
@@ -850,6 +889,35 @@ One thing deliberately survives: **`maxHeight`**. It's the server's best-ever
 record rather than part of the run, and `TowerStatsService` has already banked it
 into each player's profile. The HUD's "best" is a record; the storm resets the
 game, not the history.
+
+### The round break
+
+The storm landing ends the **round**, and `runRoundBreak` owns everything between
+that and the next one. It is the only moment the whole game is stopped:
+
+1. `intermission` goes true and `PHASE.GAMEOVER` goes out. That flag is what makes
+   "paused" real rather than cosmetic — the turn queue parks, the height poll
+   returns early (which is also what freezes the storm clock), and no piece can be
+   held, so **nothing can be placed** for the duration.
+2. The wreck flies for `ROUND_BREAK_WRECK_SECONDS` (3). Clients read `GAMEOVER` and
+   play `StormFade` — a one-shot white-out that waits
+   `STORM_FADE_DELAY_SECONDS` (so the blocks are seen flying *first*), fades to
+   white, holds, and clears.
+3. **The players vote on how the next round plays** (see
+   [the gamemode vote](#the-gamemode-vote)). `startVote` yields here.
+4. The winning modifier is applied, the storm clock is set fresh — so no part of
+   the new round is spent on the poll — and `ROUND_BREAK_RESUME_SECONDS` later the
+   queue starts again.
+
+`TowerService.nuke()` routes through the same function, so buying a Nuke also puts
+the next round to a vote.
+
+The camera has its own tell that this is coming: `TowerCameraController` shakes
+from `STORM_SHAKE_LEAD_SECONDS` (30) out, ramping on a squared curve so the first
+twenty seconds are a faint unease and the tell arrives late. It reads
+`stormEndsAt` — the same number the HUD clock draws — so nothing extra goes over
+the wire for it, and it stops the instant the storm lands because the server
+pushes `stormEndsAt` back out.
 
 ## Not built yet
 

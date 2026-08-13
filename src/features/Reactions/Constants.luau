@@ -14,28 +14,36 @@ return {
 	MAX_REACTION_ID_LENGTH = 64,
 	-- Minimum seconds between one player's reactions. The whole server sees
 	-- every one of these, so the rate limit is the difference between a reaction
-	-- and a screen full of confetti.
-	SEND_COOLDOWN = 0.6,
+	-- and a screen full of confetti. Low enough to spam a little on purpose —
+	-- FLOAT_MAX is what actually protects the screen.
+	SEND_COOLDOWN = 0.2,
 
 	-- -------------------------------------------------------------- the bar --
 	-- Square side of one reaction button.
-	BUTTON_SIZE = 62,
-	BUTTON_GAP = 10,
+	BUTTON_SIZE = 40,
+	BUTTON_GAP = 6,
 	-- Inner padding between the bar's edge and its buttons.
-	BAR_PADDING = 12,
+	BAR_PADDING = 7,
 	-- Corner radius on the bar and its buttons. Generous — it's what makes it
 	-- read as minimal rather than as a plain rectangle.
-	BAR_CORNER = 18,
-	BUTTON_CORNER = 14,
+	BAR_CORNER = 12,
+	BUTTON_CORNER = 9,
 	-- The arrow tab that opens the bar. Sits above the bar's top edge when
 	-- closed and rides up with it when open.
-	HANDLE_WIDTH = 66,
-	HANDLE_HEIGHT = 26,
-	-- Emoji glyph size inside a bar button.
-	GLYPH_TEXT_SIZE = 34,
+	HANDLE_WIDTH = 48,
+	HANDLE_HEIGHT = 18,
+	-- Emoji glyph size inside a bar button. Kept to GLYPH_FIT of the button —
+	-- see that constant for why it isn't simply the button size.
+	GLYPH_TEXT_SIZE = 23,
 	-- Fraction of a button an image reaction fills, so an image and an emoji
 	-- read at the same weight.
 	GLYPH_IMAGE_SCALE = 0.66,
+	-- The most of a container an emoji's *text size* may take up. Emoji render
+	-- taller than their nominal TextSize (ascenders, and the colour bitmap's own
+	-- padding), so a glyph sized to its box gets its top and bottom shaved off
+	-- wherever the parent clips — which the float's CanvasGroup always does.
+	-- Every glyph size here is derived against this rather than eyeballed.
+	GLYPH_FIT = 0.58,
 	-- Open/close slide.
 	SLIDE_TWEEN_INFO = TweenInfo.new(0.28, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 
@@ -61,8 +69,8 @@ return {
 	FLOAT_SPREAD = 0.18,
 	-- Sideways drift over the flight, rolled per reaction (scale).
 	FLOAT_DRIFT = 0.06,
-	FLOAT_SIZE = 72,
-	FLOAT_TEXT_SIZE = 60,
+	FLOAT_SIZE = 44,
+	FLOAT_TEXT_SIZE = 25,
 	-- Cap on simultaneous floats. A full server all reacting at once is the
 	-- case this exists for; past this the oldest is dropped.
 	FLOAT_MAX = 24,

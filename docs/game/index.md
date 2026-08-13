@@ -30,6 +30,7 @@ Features and skins are also **distributable packages** — one folder, one
 | [GamemodeVote.md](GamemodeVote.md) | Between-stages gamemode poll + the `Gamemode.luau` registration convention |
 | [Store.md](Store.md) | Shop + inventory, currencies, Robux products + the `Store.luau` discovery convention |
 | [Reactions.md](Reactions.md) | Bottom emoji bar broadcast to the whole server |
+| [Cursors.md](Cursors.md) | Live per-player pointers on the play plane |
 | [PlayerData.md](PlayerData.md) | Profile persistence + the `registerTemplate` discovery convention |
 | [Settings.md](Settings.md) | Settings registry, server validation, the `Settings.luau` discovery convention |
 | [Notes.md](Notes.md) | Persisted per-player note (full-stack reference feature) |

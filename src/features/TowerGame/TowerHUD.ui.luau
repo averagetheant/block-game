@@ -25,6 +25,7 @@ local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
 local ProgressLine = require(script.Parent.ProgressLine)
 local RadialTimer = require(script.Parent.RadialTimer)
+local StormFade = require(script.Parent.StormFade)
 local TurnStrip = require(script.Parent.TurnStrip)
 local Zones = require(script.Parent.Zones)
 
@@ -55,6 +56,10 @@ local CASH_TEXT_SIZE = 28
 local CASH_ICON = 34
 local WARNING_WIDTH = 460
 local WARNING_HEIGHT = 96
+
+-- The storm's white-out covers the screen, and the HUD is part of the screen —
+-- so it sits above every other child rather than among them.
+local FADE_Z_INDEX = 100
 
 -- Under this many seconds the turn clock turns red.
 local URGENT_SECONDS = 5
@@ -111,6 +116,9 @@ local function statusLine(props: Props): string
 	end
 	if props.phase == PHASE.CHECKPOINT then
 		return "Checkpoint! Clearing the tower…"
+	end
+	if props.phase == PHASE.GAMEOVER then
+		return "The storm took the tower!"
 	end
 	if props.phase == PHASE.SETTLING then
 		return "Settling…"
@@ -363,6 +371,12 @@ return function(props: Props)
 			}),
 		})
 	end
+
+	-- Last child and highest ZIndex: the storm whites out everything, HUD included.
+	children.StormFade = React.createElement(StormFade, {
+		active = props.phase == PHASE.GAMEOVER,
+		zIndex = FADE_Z_INDEX,
+	})
 
 	return React.createElement("Frame", {
 		Size = UDim2.fromScale(1, 1),

@@ -14,8 +14,9 @@ Settings.UI = require(script.SettingsUI)
 
 -- The UIShell frame id used by the HUD. Other features can call
 -- `UIShell.useFrame().open(Settings.FRAME_ID)` from React, or compose this
--- with their own UI shell, to navigate users to the Settings window.
-Settings.FRAME_ID = "Settings"
+-- with their own UI shell, to navigate users to the Settings window. Defined in
+-- Constants so shared discovery files can name it without loading this init.
+Settings.FRAME_ID = Settings.Constants.FRAME_ID
 
 Settings.registerSetting = Settings.Registry.registerSetting
 Settings.registerCategory = Settings.Registry.registerCategory

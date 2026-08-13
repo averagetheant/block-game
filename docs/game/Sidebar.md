@@ -58,6 +58,16 @@ between them (`Constants.GROUP_GAP`):
 The gap is what tells a player that *Nuke* is a different sort of thing from
 *Shop*, without drawing a divider.
 
+Who's on it, as shipped:
+
+| Group | Order | Entry | Registered by |
+| ----- | ----- | ----- | ------------- |
+| menu | 1 | Shop | `Store/Sidebar.luau` |
+| menu | 2 | Bag | `Store/Sidebar.luau` |
+| menu | 3 | Settings | `Settings/Sidebar.luau` |
+| actions | 1 | Nuke | `TowerGame/TowerProductsPresentation.client.luau` |
+| actions | 2 | Skip | `TowerGame/TowerProductsPresentation.client.luau` |
+
 ### Declarative entries (both realms)
 
 Drop a `Sidebar.luau` next to your feature's `init.luau`:

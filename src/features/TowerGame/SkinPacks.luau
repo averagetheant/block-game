@@ -1,16 +1,17 @@
 --!strict
 -- Buyable block looks. One entry here becomes one card in the shop's Skins tab
 -- and one equippable pack in the inventory — Store.luau reads this list, and so
--- does TowerSkinController, so the price and the material can't drift apart.
+-- does TowerService, so the price and the material can't drift apart.
 --
--- A skin pack overrides the *material* of every block on the owner's screen,
--- including whatever the current zone had dressed them in. That's the whole
--- product: Retro turns the tower into grey studded bricks, and a neon tower
--- stays neon through it.
+-- A skin pack overrides the *material* of the blocks its owner drops, and it
+-- overrides whatever the current zone would have dressed them in. That's the
+-- whole product: Retro turns the tower into grey studded bricks, and the neon
+-- blocks in it stay neon.
 --
--- It's a local override, not a server one. The tower is shared, so a cosmetic
--- one player bought can't be allowed to change what the room sees — everyone
--- else keeps seeing the server's materials.
+-- It's a server override on the block, not a local one on the viewer. The pack
+-- is read once when the turn begins and carried on the piece for life, so a
+-- bought skin is something the whole room sees on *your* blocks — not something
+-- that repaints everyone else's tower on your screen.
 --
 -- `id` is a Store pack id and is persisted on the profile: append, don't rename.
 

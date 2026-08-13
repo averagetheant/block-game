@@ -29,6 +29,61 @@ local TowerController = require(script.Parent.TowerController)
 local TowerFeedbackController = require(script.Parent.TowerFeedbackController)
 local TowerZoneController = require(script.Parent.TowerZoneController)
 
+-- What the machine has, used until the player touches something. Keyboard wins
+-- when several are available (Studio emulation, a laptop with a touchscreen),
+-- because that's what they're most likely actually holding.
+local function initialDevice(): ControlsHint.Device
+	if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+		return "touch"
+	end
+	if UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
+		return "gamepad"
+	end
+	return "pc"
+end
+
+-- The device the last real input came from, or nil for inputs that say nothing
+-- about what's in the player's hands. `Focus` and `TextInput` fire from window
+-- focus and the chat bar; treating either as "they switched to a keyboard"
+-- would flip a console player's hint for no reason.
+local function deviceOf(inputType: Enum.UserInputType): ControlsHint.Device?
+	if inputType == Enum.UserInputType.Touch then
+		return "touch"
+	end
+	if inputType == Enum.UserInputType.Keyboard or string.match(inputType.Name, "^Mouse") then
+		return "pc"
+	end
+	if string.match(inputType.Name, "^Gamepad") then
+		return "gamepad"
+	end
+	return nil
+end
+
+-- Follows the input the player is actually using. Capability alone isn't enough:
+-- a PC with a controller plugged in has KeyboardEnabled *and* GamepadEnabled, so
+-- a purely capability-based answer would show keyboard hints to someone holding
+-- a pad.
+local function useDevice(): ControlsHint.Device
+	local device, setDevice = React.useState(initialDevice)
+
+	React.useEffect(function()
+		local connection = UserInputService.LastInputTypeChanged:Connect(function(inputType)
+			local nextDevice = deviceOf(inputType)
+			if nextDevice == nil then
+				return
+			end
+			-- Setting the value it already holds makes React bail out of the
+			-- update, so the common case (every mouse move on a PC) is free.
+			setDevice(nextDevice)
+		end)
+		return function()
+			connection:Disconnect()
+		end
+	end, {})
+
+	return device
+end
+
 return function()
 	local state = Boil.useReplica(TowerController)
 	local clocks, setClocks = React.useState({ turn = 0, storm = 0 })
@@ -91,16 +146,12 @@ return function()
 		if shape then shape.name else nil
 	)
 
-	-- Which control list the hint shows. Keyboard wins when several are
-	-- available (Studio emulation, a laptop with a touchscreen), because that's
-	-- what the player is most likely actually holding.
-	local touchOnly = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled
-	local device: ControlsHint.Device = "pc"
-	if touchOnly then
-		device = "touch"
-	elseif UserInputService.GamepadEnabled and not UserInputService.KeyboardEnabled then
-		device = "gamepad"
-	end
+	-- Which control list the hint shows, and whether the touch buttons render.
+	-- Owned by `useDevice` below: it starts from what the machine *has* and then
+	-- follows what the player actually *uses*, so plugging in a controller on a
+	-- PC switches the hint to the stick bindings the moment it's touched.
+	local device = useDevice()
+	local touchOnly = device == "touch"
 
 	return React.createElement(TowerHUD, {
 		height = state.height,

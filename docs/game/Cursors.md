@@ -63,6 +63,13 @@ Three devices, one answer — a point on the plane.
 | Touch | Project the **held finger** onto the plane. | Whenever no finger is down. |
 | Gamepad | Right stick integrates a position per frame (`STICK_SPEED`, `STICK_DEADZONE`). | Never — the position persists. |
 
+**The right stick is shared with TowerGame's rotate flick**, so flicking to rotate
+also nudges your cursor. That's deliberately left alone rather than arbitrated:
+you never see your own cursor, so the only effect is a small jump in what other
+players see, and a purely cosmetic pointer isn't worth taking a stick away from
+the piece controls. If it ever needs separating, the honest fix is to give the
+console cursor the aim point rather than a stick of its own.
+
 Touch is the one that needed a decision: a phone has no hover, so a cursor that
 existed at all times would have to sit wherever the last tap landed. Instead the
 cursor exists only while a finger is down, and lifting it simply stops the

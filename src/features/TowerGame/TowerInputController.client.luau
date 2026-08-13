@@ -7,11 +7,19 @@
 -- else in the game.
 --
 -- Every bind here is an *alternative* to the others, never a mode: rotate is on
--- W / Up / R / ButtonY and the scroll wheel at once, and a player can move
--- between them mid-turn without the game caring which one they used last.
+-- W / Up / R / ButtonY, the scroll wheel and the right stick at once, and a
+-- player can move between them mid-turn without the game caring which one they
+-- used last.
+--
+-- The thumbsticks are the one thing CAS can't express, because it delivers a
+-- stick as a stream of Change events and both of ours need frame state rather
+-- than events: the left stick's steer is an analog value integrated per frame,
+-- and the right stick's rotate is an edge that needs hysteresis. Both are read
+-- from `GetGamepadState` in one Heartbeat instead.
 
 local ContextActionService = game:GetService("ContextActionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
@@ -50,6 +58,20 @@ local function bindHold(name: string, dir: number, ...: Enum.KeyCode)
 		sendHeld()
 		return Enum.ContextActionResult.Sink
 	end, false, ...)
+end
+
+-- The deflection of one stick, or Vector2.zero when there's no gamepad. Read
+-- fresh each frame rather than cached off an event, because a stick held at a
+-- constant angle fires no events at all and would look like a released one.
+local function stickPosition(keyCode: Enum.KeyCode): Vector2
+	for _, gamepad in UserInputService:GetConnectedGamepads() do
+		for _, input in UserInputService:GetGamepadState(gamepad) do
+			if input.KeyCode == keyCode then
+				return Vector2.new(input.Position.X, input.Position.Y)
+			end
+		end
+	end
+	return Vector2.zero
 end
 
 -- Fires on key-down only, and sinks so a held key doesn't repeat-fire the intent.
@@ -104,6 +126,40 @@ function TowerInputController.Start()
 		Enum.KeyCode.Down,
 		Enum.KeyCode.ButtonA
 	)
+
+	-- The thumbsticks. One Heartbeat drives both, because both need the stick's
+	-- *current* position rather than a change event.
+	--
+	-- Steering hands control back and forth rather than fighting: while the left
+	-- stick is off-centre it owns the steer, and the frame it returns to centre
+	-- it re-asserts whatever the D-pad is holding. Without that handover a stick
+	-- release would leave the piece gliding on the last analog value, or stomp a
+	-- D-pad direction the player was still holding.
+	local stickSteering = false
+	-- True while the right stick is past the rotate threshold, so one flick is
+	-- one quarter turn no matter how long it's held over.
+	local rotateLatched = false
+
+	RunService.Heartbeat:Connect(function()
+		local steer = stickPosition(Enum.KeyCode.Thumbstick1).X
+		if math.abs(steer) >= Constants.GAMEPAD_STEER_DEADZONE then
+			stickSteering = true
+			TowerAimController.setSteer(steer)
+		elseif stickSteering then
+			stickSteering = false
+			sendHeld()
+		end
+
+		-- Either direction turns the same way, because `rotate` is a single
+		-- quarter turn and every other bind that calls it does the same.
+		local spin = math.abs(stickPosition(Enum.KeyCode.Thumbstick2).X)
+		if not rotateLatched and spin >= Constants.GAMEPAD_ROTATE_THRESHOLD then
+			rotateLatched = true
+			TowerAimController.rotate()
+		elseif rotateLatched and spin <= Constants.GAMEPAD_ROTATE_RELEASE then
+			rotateLatched = false
+		end
+	end)
 
 	-- A player can already be holding a direction when their turn starts — they
 	-- were waiting on the previous player. No input event fires for a key that

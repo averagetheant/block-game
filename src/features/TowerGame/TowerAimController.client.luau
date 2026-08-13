@@ -173,9 +173,13 @@ end
 
 -- ------------------------------------------------------------------ intents --
 
--- Held direction: -1, 0 or 1. Integrated in the render loop below.
+-- Held direction, integrated in the render loop below. Anything in [-1, 1]: a
+-- key sends a full ±1, a thumbstick sends its actual deflection, so a gentle
+-- push on the stick nudges the piece and a full one moves it at STEER_SPEED.
+-- Clamped rather than rounded — rounding is what would throw the analog range
+-- away and make the stick behave like a D-pad.
 function TowerAimController.setSteer(dir: number)
-	steerDir = if dir > 0 then 1 elseif dir < 0 then -1 else 0
+	steerDir = if dir ~= dir then 0 else math.clamp(dir, -1, 1)
 end
 
 -- Absolute placement from the mouse.

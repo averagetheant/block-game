@@ -33,8 +33,8 @@ local LINES: { [string]: { string } } = {
 		"Drop — DROP",
 	},
 	gamepad = {
-		"Move — D-Pad left / right",
-		"Rotate — Y",
+		"Move — left stick or D-Pad",
+		"Rotate — right stick or Y",
 		"Drop — A",
 	},
 }

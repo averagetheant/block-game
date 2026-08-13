@@ -63,6 +63,35 @@ The window grows from `scaleFrom` (default `0.8`) to `1` on enter with the elast
 
 The close button on `<Window>` is wired by the consumer (`onClose = frames.close`). `Frame` does not modify its children's props.
 
+### The focus effect (automatic)
+
+While **any** frame is open the world behind it blurs and the camera eases in a
+few degrees of FOV, so the frame reads as *in front of* the game rather than
+painted onto it. Nothing opts in: `FrameProvider` mounts `FocusEffect` itself, so
+every frame — present and future — gets it, and a feature that adds a frame gets
+it for free.
+
+`FocusEffect.ui.luau` renders no UI. Both halves are instance-level tweens (a
+`BlurEffect` it owns in Lighting, named `UIShellFocusBlur`, and the camera's
+`FieldOfView`) rather than React state — neither is a GUI, and re-rendering the
+tree to move a blur would be absurd.
+
+Two details worth knowing:
+
+- The camera's FOV is captured on the **closed → open** edge and held until it's
+  been put back, so switching straight from one frame to another can't capture
+  the already-zoomed value and ratchet the FOV down a little further each time.
+- It restores the FOV on unmount. The tree can go away (a respawn, a hot reload)
+  with a frame still open, and a permanently blurred, permanently zoomed game is
+  a nasty thing to leave behind.
+
+It takes `isOpen` as a prop rather than reading `useFrame()` — FrameProvider
+mounts it, so a hook there would be a require cycle. That also lets the
+`FocusEffect` story drive it from a toggle: the thing to watch in that story is
+the viewport *behind* it.
+
+Tune it with the `FOCUS_*` constants below.
+
 ### `<UIShell.HideWhenFrameOpen direction="…">`
 
 Wrap HUD / side-bar content. Slides off-screen by `direction` whenever any frame is open.
@@ -90,6 +119,9 @@ React.createElement(UIShell.HideWhenFrameOpen, {
 | `ENTER_TWEEN_INFO` | `TweenInfo.new(0.8, Elastic, Out)` | Frame enter tween — snappy elastic landing. |
 | `EXIT_TWEEN_INFO` | `TweenInfo.new(0.1, Quad, Out)` | Frame exit tween — flat dismiss. |
 | `ENTER_SCALE_FROM` | `0.8` | Start/exit UIScale value for the frame. |
+| `FOCUS_BLUR_SIZE` | `18` | Blur pushed into Lighting while a frame is open. |
+| `FOCUS_FOV_ZOOM` | `6` | Degrees *subtracted* from the camera's FOV — narrower view = zoom in. Keep it small; it's a nudge, not a cutscene. |
+| `FOCUS_TWEEN_INFO` | `TweenInfo.new(0.3, Quad, Out)` | Timing for both halves of the focus effect. |
 | `HIDE_OFFSCREEN_OFFSET` | `1.0` | Scale-units a hidden element slides past the edge. |
 | `HIDE_HIDE_TWEEN_INFO` | `TweenInfo.new(0.3, Quad, In)` | Side-bar slide off-screen (slow part on-screen). |
 | `HIDE_SHOW_TWEEN_INFO` | `TweenInfo.new(0.3, Quad, Out)` | Side-bar slide back (gentle on-screen landing). |

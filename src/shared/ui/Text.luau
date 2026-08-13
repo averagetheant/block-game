@@ -27,6 +27,9 @@ type Props = {
 	layoutOrder: number?,
 	zIndex: number?,
 	automaticSize: Enum.AutomaticSize?,
+	-- Wrap at the label's width. Pair with `automaticSize = Y` for copy that
+	-- sizes to its content.
+	wrapped: boolean?,
 	-- Shadow (drop-shadow) feature.
 	shadow: boolean?,
 	shadowColor: Color3?,
@@ -73,6 +76,7 @@ return function(props: Props)
 			LayoutOrder = props.layoutOrder,
 			ZIndex = props.zIndex,
 			AutomaticSize = props.automaticSize,
+			TextWrapped = props.wrapped,
 		}, children)
 	end
 
@@ -94,6 +98,7 @@ return function(props: Props)
 		LayoutOrder = props.layoutOrder,
 		ZIndex = props.zIndex,
 		AutomaticSize = props.automaticSize,
+		TextWrapped = props.wrapped,
 	}, {
 		UIStroke = React.createElement("UIStroke", {
 			Thickness = strokeThickness,
@@ -112,6 +117,7 @@ return function(props: Props)
 			FontFace = font,
 			TextXAlignment = xAlign,
 			TextYAlignment = yAlign,
+			TextWrapped = props.wrapped,
 		}, {
 			UIStroke = React.createElement("UIStroke", {
 				Thickness = strokeThickness,

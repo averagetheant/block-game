@@ -23,8 +23,11 @@ export type State = {
 	turnEndsAt: number,
 	height: number,
 	maxHeight: number,
+	-- Top of the piece being aimed, studs above the base; 0 when nobody holds one.
+	pieceTop: number,
 	blockCount: number,
 	shapeId: number,
+	blockTypeId: number,
 	nextShapeId: number,
 	order: { number },
 	targetHeight: number,
@@ -33,6 +36,9 @@ export type State = {
 	checkpoints: number,
 	zoneId: number,
 	zoneSky: number,
+	-- The stage's clock lengths. Constants until a gamemode vote changes them.
+	turnSeconds: number,
+	stormSeconds: number,
 }
 
 local TowerController = {}
@@ -45,8 +51,10 @@ local data: State = {
 	turnEndsAt = 0,
 	height = 0,
 	maxHeight = 0,
+	pieceTop = 0,
 	blockCount = 0,
 	shapeId = 0,
+	blockTypeId = 0,
 	nextShapeId = 0,
 	order = {},
 	targetHeight = Constants.STORM_FIRST_TARGET,
@@ -55,6 +63,8 @@ local data: State = {
 	checkpoints = 0,
 	zoneId = 1,
 	zoneSky = 1,
+	turnSeconds = Constants.TURN_SECONDS,
+	stormSeconds = Constants.STORM_SECONDS,
 }
 
 function TowerController.GetData(): State

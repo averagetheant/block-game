@@ -51,8 +51,18 @@ return ByteNet.defineNamespace("TowerGame", function()
 				-- Studs above the base platform's top surface.
 				height = ByteNet.float32,
 				maxHeight = ByteNet.float32,
+				-- Top of the piece the holder is currently aiming, in the same terms
+				-- as `height`; 0 when nobody holds one. A piece always spawns clear
+				-- of the tower, so it can sit well above `height` — this is what lets
+				-- the camera guarantee it's on screen without the client having to
+				-- work out how tall the piece is.
+				pieceTop = ByteNet.float32,
 				blockCount = ByteNet.uint16,
 				shapeId = ByteNet.uint8,
+				-- BlockTypes id of the current piece, 0 for an ordinary block.
+				-- The HUD names the piece from the pair: a type that brings its
+				-- own model (the Noob) sends shapeId 0 and is named from this.
+				blockTypeId = ByteNet.uint8,
 				nextShapeId = ByteNet.uint8,
 				-- Turn order as user ids, current holder first. The HUD's headshot
 				-- strip rotates this so the holder lands dead center; the entry at
@@ -72,6 +82,13 @@ return ByteNet.defineNamespace("TowerGame", function()
 				-- up, so every client paints the same world.
 				zoneId = ByteNet.uint8,
 				zoneSky = ByteNet.uint8,
+				-- The stage's two clock lengths. Constants until a gamemode vote
+				-- changes them (see Gamemodes.luau), and the HUD draws both as
+				-- fractions — the turn ring against one, the storm bar against the
+				-- other — so a client reading them off Constants would draw the
+				-- wrong shape for a voted stage.
+				turnSeconds = ByteNet.uint8,
+				stormSeconds = ByteNet.uint16,
 			}),
 			reliabilityType = "reliable",
 		}),

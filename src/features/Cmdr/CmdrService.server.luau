@@ -1,6 +1,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Cmdr = require(ReplicatedStorage.Packages.Cmdr)
+local CommandRegistry = require(ReplicatedStorage.Features.Cmdr.CommandRegistry)
 local Constants = require(ReplicatedStorage.Features.Cmdr.Constants)
 
 local CmdrService = {}
@@ -32,6 +33,11 @@ function CmdrService.Start()
 		end
 		return nil
 	end)
+
+	-- Every feature's `Commands.luau`, with their Run functions — this is the
+	-- realm that executes them. The client registers the same definitions minus
+	-- Run (see CommandRegistry).
+	CommandRegistry.registerAll(Cmdr)
 end
 
 return CmdrService

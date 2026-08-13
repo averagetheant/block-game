@@ -14,6 +14,8 @@ local UserInputService = game:GetService("UserInputService")
 local React = require(ReplicatedStorage.Packages.React)
 local Boil = require(ReplicatedStorage.Shared.Boil)
 
+local BlockLabel = require(ReplicatedStorage.Features.TowerGame.BlockLabel)
+local BlockTypes = require(ReplicatedStorage.Features.TowerGame.BlockTypes)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local ControlsHint = require(ReplicatedStorage.Features.TowerGame.ControlsHint)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
@@ -79,6 +81,16 @@ return function()
 
 	local holder = if state.holderUserId ~= 0 then Players:GetPlayerByUserId(state.holderUserId) else nil
 
+	-- The piece's name, composed exactly as the block's own plate composes it, so
+	-- the HUD and the world can't disagree about what's in the air. A type that
+	-- brings its own model sends shapeId 0 and is named from the type alone.
+	local blockType = BlockTypes.get(state.blockTypeId)
+	local shape = Shapes.get(state.shapeId)
+	local pieceName = BlockLabel.titleFor(
+		if blockType then blockType.name else nil,
+		if shape then shape.name else nil
+	)
+
 	-- Which control list the hint shows. Keyboard wins when several are
 	-- available (Studio emulation, a laptop with a touchscreen), because that's
 	-- what the player is most likely actually holding.
@@ -99,14 +111,14 @@ return function()
 		holderName = if holder then holder.DisplayName else nil,
 		holderUserId = state.holderUserId,
 		order = state.order,
-		shapeName = Shapes.nameOf(state.shapeId),
+		shapeName = pieceName,
 		nextShapeName = Shapes.nameOf(state.nextShapeId),
 		secondsLeft = clocks.turn,
-		turnSeconds = Constants.TURN_SECONDS,
+		turnSeconds = state.turnSeconds,
 		targetHeight = state.targetHeight,
 		zoneBaseHeight = state.zoneBaseHeight,
 		stormSecondsLeft = clocks.storm,
-		stormSeconds = Constants.STORM_SECONDS,
+		stormSeconds = state.stormSeconds,
 		checkpoints = state.checkpoints,
 		device = device,
 		cash = if profile then profile.Cash or 0 else 0,

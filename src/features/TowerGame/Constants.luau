@@ -30,6 +30,10 @@ return {
 	-- holder's client uses it to find the piece it should hide and shadow with a
 	-- local preview; everyone else just watches the real thing.
 	HELD_ATTRIBUTE = "HolderUserId",
+	-- Attribute marking a piece that brought its own model (the Noob) rather than
+	-- being built out of tetromino cells. Zone dressing skips those: studding a
+	-- Noob over or handing it snow friction turns a character back into a prop.
+	RAW_MODEL_ATTRIBUTE = "RawModel",
 	-- Nobody walks around in a stationary-camera stacking game, so characters are
 	-- off by default. Flip to false to get avatars back (they spawn at the world
 	-- origin and are unrelated to the tower).
@@ -40,8 +44,12 @@ return {
 	TURN_SECONDS = 20,
 	-- Grace period after a drop before the next player is handed a piece.
 	SETTLE_SECONDS = 1.5,
-	-- How far above the current tower top a fresh piece is spawned.
-	SPAWN_CLEARANCE = 18,
+	-- Clear air between the *bottom* of a fresh piece and the top of everything it
+	-- could land on. Measured from the piece's lowest possible point — the one it
+	-- would have after a quarter turn, since the holder can spin it at any moment
+	-- — so a tall piece spawns higher instead of spawning inside the tower it is
+	-- meant to land on.
+	SPAWN_CLEARANCE = 14,
 	-- Horizontal travel limit from the arena center, in studs. Just inside the
 	-- platform's half width so a piece can overhang but not fly off into space.
 	STEER_LIMIT_X = 22,
@@ -68,17 +76,56 @@ return {
 	IMPACT_COOLDOWN = 0.25,
 	-- Rolloff for block sounds, in studs.
 	SOUND_RANGE = 140,
-	-- Explosion blocks. Sized to actually gut a tower: the radius covers several
+	-- Bomb blocks. Sized to actually gut a tower: the radius covers several
 	-- courses of blocks and the pressure is enough to throw them clear rather
-	-- than nudge them. An explosive piece should be a moment, not a bump.
+	-- than nudge them. A bomb should be a moment, not a bump.
 	EXPLOSION_RADIUS = 46,
 	EXPLOSION_PRESSURE = 1600000,
 	-- Extra outward kick applied by hand to everything in radius. BlastPressure
 	-- alone falls off sharply and barely moves the heavy welded assemblies, so
 	-- this is what gives the blast its throw.
 	EXPLOSION_IMPULSE = 145,
+	-- The blast is the loudest thing in the game; the kit's clip on its own sits
+	-- level with a block landing, which undersells it.
+	EXPLOSION_VOLUME = 1.7,
+	-- A bomb doesn't go off on contact — it warns first. Three beeps with the
+	-- piece flashing red, which is long enough for the room to see it coming and
+	-- short enough that the tower hasn't finished settling around it.
+	BOMB_BEEPS = 3,
+	BOMB_BEEP_ON = 0.14,
+	BOMB_BEEP_OFF = 0.28,
+	BOMB_FLASH_COLOR = Color3.fromRGB(255, 38, 28),
 	-- Glue blocks: how far a contact can be and still get welded.
 	GLUE_RADIUS = 6,
+	-- Clone blocks: the copy drops in this far above where the original settled,
+	-- nudged sideways so it can't balance perfectly on its own parent.
+	CLONE_RISE = 16,
+	CLONE_OFFSET_X = 3,
+	-- Bouncy blocks: elasticity replaces the dead landing of BLOCK_PHYSICS. The
+	-- high elasticityWeight is what makes the bounce survive contact with the
+	-- ordinary, completely inelastic blocks it lands on.
+	-- (density, friction, elasticity, frictionWeight, elasticityWeight)
+	BOUNCY_PHYSICS = PhysicalProperties.new(0.8, 0.35, 0.72, 1, 10),
+	-- Burning blocks. A lit block blackens over BURN_SECONDS and then falls
+	-- apart, and anything resting against it catches too — so the hazard isn't
+	-- the block, it's the hole it leaves in the tower.
+	BURN_SECONDS = 20,
+	-- How far a contact can be and still catch. Deliberately tight: touching,
+	-- not nearby.
+	BURN_SPREAD_RADIUS = 1.2,
+	-- Grace before a lit block can pass it on, so a burning piece doesn't ignite
+	-- the whole course it lands in on the same frame.
+	BURN_SPREAD_DELAY = 2.5,
+	-- Fraction of the burn spent visibly falling apart (fading out) at the end.
+	BURN_FADE_FRACTION = 0.25,
+	-- Noob blocks. Slow enough to watch, jumpy enough to be a menace to whoever
+	-- is trying to land a piece next to one.
+	NOOB_WALK_SPEED = 8,
+	NOOB_JUMP_POWER = 50,
+	NOOB_JUMP_CHANCE = 0.35,
+	NOOB_STEP_SECONDS = 1.6,
+	-- How long the ragdoll is left lying there after it's squashed.
+	NOOB_DESPAWN_SECONDS = 2.5,
 
 	-- ------------------------------------------------------------------ zones --
 	-- Studio-authored asset folders (Rojo doesn't sync these; see docs).
@@ -149,13 +196,45 @@ return {
 	PLATFORM_SPAWN_COLOR = Color3.fromRGB(255, 255, 255),
 	PLATFORM_SETTLED_COLOR = Color3.fromRGB(12, 12, 16),
 
+	-- ----------------------------------------------------------- checkpoints --
+	-- Clearing a stage isn't a number going up, it's a cutscene: play stops, the
+	-- camera pulls back far enough to show the whole leg the players just built,
+	-- the scaffolding under the new floor is blown apart, and then the camera
+	-- comes back and the next turn starts. The server drives the beats; the
+	-- camera follows PHASE.CHECKPOINT and needs no cue of its own.
+	--
+	-- Total pause is the sum of these four, plus PLATFORM_GROW_SECONDS.
+	CHECKPOINT_PAUSE_SECONDS = 0.7,
+	-- The wide shot is held this long before anything blows up, so the tower gets
+	-- a moment of being looked at.
+	CHECKPOINT_VIEW_SECONDS = 1.5,
+	-- How long the debris flies before it's cleared.
+	CHECKPOINT_BLAST_SECONDS = 2,
+	-- Beat after the dust settles before the queue picks back up.
+	CHECKPOINT_RESUME_SECONDS = 0.8,
+	-- How hard the old tower is thrown. Softer than the storm's blast: this one
+	-- is a demolition, not a punishment.
+	CHECKPOINT_BLAST_HORIZONTAL = 65,
+	CHECKPOINT_BLAST_UP = 45,
+	CHECKPOINT_BLAST_SPIN = 9,
+
 	-- --------------------------------------------------------------- physics --
 	-- Grippy and dead: high friction so a stack doesn't slide itself apart, zero
 	-- elasticity so a dropped piece lands instead of bouncing off the tower.
 	-- (density, friction, elasticity, frictionWeight, elasticityWeight)
 	BLOCK_PHYSICS = PhysicalProperties.new(0.8, 0.9, 0, 10, 1),
-	-- A block counts toward the tower height once its assembly is this slow.
+	-- A block is a candidate for "settled" once its assembly is this slow and
+	-- this close to not spinning.
 	SETTLED_SPEED = 0.6,
+	SETTLED_SPIN = 0.6,
+	-- …but it only *counts* once it has stayed that slow for this long. Without
+	-- the hold, a block thrown up by a bomb is momentarily motionless at the top
+	-- of its arc, and a block that is briefly motionless in mid-air was enough to
+	-- hand the players a checkpoint they hadn't built to. Anything above these
+	-- speeds knocks a settled block back out of the count.
+	SETTLE_CONFIRM_SECONDS = 0.45,
+	UNSETTLE_SPEED = 2.5,
+	UNSETTLE_SPIN = 2,
 	-- Blocks that fall this far below the base top are cleaned up. Pieces only
 	-- ever spawn *above* the tower, so anything under the platform has fallen off
 	-- the side — and if the place has a baseplate it would otherwise sit there
@@ -178,11 +257,67 @@ return {
 	-- The camera looks dead level at a point this far above the tower top, which
 	-- puts the tower and the piece waiting at SPAWN_CLEARANCE both in frame.
 	CAMERA_AIM_LIFT = 10,
+	-- Phone framing. A phone held upright has far less vertical room than a
+	-- monitor, so the desktop lift put the tower top near the middle of the
+	-- screen and everything the player had built ran off the bottom — it read as
+	-- the camera sitting too high. Aiming lower and standing further back gives
+	-- the stack back without losing the piece waiting overhead.
+	CAMERA_AIM_LIFT_TOUCH = 1,
+	CAMERA_DISTANCE_TOUCH = 94,
 	-- Minimum altitude the camera frames, so an empty base isn't at the top edge.
 	CAMERA_MIN_HEIGHT = 14,
 	-- Exponential follow rate (higher = snappier).
 	CAMERA_LERP = 4,
+	-- The checkpoint pull-back is a camera move the player is meant to watch, so
+	-- it eases rather than tracks.
+	CAMERA_CHECKPOINT_LERP = 1.6,
+	-- Headroom either side of the tower in the checkpoint wide shot, in studs.
+	CAMERA_CHECKPOINT_PADDING = 34,
+	-- Floor on the pull-back, as a multiple of the normal shot's distance. A
+	-- short leg already fits in the ordinary framing, so fitting it is not enough
+	-- — the move has to *read* as stepping back to look at what was built.
+	CAMERA_CHECKPOINT_PULLBACK = 1.6,
+	-- Ceiling on the pull-back, so a monstrous leg doesn't put the camera in
+	-- orbit and the tower in one pixel.
+	CAMERA_MAX_DISTANCE = 420,
 	CAMERA_FOV = 60,
+	-- Headroom left above the held piece when the camera has to stretch upward to
+	-- keep it in frame. The piece always clears the tower (SPAWN_CLEARANCE), so
+	-- the camera has to be willing to follow it up there.
+	CAMERA_PIECE_MARGIN = 6,
+	-- Half the width of the play area the camera must always show, in studs: the
+	-- steering limit (22) plus a piece's own half width (8), plus a little air.
+	-- Roblox's FieldOfView is *vertical*, so a phone held upright frames the same
+	-- height as a monitor and far less width — the camera reads the real viewport
+	-- aspect and stands back far enough to cover this on whatever screen it's on.
+	CAMERA_MIN_HALF_WIDTH = 34,
+
+	-- ----------------------------------------------------------------- store --
+	-- Developer products, configured on the Roblox place. Ids are the live ones
+	-- — a product id can't be invented locally, so these are the numbers or the
+	-- purchase prompt errors.
+	--
+	-- The cash bundles are granted generically by StoreService (grant `amount`
+	-- of `currency`); the two action products run handlers registered by
+	-- TowerProductsService.
+	PRODUCTS = {
+		CASH_500 = 3707809246,
+		CASH_1000 = 3707809250,
+		CASH_10000 = 3707809258,
+		-- Throws the whole tower off the plane and starts the run over — the
+		-- storm's outcome, bought.
+		NUKE = 3707809217,
+		-- Clears the current stage from wherever the tower is, cutscene and all.
+		NEXT_CHECKPOINT = 3707809233,
+	},
+	-- The soft currency id this feature registers with the Store. Its balance
+	-- lives at { PROFILE_KEY, "Cash" } — Store debits it through that path.
+	CURRENCY_ID = "coins",
+	-- How often the local skin override re-asserts itself. The server owns
+	-- block materials and re-dresses the tower on every zone change, so an
+	-- equipped material pack has to keep putting its own material back. Cheap:
+	-- one walk of the arena, and only while such a pack is equipped.
+	SKIN_SWEEP_INTERVAL = 0.4,
 
 	-- ------------------------------------------------------------ persistence --
 	-- Top-level profile key this feature owns (registered in PlayerData.luau).
@@ -197,6 +332,7 @@ return {
 		IDLE = 0, -- nobody in the queue
 		AIMING = 1, -- a player holds a piece and the clock is running
 		SETTLING = 2, -- piece dropped, physics resolving
+		CHECKPOINT = 3, -- stage cleared: play is paused for the demolition
 	},
 
 	-- Which surfaces this feature renders. Flip one off to drop that surface
@@ -207,5 +343,14 @@ return {
 		input = true,
 		-- Mouse aiming + click-to-drop. PC only; ignored on touch.
 		pointer = true,
+		-- `skipstage` — a dev handle on the stage clear. Gated by Cmdr's username
+		-- allowlist like every other command; turn it off for a public build.
+		command = true,
+		-- The two Robux buttons on the left rail (Nuke, Next Checkpoint) and the
+		-- server handlers behind them. Off = the products stop being offered and
+		-- any receipt for one is left undelivered rather than silently eaten.
+		actions = true,
+		-- Client-side material override for an equipped skin pack.
+		skins = true,
 	},
 }

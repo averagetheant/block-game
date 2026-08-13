@@ -16,6 +16,9 @@ UIShell.FrameProvider = FrameProvider.FrameProvider
 UIShell.useFrame = FrameProvider.useFrame
 
 UIShell.Frame = require(script.Frame)
+-- Mounted by FrameProvider, so no consumer needs this — exported for the story
+-- and for a game that wants the blur/zoom around something that isn't a frame.
+UIShell.FocusEffect = require(script.FocusEffect)
 UIShell.HideWhenFrameOpen = require(script.HideWhenFrameOpen)
 
 return UIShell

@@ -53,6 +53,7 @@ export type GemBackgroundProps = contract.GemBackgroundProps
 
 export type Boil = {
 	ui: typeof(require(ReplicatedStorage.Shared.ui)),
+	assets: typeof(require(ReplicatedStorage.Shared.ui.assets)),
 	audio: typeof(require(ReplicatedStorage.Shared.audio)),
 	Loader: typeof(require(ReplicatedStorage.Packages.Loader)),
 	LoadOrdered: typeof(require(ReplicatedStorage.Shared.utils.LoadOrdered)),
@@ -64,6 +65,13 @@ export type Boil = {
 local loaders: { [string]: () -> any } = {
 	ui = function()
 		return require(ReplicatedStorage.Shared.ui)
+	end,
+	-- The icon / palette registry on its own, without the React kit behind it.
+	-- Also reachable as `Boil.ui.assets`, but a shared registration file that
+	-- only wants an icon id runs on the server too, and `Boil.ui` would drag
+	-- React onto it for the sake of one string.
+	assets = function()
+		return require(ReplicatedStorage.Shared.ui.assets)
 	end,
 	audio = function()
 		return require(ReplicatedStorage.Shared.audio)

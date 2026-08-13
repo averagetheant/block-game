@@ -102,6 +102,9 @@ export type TextProps = {
 	layoutOrder: number?,
 	zIndex: number?,
 	automaticSize: Enum.AutomaticSize?,
+	-- Wrap at the label's width instead of running off the end. Pair with
+	-- `automaticSize = Y` for a block of copy that sizes to its content.
+	wrapped: boolean?,
 	-- Drop-shadow (gem look); flat skins may render a plain label.
 	shadow: boolean?,
 	shadowColor: Color3?,

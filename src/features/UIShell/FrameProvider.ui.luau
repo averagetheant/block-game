@@ -9,6 +9,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local React = require(ReplicatedStorage.Packages.React)
+local FocusEffect = require(script.Parent.FocusEffect)
 local Types = require(script.Parent.Types)
 
 local FrameContext = React.createContext(nil :: Types.FrameContextValue?)
@@ -45,7 +46,19 @@ local function FrameProvider(props: ProviderProps)
 		}
 	end, { openFrameId, open, close, toggle } :: { any })
 
-	return React.createElement(FrameContext.Provider, { value = value }, props.children)
+	-- The focus effect rides along with the provider rather than being something
+	-- each frame opts into, so every frame — present and future — blurs the world
+	-- behind it and nudges the camera in. It renders nothing.
+	local children: { [string]: any } = {
+		FocusEffect = React.createElement(FocusEffect, { isOpen = openFrameId ~= nil }),
+	}
+	if props.children then
+		for key, child in props.children do
+			children[key] = child
+		end
+	end
+
+	return React.createElement(FrameContext.Provider, { value = value }, children)
 end
 
 local function useFrame(): Types.FrameContextValue

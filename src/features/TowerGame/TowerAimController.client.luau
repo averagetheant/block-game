@@ -19,6 +19,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
+local BlockLabel = require(ReplicatedStorage.Features.TowerGame.BlockLabel)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 
@@ -65,10 +66,18 @@ local function setServerPieceHidden(hidden: boolean)
 	if model == nil then
 		return
 	end
-	for _, part in model:GetChildren() do
+	for _, part in model:GetDescendants() do
 		if part:IsA("BasePart") then
 			part.LocalTransparencyModifier = if hidden then 1 else 0
 		end
+	end
+	-- The name plate is a GUI, so LocalTransparencyModifier doesn't reach it and
+	-- the holder would read two of them — the smooth one on the preview and the
+	-- real one lagging a frame behind. Disabling an instance client-side is local
+	-- to this player, same as the transparency above.
+	local label = BlockLabel.find(model)
+	if label then
+		label.Enabled = not hidden
 	end
 end
 
@@ -139,7 +148,9 @@ local function setup()
 	-- and every other player nothing.
 	local clone = piece:Clone()
 	clone.Name = "LocalPreview"
-	for _, part in clone:GetChildren() do
+	-- Descendants, not children: a Noob hangs its accessories one level deeper,
+	-- and an unanchored hat on an anchored preview drops through the floor.
+	for _, part in clone:GetDescendants() do
 		if part:IsA("BasePart") then
 			-- The real piece is the one that collides; this is pure decoration.
 			part.CanCollide = false
@@ -147,6 +158,12 @@ local function setup()
 			part.CanTouch = false
 			part.Anchored = true
 		end
+	end
+	-- A preview is scenery. Left in, a rig's Humanoid would try to stand it up
+	-- and animate it against a model the client is puppeting by hand.
+	local humanoid = clone:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid:Destroy()
 	end
 	clone.Parent = workspace
 	preview = clone
@@ -205,6 +222,16 @@ end
 local function step(deltaTime: number)
 	if not active then
 		return
+	end
+
+	-- X is ours, Y is the server's. It parks the piece clear of the tower and
+	-- lifts it again if the tower grows underneath (a Noob climbing, a Clone
+	-- landing), so the preview reads the altitude back every frame instead of
+	-- keeping the one it was handed — otherwise the holder aims a piece that is
+	-- drawn lower than the one that will actually fall.
+	local model = serverPiece
+	if model then
+		baseY = model:GetPivot().Position.Y
 	end
 
 	if steerDir ~= 0 then

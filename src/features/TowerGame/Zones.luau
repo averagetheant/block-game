@@ -11,7 +11,7 @@
 -- authored in Studio (Rojo doesn't sync them). A missing one degrades to "no
 -- change" rather than erroring; see TowerZoneController.
 
-export type Kind = "normal" | "retro" | "snowy" | "stormy"
+export type Kind = "normal" | "retro" | "snowy" | "stormy" | "space"
 
 export type Zone = {
 	id: number,
@@ -24,9 +24,18 @@ export type Zone = {
 	sky: string?,
 	tint: Color3,
 	weight: number,
+	-- World gravity while this zone is up. nil means Roblox's default, which is
+	-- what every zone but Space wants. The server writes `workspace.Gravity`, so
+	-- this is one of the physics halves a client can't fake.
+	gravity: number?,
 }
 
 local Zones = {}
+
+-- Roblox's out-of-the-box gravity, restored by every zone that doesn't name its
+-- own. Kept here rather than in Constants so a zone's gravity and its fallback
+-- can't drift apart.
+Zones.DEFAULT_GRAVITY = 196.2
 
 Zones.List = {
 	{
@@ -63,6 +72,18 @@ Zones.List = {
 		tint = Color3.fromRGB(150, 160, 200),
 		weight = 2,
 	},
+	{
+		id = 5,
+		kind = "space",
+		name = "Space Zone",
+		warning = "Gravity is low!",
+		sky = "Space",
+		tint = Color3.fromRGB(176, 150, 255),
+		weight = 2,
+		-- A sixth of normal: pieces drift down slowly enough to place with care,
+		-- and a knocked tower takes an age to come apart.
+		gravity = 30,
+	},
 } :: { Zone }
 
 local byId: { [number]: Zone } = {}
@@ -77,6 +98,10 @@ Zones.DEFAULT_ID = 1
 
 function Zones.get(id: number): Zone
 	return byId[id] or byId[Zones.DEFAULT_ID]
+end
+
+function Zones.gravityOf(id: number): number
+	return Zones.get(id).gravity or Zones.DEFAULT_GRAVITY
 end
 
 -- Weighted pick. `avoidId` keeps the same special zone from landing twice in a

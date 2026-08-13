@@ -27,11 +27,14 @@ Features and skins are also **distributable packages** — one folder, one
 | Doc | Feature |
 | --- | ------- |
 | [TowerGame.md](TowerGame.md) | Turn-based co-op block stacker (the game) |
+| [GamemodeVote.md](GamemodeVote.md) | Between-stages gamemode poll + the `Gamemode.luau` registration convention |
+| [Store.md](Store.md) | Shop + inventory, currencies, Robux products + the `Store.luau` discovery convention |
+| [Reactions.md](Reactions.md) | Bottom emoji bar broadcast to the whole server |
 | [PlayerData.md](PlayerData.md) | Profile persistence + the `registerTemplate` discovery convention |
 | [Settings.md](Settings.md) | Settings registry, server validation, the `Settings.luau` discovery convention |
 | [Notes.md](Notes.md) | Persisted per-player note (full-stack reference feature) |
 | [Music.md](Music.md) | Settings-driven background music |
 | [PickupFX.md](PickupFX.md) | Client-side pickup animation system |
-| [Sidebar.md](Sidebar.md) | HUD navigation chrome |
+| [Sidebar.md](Sidebar.md) | The left rail + the `Sidebar.luau` registration convention |
 | [UIShell.md](UIShell.md) | Global frame open/close system |
 | [UIShowcase.md](UIShowcase.md) | Demo HUD / entry surface |

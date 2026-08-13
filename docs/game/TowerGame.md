@@ -2,7 +2,7 @@
 
 A Tricky Towers-style co-op stacker. Everyone plays **one shared tower**: players
 take turns, each turn hands the holder a tetromino they can slide and rotate, and
-a 20-second clock drops it for them if they dither. Over the top of that runs the
+a 10-second clock drops it for them if they dither. Over the top of that runs the
 **storm** — a stage clock demanding a target height, which pays out a permanent
 floor when the players make it, blows up everything below it, and moves the run
 into a new zone. Roughly one piece in twenty is a *type* — a bomb, a burning
@@ -19,7 +19,7 @@ and no scoring (see [Not built yet](#not-built-yet)).
 1. `TowerService` builds the arena (base platform) at server start.
 2. Players enter a round-robin `queue` on join.
 3. **Turn** — the holder gets a piece spawned clear of the tower (see
-   [The held piece](#the-held-piece)) and `TURN_SECONDS` (20) on the clock.
+   [The held piece](#the-held-piece)) and `TURN_SECONDS` (10) on the clock.
 4. The holder steers (continuous left/right) and spins (quarter turns). The piece
    is an *anchored, non-colliding, server-owned Model*, so every player watches
    the same aim with no transform packets involved.
@@ -452,6 +452,14 @@ All under `ReplicatedStorage.Assets` (Rojo does **not** sync these).
 | Asset | What it is | Missing means |
 | ----- | ---------- | ------------- |
 | `Assets.Noob` | A `Model` with a `Humanoid` and a `HumanoidRootPart` — a classic Noob rig | The Noob type silently rolls an ordinary block instead |
+
+> **The rig must be named exactly `Noob`.** Roblox's Rig Builder inserts one
+> called `Dummy`, and `NoobBlock.template()` looks the name up directly — a rig
+> that is otherwise perfect but still called `Dummy` fails the lookup, and the
+> failure is *silent by design* (a missing rig costs the joke, not the turn). If
+> Noobs never appear, check the name before anything else. This is exactly how it
+> broke the first time.
+
 | `Assets.Sounds.BombBeep` | A short `Sound`, the bomb's warning beep | The fuse still flashes red, just silently |
 | `Assets.Zones.Space` | A `Sky` for the Space zone | Space zone keeps whatever sky was up |
 
@@ -606,7 +614,7 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 
 | Constant | Effect |
 | -------- | ------ |
-| `TURN_SECONDS` | The drop clock (20) |
+| `TURN_SECONDS` | The drop clock (10) |
 | `SETTLE_SECONDS` | Pause between turns |
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `SPAWN_CLEARANCE` | Clear air under a fresh piece, measured from its lowest possible point — see [The held piece](#the-held-piece) |

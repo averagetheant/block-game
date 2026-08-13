@@ -41,7 +41,7 @@ return {
 
 	-- ---------------------------------------------------------------- turns --
 	-- Hard cap on how long the holder may aim before the piece drops itself.
-	TURN_SECONDS = 20,
+	TURN_SECONDS = 10,
 	-- Grace period after a drop before the next player is handed a piece.
 	SETTLE_SECONDS = 1.5,
 	-- Clear air between the *bottom* of a fresh piece and the top of everything it

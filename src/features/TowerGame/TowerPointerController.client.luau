@@ -1,11 +1,12 @@
--- Mouse presentation for TowerGame (PC): the piece follows the pointer and drops
--- on click. An *alternative* to the keyboard, not a replacement — both stay live,
--- and they don't fight because this only speaks while the mouse is actually
--- moving, and the server drops any held steer direction when an aim arrives.
+-- Pointing presentation for TowerGame: the piece goes where you point, by mouse
+-- on PC and by tap or drag on touch. An *alternative* to the keyboard and the
+-- steering stick, not a replacement — all of them stay live, and they don't
+-- fight because this only speaks while the pointer is actually moving, and the
+-- server drops any held steer direction when an aim arrives.
 --
--- The mouse is a screen position and the piece lives on a world plane, so every
--- frame that matters we cast the pointer into the world and solve for where it
--- crosses Z = PLANE_Z. That's the X the piece wants.
+-- A pointer is a screen position and the piece lives on a world plane, so every
+-- frame that matters we cast it into the world and solve for where it crosses
+-- Z = PLANE_Z. That's the X the piece wants. Both devices share that solve.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -23,15 +24,17 @@ local TowerPointerController = {}
 -- Screen movement (in pixels) that counts as "the player moved the mouse".
 local MOVE_THRESHOLD = 1
 
--- Where the pointer crosses the play plane, or nil if it never does (the camera
--- is level with the plane, or the plane is behind the viewer).
-local function pointerPlaneX(mouse: Mouse): number?
+-- Where a screen point crosses the play plane, or nil if it never does (the
+-- camera is level with the plane, or the plane is behind the viewer). Shared by
+-- the mouse and the touch handlers — both are a screen position that has to be
+-- turned into an X on the world plane.
+local function planeXAt(screenX: number, screenY: number): number?
 	local camera = workspace.CurrentCamera
 	if camera == nil then
 		return nil
 	end
 
-	local ray = camera:ScreenPointToRay(mouse.X, mouse.Y)
+	local ray = camera:ScreenPointToRay(screenX, screenY)
 	local directionZ = ray.Direction.Z
 	if math.abs(directionZ) < 1e-4 then
 		return nil
@@ -44,13 +47,54 @@ local function pointerPlaneX(mouse: Mouse): number?
 	return ray.Origin.X + ray.Direction.X * distance
 end
 
+-- Touch: tapping the world sends the piece to where you tapped.
+--
+-- `gameProcessed` is doing the load-bearing work. Every HUD control is a GUI
+-- element, so a tap on the steering stick, TURN, DROP or the reaction bar
+-- arrives already processed and is ignored here — without that check, dragging
+-- the stick would also fling the piece at the stick's own screen position.
+local function startTouch()
+	local function moveTo(input: InputObject)
+		if not TowerController.isMyTurn() then
+			return
+		end
+		local x = planeXAt(input.Position.X, input.Position.Y)
+		if x == nil then
+			return
+		end
+		TowerAimController.pointAt(x)
+	end
+
+	UserInputService.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed or input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		moveTo(input)
+	end)
+
+	-- A held finger keeps steering, so a tap and a drag are the same gesture and
+	-- neither needs explaining. Still gated on `gameProcessed` at the *start*
+	-- only — a drag that began on the world shouldn't die crossing a button.
+	UserInputService.InputChanged:Connect(function(input, gameProcessed)
+		if gameProcessed or input.UserInputType ~= Enum.UserInputType.Touch then
+			return
+		end
+		moveTo(input)
+	end)
+end
+
 function TowerPointerController.Start()
 	if not Constants.Presentations.pointer then
 		return
 	end
-	-- Touch devices drive the HUD buttons instead; a touch "mouse" would make the
-	-- piece jump to wherever the last tap landed.
-	if not UserInputService.MouseEnabled or UserInputService.TouchEnabled then
+
+	if UserInputService.TouchEnabled then
+		startTouch()
+	end
+
+	-- The mouse half. A touch device without a mouse stops here: it has the tap
+	-- handler above instead.
+	if not UserInputService.MouseEnabled then
 		return
 	end
 
@@ -81,7 +125,7 @@ function TowerPointerController.Start()
 		end
 		lastScreen = screen
 
-		local x = pointerPlaneX(mouse)
+		local x = planeXAt(mouse.X, mouse.Y)
 		if x == nil then
 			return
 		end

@@ -29,6 +29,29 @@ local SettingsService = {}
 -- but ahead of gameplay services that might want to read settings at Start.
 SettingsService.Priority = 5
 
+-- What `id` is set to for this player, falling back to the registered default.
+--
+-- The server-side mirror of SettingsController.get, for features whose setting
+-- changes what the *server* does — a toggle that only the client honours isn't
+-- a rule, it's a suggestion. Returns the default for a profile that hasn't
+-- loaded yet, which is the same answer the player would see.
+function SettingsService.get(player: Player, id: string): any
+	local def = Registry.getSetting(id)
+	local fallback = if def then def.default else nil
+
+	local data = PlayerDataService.GetData(player)
+	local values = if data then data[Constants.PROFILE_KEY] else nil
+	if typeof(values) ~= "table" then
+		return fallback
+	end
+
+	local value = values[id]
+	if value == nil then
+		return fallback
+	end
+	return value
+end
+
 function SettingsService.Start()
 	Packets.SetToggle.listen(function(payload: { id: string, value: boolean }, player: Player)
 		local id = payload.id

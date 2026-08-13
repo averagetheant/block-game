@@ -25,6 +25,7 @@ local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 -- Client-realm siblings (StarterPlayerScripts.Features.*).
 local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
 local TowerAimController = require(script.Parent.TowerAimController)
+local TowerCameraController = require(script.Parent.TowerCameraController)
 local TowerController = require(script.Parent.TowerController)
 local TowerFeedbackController = require(script.Parent.TowerFeedbackController)
 local TowerZoneController = require(script.Parent.TowerZoneController)
@@ -128,6 +129,11 @@ return function()
 		end
 	end, {})
 
+	-- Mirrors TowerCameraController's toggle so the button can colour itself.
+	-- Seeded from the controller rather than assumed false, so a remount doesn't
+	-- show the button in the wrong state.
+	local overview, setOverview = React.useState(TowerCameraController.isOverview)
+
 	local profile = Boil.useReplica(PlayerDataController, Constants.PROFILE_KEY)
 
 	if state == nil then
@@ -184,5 +190,13 @@ return function()
 		onSteer = TowerAimController.setSteer,
 		onRotate = TowerAimController.rotate,
 		onDrop = TowerAimController.drop,
+
+		-- The camera pull-back. State lives in the camera controller, not here:
+		-- it's the thing that has to arbitrate the toggle against the checkpoint
+		-- and round-break shots, so it owns the answer and this only mirrors it.
+		overview = overview,
+		onToggleCamera = function()
+			setOverview(TowerCameraController.toggleOverview())
+		end,
 	})
 end

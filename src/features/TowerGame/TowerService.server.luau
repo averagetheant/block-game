@@ -46,6 +46,9 @@ local TowerStatsService = require(script.Parent.TowerStatsService)
 -- Whose skin pack is on the piece. Read once per turn, on the server, so the
 -- block everyone sees carries the look its placer paid for.
 local StoreService = require(script.Parent.Parent.Store.StoreService)
+-- The "Not playing" toggle. Read here rather than trusted from the client: a
+-- setting that changes whose turn it is has to be the server's answer.
+local SettingsService = require(script.Parent.Parent.Settings.SettingsService)
 
 -- The between-stages vote. TowerGame is the consumer here: GamemodeVote owns the
 -- poll and knows nothing about towers, TowerGame owns the modes (Gamemodes.luau,
@@ -197,16 +200,33 @@ local nextStrikeAt = 0
 local pendingStrikeX: number? = nil
 local strikeDueAt = 0
 
+-- Whether a player has opted out of taking turns.
+--
+-- The "more than one player" rule is the whole reason this isn't just a settings
+-- read: a lone player who left the toggle on would sit watching an empty arena
+-- with no way to work out why nothing was happening. With company, sitting out
+-- is a real choice; alone, it's a soft-lock, so the setting is ignored.
+local function isSpectating(player: Player): boolean
+	if #Players:GetPlayers() <= 1 then
+		return false
+	end
+	return SettingsService.get(player, Constants.SETTING_NOT_PLAYING) == true
+end
+
 -- Turn order for the HUD: whoever holds the piece first, then the queue in the
 -- order they'll play. `queue` already rotates the holder to the back on their
 -- turn, so the tail of this list is the player who went immediately before.
+--
+-- Spectators are left out. They keep their place in `queue` — the setting takes
+-- them out of the turn order, not the room — but a headshot sitting in the strip
+-- for someone who never gets a piece is the strip lying about what happens next.
 local function buildOrder(): { number }
 	local order = {}
 	if state.holderUserId ~= 0 then
 		table.insert(order, state.holderUserId)
 	end
 	for _, player in queue do
-		if player.UserId ~= state.holderUserId then
+		if player.UserId ~= state.holderUserId and not isSpectating(player) then
 			table.insert(order, player.UserId)
 		end
 	end
@@ -1847,15 +1867,25 @@ end
 -- ----------------------------------------------------------------- the turns --
 
 local function nextPlayer(): Player?
-	while #queue > 0 do
+	-- Bounded by the queue length rather than `while #queue > 0`: a spectator is
+	-- put back on the queue rather than dropped from it, so an unbounded loop
+	-- would spin forever the moment everyone opted out.
+	for _ = 1, #queue do
 		local player = table.remove(queue, 1) :: Player
 		if player.Parent ~= Players then
 			continue
 		end
-		-- Back of the line, so the rotation is fair with any player count.
+		-- Back of the line, so the rotation is fair with any player count. A
+		-- spectator keeps its place in the rotation — the setting takes them out
+		-- of the turn order, not out of the room, and toggling it back on has to
+		-- put them straight back in.
 		table.insert(queue, player)
-		return player
+		if not isSpectating(player) then
+			return player
+		end
 	end
+	-- Everyone is either gone or sitting out. The turn loop goes idle and the
+	-- storm clock holds, which is the honest state for "nobody is playing".
 	return nil
 end
 

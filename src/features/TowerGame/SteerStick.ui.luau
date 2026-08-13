@@ -16,6 +16,7 @@
 -- would re-render the whole HUD for the length of the drag.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
 
 local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
@@ -39,19 +40,33 @@ return function(props: Props)
 	-- The active touch. Held in a ref rather than state because it changes on
 	-- every drag event and nothing renders from it.
 	local dragging = React.useRef(false)
+	-- The exact InputObject that started the drag, so the service-level hooks
+	-- below can tell this gesture from any other finger on the screen.
+	local tracked = React.useRef(nil :: InputObject?)
 
 	local half = Constants.STICK_TRACK_WIDTH / 2 - Constants.STICK_KNOB_SIZE / 2
 
-	local moveKnob = React.useCallback(function(value: number)
+	-- The knob follows the finger *past* the end of the track, up to
+	-- STICK_OVERREACH. Pinning it hard at the edge is what read as a snap: the
+	-- knob stopped dead under a thumb that was still moving, so the control
+	-- looked like it had let go. It keeps travelling instead — the steering is
+	-- already at full by then, and the knob's job past that point is only to
+	-- show that the stick is still held.
+	local moveKnob = React.useCallback(function(raw: number)
 		local knob = knobRef.current
 		if knob == nil then
 			return
 		end
-		knob.Position = UDim2.new(0.5, value * half, 0.5, 0)
+		local travel = math.clamp(raw, -Constants.STICK_OVERREACH, Constants.STICK_OVERREACH)
+		knob.Position = UDim2.new(0.5, travel * half, 0.5, 0)
 	end, { half })
 
-	-- Screen X → deflection. Measured against the track's own absolute position
-	-- so it stays correct wherever the HUD puts the control, on any screen size.
+	-- Screen X → deflection, **unclamped**. The caller clamps for the steer value
+	-- and lets the knob use the raw one, so the two can disagree past the edge:
+	-- speed saturates at 1, travel keeps going.
+	--
+	-- Measured against the track's own absolute position so it stays correct
+	-- wherever the HUD puts the control, on any screen size.
 	local steerFrom = React.useCallback(function(screenX: number): number
 		local track = trackRef.current
 		if track == nil then
@@ -62,7 +77,7 @@ return function(props: Props)
 		if reach <= 0 then
 			return 0
 		end
-		return math.clamp((screenX - centre) / reach, -1, 1)
+		return (screenX - centre) / reach
 	end, {})
 
 	local release = React.useCallback(function()
@@ -75,9 +90,11 @@ return function(props: Props)
 	end, { moveKnob, props.onSteer } :: { any })
 
 	local update = React.useCallback(function(screenX: number)
-		local value = steerFrom(screenX)
-		moveKnob(value)
-		props.onSteer(value)
+		local raw = steerFrom(screenX)
+		-- Knob takes the raw value (so it keeps moving past the edge), steering
+		-- takes the clamped one (so speed tops out at STEER_SPEED).
+		moveKnob(raw)
+		props.onSteer(math.clamp(raw, -1, 1))
 	end, { steerFrom, moveKnob, props.onSteer } :: { any })
 
 	-- A disabled stick must not keep steering from wherever it was left: it isn't
@@ -87,6 +104,36 @@ return function(props: Props)
 			release()
 		end
 	end, { props.disabled, release } :: { any })
+
+	-- The drag is tracked on UserInputService, not on the track, because a thumb
+	-- that slides off the control still owns the gesture until it lifts. Bound to
+	-- the frame's own events, movement stopped the instant the finger crossed the
+	-- edge — which on a small control is most of the time, and felt like the
+	-- stick dropping out from under you.
+	--
+	-- `InputObject` identity is what ties the move and the end back to the touch
+	-- that started it, so a second finger elsewhere can't steal or end this drag.
+	React.useEffect(function()
+		local moved = UserInputService.InputChanged:Connect(function(input: InputObject)
+			if input ~= tracked.current then
+				return
+			end
+			update(input.Position.X)
+		end)
+
+		local ended = UserInputService.InputEnded:Connect(function(input: InputObject)
+			if input ~= tracked.current then
+				return
+			end
+			tracked.current = nil
+			release()
+		end)
+
+		return function()
+			moved:Disconnect()
+			ended:Disconnect()
+		end
+	end, { update, release } :: { any })
 
 	return React.createElement("TextButton", {
 		ref = trackRef,
@@ -111,33 +158,11 @@ return function(props: Props)
 				return
 			end
 			dragging.current = true
+			-- Remembered so the service-level move/end hooks can recognise this
+			-- finger after it has left the control.
+			tracked.current = input
 			update(input.Position.X)
 		end,
-		-- Bound on the track, so a thumb that slides past the end of it keeps
-		-- steering at full deflection instead of silently letting go.
-		[React.Event.InputChanged] = function(_, input: InputObject)
-			if not dragging.current then
-				return
-			end
-			if
-				input.UserInputType ~= Enum.UserInputType.Touch
-				and input.UserInputType ~= Enum.UserInputType.MouseMovement
-			then
-				return
-			end
-			update(input.Position.X)
-		end,
-		[React.Event.InputEnded] = function(_, input: InputObject)
-			if
-				input.UserInputType ~= Enum.UserInputType.Touch
-				and input.UserInputType ~= Enum.UserInputType.MouseButton1
-			then
-				return
-			end
-			release()
-		end,
-		-- A thumb that leaves the control entirely never fires InputEnded on it.
-		[React.Event.MouseLeave] = release,
 	}, {
 		Corner = React.createElement("UICorner", {
 			CornerRadius = UDim.new(0, Constants.STICK_TRACK_HEIGHT / 2),

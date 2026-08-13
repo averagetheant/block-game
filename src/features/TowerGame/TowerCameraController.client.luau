@@ -22,6 +22,24 @@ local TowerCameraController = {}
 
 local RENDER_NAME = "TowerGameCamera"
 
+-- The player's own pull-back, toggled from the HUD's camera button.
+--
+-- Deliberately *not* honoured during the checkpoint cutscene or the round break:
+-- those own the camera for their duration and frame something specific, and a
+-- player who happened to leave overview on would otherwise miss the shot the
+-- game is trying to show them. `target` checks phase first for exactly that
+-- reason — the toggle is a preference, not an override.
+local overview = false
+
+function TowerCameraController.toggleOverview(): boolean
+	overview = not overview
+	return overview
+end
+
+function TowerCameraController.isOverview(): boolean
+	return overview
+end
+
 -- The altitude every shot is measured from. The server publishes it as an
 -- attribute once the arena exists, which may be after the client boots.
 local function waitForBaseTop(): number
@@ -123,9 +141,28 @@ function TowerCameraController.Start()
 	task.spawn(function()
 		local baseTopY = waitForBaseTop()
 
+		-- The whole tower, base to top, with room around it. Unlike `wideShot`
+		-- (which frames only the current leg, from `zoneBaseHeight`) this starts
+		-- at the base — the button's promise is "show me everything I've built",
+		-- not "show me this stage".
+		local function overviewShot(baseTopY: number, data: TowerController.State): CFrame
+			local top = baseTopY + math.max(data.height, Constants.CAMERA_MIN_HEIGHT)
+			local span = math.max(top - baseTopY, 1) + Constants.CAMERA_OVERVIEW_PADDING
+			return shot(
+				(baseTopY + top) / 2,
+				distanceFor(span, distance * Constants.CAMERA_CHECKPOINT_PULLBACK)
+			)
+		end
+
 		local function target(data: TowerController.State): (CFrame, number)
-			if data.phase == Constants.PHASE.CHECKPOINT then
+			-- Phase wins over the player's toggle. The checkpoint cutscene and the
+			-- round break each own the camera and frame something specific; an
+			-- overview left switched on must not eat that shot.
+			if data.phase == Constants.PHASE.CHECKPOINT or data.phase == Constants.PHASE.GAMEOVER then
 				return wideShot(baseTopY, data), Constants.CAMERA_CHECKPOINT_LERP
+			end
+			if overview then
+				return overviewShot(baseTopY, data), Constants.CAMERA_CHECKPOINT_LERP
 			end
 			return trackingShot(baseTopY, data), Constants.CAMERA_LERP
 		end

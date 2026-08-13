@@ -68,6 +68,11 @@ return {
 	STICK_TRACK_WIDTH = 260,
 	STICK_TRACK_HEIGHT = 74,
 	STICK_KNOB_SIZE = 62,
+	-- How far past the end of the track the knob may follow the finger, as a
+	-- multiple of the track's half-width. Steering is already saturated by then;
+	-- this exists purely so the knob doesn't stop dead under a thumb that's still
+	-- moving, which reads as the control letting go.
+	STICK_OVERREACH = 1.35,
 	STICK_TRACK_COLOR = Color3.fromRGB(18, 20, 30),
 	STICK_KNOB_COLOR = Color3.fromRGB(86, 142, 255),
 	STICK_STROKE_COLOR = Color3.fromRGB(226, 230, 245),
@@ -413,6 +418,11 @@ return {
 	-- short leg already fits in the ordinary framing, so fitting it is not enough
 	-- — the move has to *read* as stepping back to look at what was built.
 	CAMERA_CHECKPOINT_PULLBACK = 1.6,
+	-- Air around the tower in the HUD button's overview shot. Bigger than the
+	-- checkpoint's padding because this frames the *whole* tower, and a stack
+	-- pressed against both edges of the screen reads as clipped rather than as
+	-- pulled back.
+	CAMERA_OVERVIEW_PADDING = 52,
 	-- Ceiling on the pull-back, so a monstrous leg doesn't put the camera in
 	-- orbit and the tower in one pixel.
 	CAMERA_MAX_DISTANCE = 420,
@@ -473,6 +483,25 @@ return {
 	-- leaderstats value names, shown on the in-game leaderboard.
 	STAT_BLOCKS = "Blocks Placed",
 	STAT_HEIGHT = "Biggest Height",
+
+	-- -------------------------------------------------------- landing preview --
+	-- The translucent ghost showing where the held piece would come to rest.
+	-- Client-side and holder-only: it answers "does this fit there", which is the
+	-- aiming player's question, and everyone's ghosts at once would be a wall of
+	-- translucent blocks.
+	SETTING_LANDING_PREVIEW = "tower.landingPreview",
+	LANDING_TRANSPARENCY = 0.65,
+	-- How far down the drop solve looks. Past this there's nothing under the
+	-- piece worth landing on (it's aimed off the side), and the ghost hides
+	-- rather than sitting at the bottom of the cast.
+	LANDING_MAX_DROP = 400,
+
+	-- ------------------------------------------------------------- spectating --
+	-- Setting id (registered in Settings.luau). On, the turn queue skips this
+	-- player: they stay in the server, watch, react and chat, but never get a
+	-- piece. Read on the *server* — a toggle the client alone honoured wouldn't
+	-- be a rule, it'd be a suggestion.
+	SETTING_NOT_PLAYING = "tower.notPlaying",
 
 	-- --------------------------------------------------------------- phases --
 	-- Broadcast as a uint8; the HUD reads it to pick its status line.

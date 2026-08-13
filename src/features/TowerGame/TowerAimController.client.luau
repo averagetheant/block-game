@@ -25,6 +25,9 @@ local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 
 -- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
 local TowerController = require(script.Parent.TowerController)
+-- The landing-preview toggle. Read at build time, so flipping it takes effect on
+-- the next turn rather than mid-aim.
+local SettingsController = require(script.Parent.Parent.Settings.SettingsController)
 
 local TowerAimController = {}
 
@@ -32,6 +35,11 @@ local TowerAimController = {}
 TowerAimController.Priority = 10
 
 local preview: Model? = nil
+-- The ghost showing where the piece would land if dropped now. Local to the
+-- holder — everyone else seeing every aim would be a wall of translucent blocks,
+-- and the point of it is to answer "will this fit", which is the holder's
+-- question alone.
+local landing: Model? = nil
 local serverPiece: Model? = nil
 -- True for the whole of our turn. Intents gate on this rather than on `preview`
 -- so a preview that failed to appear can't brick the turn — worst case aiming
@@ -81,11 +89,112 @@ local function setServerPieceHidden(hidden: boolean)
 	end
 end
 
+-- --------------------------------------------------------- the landing ghost --
+--
+-- Where the piece would come to rest if it were dropped right now, drawn as a
+-- translucent copy of it.
+--
+-- It answers the one question aiming actually poses — "does this fit there?" —
+-- which the piece hanging in the air above the tower can't. Purely local: it's
+-- built on the client, shown only to the holder, and the server never learns it
+-- exists.
+--
+-- The drop is solved by raycasting *down from each cell* and taking the shortest
+-- fall. Per-cell rather than from the model's pivot because an L or a T has
+-- cells at different depths, and the piece stops when its *lowest* cell lands —
+-- casting from the middle would sink the ghost into whatever is under the
+-- overhang.
+
+local landingParams = RaycastParams.new()
+landingParams.FilterType = Enum.RaycastFilterType.Exclude
+
+local function buildLanding(source: Model)
+	if landing then
+		landing:Destroy()
+		landing = nil
+	end
+	if not SettingsController.get(Constants.SETTING_LANDING_PREVIEW) then
+		return
+	end
+
+	local ghost = source:Clone()
+	ghost.Name = "LandingPreview"
+	for _, part in ghost:GetDescendants() do
+		if part:IsA("BasePart") then
+			part.CanCollide = false
+			part.CanQuery = false
+			part.CanTouch = false
+			part.Anchored = true
+			part.Transparency = Constants.LANDING_TRANSPARENCY
+			part.Material = Enum.Material.SmoothPlastic
+			part.CastShadow = false
+		elseif part:IsA("Humanoid") or part:IsA("Highlight") or part:IsA("BillboardGui") then
+			-- A ghost is scenery. A Humanoid would try to stand it up, and the
+			-- type tell and name plate already exist on the real piece above.
+			part:Destroy()
+		end
+	end
+	ghost.Parent = workspace
+	landing = ghost
+end
+
+local function updateLanding(aimed: CFrame)
+	local ghost = landing
+	if ghost == nil then
+		return
+	end
+
+	-- Everything the cast must ignore: the real piece (it's directly above), the
+	-- local preview, and the ghost itself.
+	local exclude: { Instance } = { ghost }
+	if serverPiece then
+		table.insert(exclude, serverPiece)
+	end
+	if preview then
+		table.insert(exclude, preview)
+	end
+	landingParams.FilterDescendantsInstances = exclude
+
+	ghost:PivotTo(aimed)
+
+	local drop = math.huge
+	for _, part in ghost:GetDescendants() do
+		if not part:IsA("BasePart") then
+			continue
+		end
+		local from = part.Position - Vector3.new(0, part.Size.Y / 2, 0)
+		local hit = workspace:Raycast(from, Vector3.new(0, -Constants.LANDING_MAX_DROP, 0), landingParams)
+		drop = math.min(drop, if hit then (from - hit.Position).Magnitude else Constants.LANDING_MAX_DROP)
+	end
+
+	-- Nothing underneath at all (aimed off the side of the platform): the ghost
+	-- would sit at the bottom of the cast, which is meaningless, so hide it.
+	if drop >= Constants.LANDING_MAX_DROP then
+		for _, part in ghost:GetDescendants() do
+			if part:IsA("BasePart") then
+				part.Transparency = 1
+			end
+		end
+		return
+	end
+
+	for _, part in ghost:GetDescendants() do
+		if part:IsA("BasePart") then
+			part.Transparency = Constants.LANDING_TRANSPARENCY
+		end
+	end
+	ghost:PivotTo(aimed - Vector3.new(0, drop, 0))
+end
+
 local function teardown()
 	active = false
 	if preview then
 		preview:Destroy()
 		preview = nil
+	end
+	if landing then
+		landing:Destroy()
+		landing = nil
 	end
 	-- Give the piece back before letting go of it, or it stays invisible for the
 	-- rest of the round.
@@ -169,6 +278,10 @@ local function setup()
 	preview = clone
 
 	clone:PivotTo(pieceCFrame())
+	-- Built from the *server* piece, not the preview: the preview has already
+	-- had its Humanoid stripped and its parts made non-colliding, and the ghost
+	-- wants the piece's real shape to cast from.
+	buildLanding(piece)
 end
 
 -- ------------------------------------------------------------------ intents --
@@ -240,9 +353,11 @@ local function step(deltaTime: number)
 	-- The preview moves every frame regardless of the network, and the real piece
 	-- stays hidden behind it.
 	setServerPieceHidden(true)
+	local aimed = pieceCFrame()
 	if preview then
-		preview:PivotTo(pieceCFrame())
+		preview:PivotTo(aimed)
 	end
+	updateLanding(aimed)
 
 	local now = os.clock()
 	if now - lastSentAt < Constants.AIM_INTERVAL then

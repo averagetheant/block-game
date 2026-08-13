@@ -53,6 +53,8 @@ local STORM_LABEL_HEIGHT = 24
 local STORM_LABEL_TEXT_SIZE = 22
 local PROGRESS_HEIGHT = 26
 local PANEL_RESIZE = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+-- The camera toggle, sitting above the cash panel on the right edge.
+local CAMERA_BUTTON = 62
 local CASH_WIDTH = 190
 local CASH_HEIGHT = 54
 local CASH_TEXT_SIZE = 28
@@ -105,6 +107,10 @@ export type Props = {
 	-- Touch steering, -1 to 1. Continuous: the stick reports every drag frame and
 	-- 0 exactly once when the thumb lifts.
 	onSteer: ((value: number) -> ())?,
+	-- Whether the camera is currently pulled back to show the whole tower. Only
+	-- colours the button — the camera controller owns the state.
+	overview: boolean?,
+	onToggleCamera: (() -> ())?,
 	onRotate: (() -> ())?,
 	onDrop: (() -> ())?,
 }
@@ -271,6 +277,20 @@ return function(props: Props)
 			anchorPoint = Vector2.new(0.5, 1),
 		}),
 	}
+
+	-- Right edge, clear of the cash panel below it. Toggles the camera between
+	-- following the tower and framing the whole thing.
+	--
+	-- On the right on purpose: the left rail is navigation (things that open a
+	-- window), and this changes the view rather than opening anything.
+	children.CameraToggle = React.createElement(ui.IconButton, {
+		icon = Constants.CASH_IMAGE,
+		variant = if props.overview then "green" else "blue",
+		size = UDim2.fromOffset(CAMERA_BUTTON, CAMERA_BUTTON),
+		position = UDim2.new(1, -EDGE_MARGIN, 1, -(CASH_HEIGHT + EDGE_MARGIN * 2)),
+		anchorPoint = Vector2.new(1, 1),
+		onClick = props.onToggleCamera,
+	})
 
 	-- Bottom-right, opposite the controls hint. The bills fly here.
 	children.Cash = React.createElement(ui.Panel, {

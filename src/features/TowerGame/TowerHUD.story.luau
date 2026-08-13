@@ -62,6 +62,9 @@ return {
 		device = UILabs.Choose({ "pc", "touch", "gamepad" }),
 		zoneWarning = UILabs.Choose({ "none", "Retro Zone", "Snowy Zone", "Stormy Zone", "Space Zone" }),
 		showControls = true,
+		-- Only colours the camera button; the real state lives in the camera
+		-- controller, which the story doesn't run.
+		overview = false,
 	},
 
 	story = function(props)
@@ -130,6 +133,10 @@ return {
 			showControls = c.showControls,
 			onSteer = function(value)
 				print(`[TowerHUD.story] steer {string.format("%.2f", value)}`)
+			end,
+			overview = c.overview,
+			onToggleCamera = function()
+				print("[TowerHUD.story] toggle camera")
 			end,
 			onRotate = function()
 				print("[TowerHUD.story] rotate")

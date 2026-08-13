@@ -60,6 +60,10 @@ local stickPosition = Vector2.new(0, TowerConstants.BASE_POSITION.Y + 30)
 -- normal resting state rather than an error.
 local touchScreen: Vector2? = nil
 
+-- The local cursor's current position, recomputed every frame. Kept apart from
+-- the reporting throttle so the drawing can be smooth while the wire stays slow.
+local current: Vector2? = nil
+
 -- Every cursor but the local player's, newest state.
 function CursorsController.list(): { Cursor }
 	return remote
@@ -67,6 +71,28 @@ end
 
 function CursorsController.enabled(): boolean
 	return SettingsController.get(Constants.SETTING_ID) ~= false
+end
+
+-- True when this device drives its cursor with a thumbstick — i.e. console.
+--
+-- It's also the answer to "should the player see their own cursor". Everywhere
+-- else the cursor *is* the system pointer or the finger, and drawing a second
+-- one under it reads as lag. A stick-driven cursor has nothing underneath it, so
+-- not drawing it would leave the player pushing an invisible pointer around.
+-- Both questions share this one predicate so they can never disagree.
+function CursorsController.usesStickCursor(): boolean
+	return UserInputService.GamepadEnabled and not UserInputService.MouseEnabled
+end
+
+-- The local player's own cursor, or nil when it shouldn't be drawn. Read from
+-- the live per-frame value rather than from the server's echo of it: a pointer
+-- the player is actively pushing has to answer the stick immediately, and a
+-- round trip through the server at SEND_INTERVAL would visibly lag it.
+function CursorsController.localCursor(): Vector2?
+	if not CursorsController.usesStickCursor() or not CursorsController.enabled() then
+		return nil
+	end
+	return current
 end
 
 -- Where a screen point crosses the play plane, in world studs. The same solve
@@ -97,7 +123,7 @@ end
 -- The local cursor, or nil when this device isn't pointing at anything right
 -- now (a lifted finger, a gamepad with no camera yet).
 local function localPoint(deltaTime: number): Vector2?
-	if UserInputService.GamepadEnabled and not UserInputService.MouseEnabled then
+	if CursorsController.usesStickCursor() then
 		local stick = UserInputService:GetGamepadState(Enum.UserInputType.Gamepad1)
 		for _, input in stick do
 			if input.KeyCode ~= Enum.KeyCode.Thumbstick2 then
@@ -130,17 +156,18 @@ end
 function CursorsController.Start()
 	Packets.State.listen(function(payload)
 		local localUserId = Players.LocalPlayer.UserId
-		local next: { Cursor } = {}
+		local nextCursors: { Cursor } = {}
 		for _, cursor in payload.cursors do
-			-- Your own cursor never comes back to you. The server sends one list
-			-- to the room because that's one packet instead of N; this is where
-			-- "you can't see your own" is actually true.
+			-- Your own echo is always dropped here. On console the local cursor
+			-- *is* drawn, but from `localCursor()` — the live per-frame value —
+			-- rather than this round trip, which would visibly lag a pointer the
+			-- player is actively pushing.
 			if cursor.userId == localUserId then
 				continue
 			end
-			table.insert(next, cursor)
+			table.insert(nextCursors, cursor)
 		end
-		remote = next
+		remote = nextCursors
 		CursorsController.Changed:Fire()
 	end)
 
@@ -167,26 +194,35 @@ function CursorsController.Start()
 		touchScreen = nil
 	end)
 
-	-- Reporting. Throttled to SEND_INTERVAL and skipped when the position hasn't
-	-- meaningfully moved — a still pointer costs nothing.
+	-- Where the cursor is, recomputed every frame. Separate from the reporting
+	-- below on purpose: the gamepad branch *integrates* the stick by deltaTime,
+	-- so sampling it only at SEND_INTERVAL would move the cursor in twelve
+	-- chunks a second regardless of frame rate — and on console this is the
+	-- pointer the player is watching, so it has to be frame-smooth.
 	local since = 0
 	local lastSent: Vector2? = nil
 
 	RunService.Heartbeat:Connect(function(deltaTime)
+		-- Opting out stops this client *reporting*, not just drawing. Turning
+		-- cursors off has to take your own cursor off everyone else's screen too,
+		-- or the setting only half means what it says. The server drops a cursor
+		-- that stops reporting after STALE_SECONDS, so no goodbye packet is
+		-- needed — and that timeout is the whole mechanism here.
+		if not CursorsController.enabled() then
+			current = nil
+			lastSent = nil
+			return
+		end
+
+		current = localPoint(deltaTime)
+
 		since += deltaTime
 		if since < Constants.SEND_INTERVAL then
 			return
 		end
 		since = 0
 
-		-- Opting out stops the reporting too. A player who turned cursors off
-		-- shouldn't still be broadcasting into a feature they've left.
-		if not CursorsController.enabled() then
-			lastSent = nil
-			return
-		end
-
-		local point = localPoint(Constants.SEND_INTERVAL)
+		local point = current
 		if point == nil then
 			-- Nothing to report. The server times the cursor out on its own,
 			-- which is what makes a lifted finger stop the pointer.

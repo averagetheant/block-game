@@ -90,8 +90,24 @@ function TowerInputController.Start()
 		return
 	end
 
-	bindHold("TowerMoveLeft", -1, Enum.KeyCode.A, Enum.KeyCode.Left, Enum.KeyCode.DPadLeft)
-	bindHold("TowerMoveRight", 1, Enum.KeyCode.D, Enum.KeyCode.Right, Enum.KeyCode.DPadRight)
+	bindHold(
+		"TowerMoveLeft",
+		-1,
+		Enum.KeyCode.A,
+		Enum.KeyCode.Left,
+		Enum.KeyCode.DPadLeft,
+		-- The bumpers: the pad's other pair of "one on each side" buttons, which
+		-- is what makes them read as left/right without being explained.
+		Enum.KeyCode.ButtonL1
+	)
+	bindHold(
+		"TowerMoveRight",
+		1,
+		Enum.KeyCode.D,
+		Enum.KeyCode.Right,
+		Enum.KeyCode.DPadRight,
+		Enum.KeyCode.ButtonR1
+	)
 
 	-- Held movement has one failure mode: a key-down with no matching key-up
 	-- (alt-tabbing mid-glide, a gamepad disconnecting) would leave the piece
@@ -102,7 +118,21 @@ function TowerInputController.Start()
 		sendHeld()
 	end)
 
-	bind("TowerRotate", TowerAimController.rotate, Enum.KeyCode.W, Enum.KeyCode.Up, Enum.KeyCode.R, Enum.KeyCode.ButtonY)
+	bind(
+		"TowerRotate",
+		TowerAimController.rotate,
+		Enum.KeyCode.W,
+		Enum.KeyCode.Up,
+		Enum.KeyCode.R,
+		Enum.KeyCode.ButtonY,
+		-- Clicking the left stick in. The thumb steering the piece is already
+		-- there, so a rotate costs no reach.
+		Enum.KeyCode.ButtonL3,
+		-- Left trigger. Roblox reports L2/R2 as analog *and* as buttons, and this
+		-- only ever acts on Begin, so a trigger press is one quarter turn rather
+		-- than a stream of them as it travels.
+		Enum.KeyCode.ButtonL2
+	)
 
 	-- Scroll wheel as an alternate rotate: the hand that's already aiming with the
 	-- mouse (TowerPointerController) shouldn't have to reach for a key to spin the
@@ -124,21 +154,25 @@ function TowerInputController.Start()
 		Enum.KeyCode.Space,
 		Enum.KeyCode.S,
 		Enum.KeyCode.Down,
-		Enum.KeyCode.ButtonA
+		Enum.KeyCode.ButtonA,
+		-- Right trigger. The drop is the one committing action on the pad, and a
+		-- trigger is the one input you can't hit by accident with a resting hand.
+		Enum.KeyCode.ButtonR2
 	)
 
-	-- The thumbsticks. One Heartbeat drives both, because both need the stick's
-	-- *current* position rather than a change event.
+	-- The left stick. Polled rather than bound, because a stick held at a constant
+	-- angle fires no events at all and would look like a released one.
 	--
-	-- Steering hands control back and forth rather than fighting: while the left
-	-- stick is off-centre it owns the steer, and the frame it returns to centre
-	-- it re-asserts whatever the D-pad is holding. Without that handover a stick
-	-- release would leave the piece gliding on the last analog value, or stomp a
-	-- D-pad direction the player was still holding.
+	-- Steering hands control back and forth rather than fighting: while the stick
+	-- is off-centre it owns the steer, and the frame it returns to centre it
+	-- re-asserts whatever the D-pad or bumpers are holding. Without that handover
+	-- a stick release would leave the piece gliding on the last analog value, or
+	-- stomp a direction the player was still holding.
+	--
+	-- The *right* stick is deliberately not read here: it drives the player's
+	-- cursor (see docs/game/Cursors.md), and on console that cursor is the only
+	-- pointer they have.
 	local stickSteering = false
-	-- True while the right stick is past the rotate threshold, so one flick is
-	-- one quarter turn no matter how long it's held over.
-	local rotateLatched = false
 
 	RunService.Heartbeat:Connect(function()
 		local steer = stickPosition(Enum.KeyCode.Thumbstick1).X
@@ -148,16 +182,6 @@ function TowerInputController.Start()
 		elseif stickSteering then
 			stickSteering = false
 			sendHeld()
-		end
-
-		-- Either direction turns the same way, because `rotate` is a single
-		-- quarter turn and every other bind that calls it does the same.
-		local spin = math.abs(stickPosition(Enum.KeyCode.Thumbstick2).X)
-		if not rotateLatched and spin >= Constants.GAMEPAD_ROTATE_THRESHOLD then
-			rotateLatched = true
-			TowerAimController.rotate()
-		elseif rotateLatched and spin <= Constants.GAMEPAD_ROTATE_RELEASE then
-			rotateLatched = false
 		end
 	end)
 

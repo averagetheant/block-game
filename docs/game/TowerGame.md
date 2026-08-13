@@ -490,11 +490,15 @@ device is additive.
 
 | Intent | Keyboard / mouse | Gamepad | Touch |
 | ------ | ---------------- | ------- | ----- |
-| `setSteer(-1)` | hold A / ← | left stick, or DPadLeft | **LEFT** button (pulse) |
-| `setSteer(1)` | hold D / → | left stick, or DPadRight | **RIGHT** button (pulse) |
+| `setSteer(-1)` | hold A / ← | left stick, DPadLeft, or **L1** (LB) | **LEFT** button (pulse) |
+| `setSteer(1)` | hold D / → | left stick, DPadRight, or **R1** (RB) | **RIGHT** button (pulse) |
 | `aim(x)` | move the mouse | — | — |
-| `rotate` | W / ↑ / R / scroll wheel | right stick, or ButtonY | **TURN** button |
-| `drop` | Space / S / ↓ / left click | ButtonA | **DROP** button |
+| `rotate` | W / ↑ / R / scroll wheel | **L3** (stick click), **L2** (LT), or ButtonY | **TURN** button |
+| `drop` | Space / S / ↓ / left click | **R2** (RT), or ButtonA | **DROP** button |
+
+The **right stick is not a piece control**. It drives the player's cursor — see
+[Cursors](Cursors.md) — and on console that cursor is the only pointer they have,
+so nothing here may take the stick back.
 
 The HUD shows the matching list in the bottom-left corner for `HINT_SECONDS`
 (60), then fades it out — new players get told once, everyone else gets their
@@ -506,30 +510,29 @@ keyboard hints to someone holding a pad. `Focus` and `TextInput` are ignored —
 they fire from window focus and the chat bar and say nothing about what's in the
 player's hands.
 
-### The thumbsticks
+### The left stick
 
-Both sticks are **alternatives** to the D-pad and buttons, which keep working
-exactly as before.
+Every gamepad binding is an **alternative**, never a mode: the D-pad, the
+bumpers and the stick all steer, and L3 / L2 / Y all rotate. A player can move
+between them mid-turn and the game doesn't care which they used last.
 
-- **Left stick — steer.** Analog: `setSteer` takes anything in `[-1, 1]` and the
-  render loop integrates it, so a gentle push nudges the piece and a full one
-  moves it at `STEER_SPEED`. The value is *clamped, not rounded* — rounding is
-  what would throw the analog range away and make the stick behave like a D-pad.
-  Below `GAMEPAD_STEER_DEADZONE` the stick reads as centred and control hands
-  back to the D-pad on that frame, so releasing the stick doesn't leave the piece
-  gliding on the last analog value or stomp a direction still being held.
-- **Right stick — rotate.** Rotation is discrete, so this is a *flick*: it fires
-  once when deflection crosses `GAMEPAD_ROTATE_THRESHOLD` and won't fire again
-  until it falls back under `GAMEPAD_ROTATE_RELEASE`. Without that hysteresis a
-  stick held over would spin the piece every frame, and one hovering between the
-  two would chatter. Either direction turns the same way, because `rotate` is a
-  single quarter turn and every other bind that calls it does the same.
+**Left stick — steer, analog.** `setSteer` takes anything in `[-1, 1]` and the
+render loop integrates it, so a gentle push nudges the piece and a full one moves
+it at `STEER_SPEED`. The value is *clamped, not rounded* — rounding is what would
+throw the analog range away and make the stick behave like a D-pad. Below
+`GAMEPAD_STEER_DEADZONE` the stick reads as centred and control hands back to the
+D-pad or bumpers on that frame, so releasing it doesn't leave the piece gliding
+on the last analog value or stomp a direction still being held.
 
-The sticks are the one thing ContextActionService can't express: it delivers a
-stick as a stream of Change events, and both of these need frame *state* — an
-analog value to integrate, and an edge with hysteresis. They're read from
-`GetGamepadState` in one Heartbeat instead. A stick held at a constant angle
-fires no events at all, which is why polling is the only correct read.
+The stick is the one thing ContextActionService can't express: it delivers a
+stick as a stream of Change events, and this needs frame *state* — an analog
+value to integrate. It's read from `GetGamepadState` in a Heartbeat instead. A
+stick held at a constant angle fires no events at all, which is why polling is
+the only correct read.
+
+`L2` and `R2` are analog triggers, but Roblox reports them as buttons too, and
+`bind` only ever acts on `Begin` — so a trigger pull is one quarter turn (or one
+drop) rather than a stream of them as it travels.
 
 Keyboard, mouse and the gamepad buttons are bound in `TowerInputController`
 through ContextActionService (one bind covers both). Touch buttons are real skinned
@@ -648,8 +651,7 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `TURN_SECONDS` | The drop clock (10) |
 | `SETTLE_SECONDS` | Pause between turns |
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
-| `GAMEPAD_STEER_DEADZONE` | Below this the left stick reads as centred and the D-pad takes over (0.2) |
-| `GAMEPAD_ROTATE_THRESHOLD` / `_RELEASE` | The right stick's rotate flick and the hysteresis that stops it repeating (0.65 / 0.35) |
+| `GAMEPAD_STEER_DEADZONE` | Below this the left stick reads as centred and the D-pad / bumpers take over (0.2) |
 | `SPAWN_CLEARANCE` | Clear air under a fresh piece, measured from its lowest possible point — see [The held piece](#the-held-piece) |
 | `STORM_SECONDS` | The stage clock (300) |
 | `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 60 studs, each next gap 5 further |

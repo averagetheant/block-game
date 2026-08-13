@@ -33,13 +33,18 @@ local LINES: { [string]: { string } } = {
 		"Drop — DROP",
 	},
 	gamepad = {
-		"Move — left stick or D-Pad",
-		"Rotate — right stick or Y",
-		"Drop — A",
+		"Move — stick / D-Pad / LB / RB",
+		"Rotate — stick click / LT / Y",
+		"Drop — RT / A",
+		"Cursor — right stick",
 	},
 }
 
-local WIDTH = 320
+-- Wide enough for the longest line any device list holds ("Move — stick / D-Pad
+-- / LB / RB"). The lists are fixed strings, so this is sized once against the
+-- worst of them rather than measured at runtime — but it does mean a longer line
+-- added below needs this raised with it.
+local WIDTH = 380
 local LINE_HEIGHT = 26
 local TEXT_SIZE = 22
 local PADDING = 10

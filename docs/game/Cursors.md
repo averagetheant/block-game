@@ -44,14 +44,33 @@ subtlety: the empty list is sent **once** when the last cursor disappears, and
 then the server goes quiet. Skipping it entirely would leave every client drawing
 whatever the final non-empty packet said.
 
-## You can't see your own
+## You can't see your own — except on console
 
 The server broadcasts one list to the room (one packet instead of N), so the
-filtering happens on the receiving client: `CursorsController` drops the entry
-matching `LocalPlayer.UserId`.
+filtering happens on the receiving client: `CursorsController` always drops the
+echo matching `LocalPlayer.UserId`.
 
-Drawing your own would put a second arrow under the system cursor you're already
-looking at, and any lag between them reads as the game being broken.
+On **mouse and touch**, that's the whole story. The cursor *is* the system
+pointer or the finger, and drawing a second arrow under something you're already
+looking at makes any lag between them read as the game being broken.
+
+**Console is the exception, because there's nothing underneath.** A stick-driven
+cursor has no system pointer behind it, so not drawing it would leave the player
+pushing an invisible pointer around. `usesStickCursor()` answers both "does this
+device drive its cursor with a stick" and "should the player see their own" — one
+predicate, so the two can never disagree and leave someone steering something
+they can't see.
+
+The local cursor is drawn from **`localCursor()`, not the server's echo** — the
+live per-frame value. A pointer the player is actively pushing has to answer the
+stick immediately, and a round trip at `SEND_INTERVAL` would visibly lag it. For
+the same reason it's *placed* each frame rather than eased: the ease exists to
+hide the gaps between other people's 12Hz reports, and smoothing your own pointer
+against the stick pushing it is just latency you added yourself.
+
+Because no packet arrives for it, nothing would ever call `sync` for the local
+cursor — the render loop watches whether it *should* exist and re-syncs on that
+edge (a controller picked up, the setting switched off mid-game).
 
 ## Input, per device
 
@@ -63,12 +82,14 @@ Three devices, one answer — a point on the plane.
 | Touch | Project the **held finger** onto the plane. | Whenever no finger is down. |
 | Gamepad | Right stick integrates a position per frame (`STICK_SPEED`, `STICK_DEADZONE`). | Never — the position persists. |
 
-**The right stick is shared with TowerGame's rotate flick**, so flicking to rotate
-also nudges your cursor. That's deliberately left alone rather than arbitrated:
-you never see your own cursor, so the only effect is a small jump in what other
-players see, and a purely cosmetic pointer isn't worth taking a stick away from
-the piece controls. If it ever needs separating, the honest fix is to give the
-console cursor the aim point rather than a stick of its own.
+**The right stick belongs to the cursor alone.** TowerGame deliberately reads
+only the *left* stick, and puts rotate on L3 / L2 / Y instead, so nothing
+competes for the one input that is a console player's only pointer.
+
+The position is recomputed **every frame**, separately from the send throttle.
+The gamepad branch integrates the stick by `deltaTime`, so sampling it only at
+`SEND_INTERVAL` would move the cursor in twelve chunks a second regardless of
+frame rate — and on console this is the pointer the player is watching.
 
 Touch is the one that needed a decision: a phone has no hover, so a cursor that
 existed at all times would have to sit wherever the last tap landed. Instead the
@@ -138,8 +159,14 @@ Registers `cursors.enabled` ("Player cursors") in an **Interface** category via
 the `Settings.luau` discovery convention.
 
 Turning it off hides everyone else's cursors **and stops this client reporting
-its own** — a player who opted out of the feature shouldn't still be broadcasting
-into it.
+its own**, so the player's cursor disappears from everyone else's screen too. The
+setting would only half mean what it says otherwise — opting out of a feature has
+to take you out of what other people see, not just change your own view.
+
+There's no goodbye packet: the client simply stops reporting, and the server's
+`STALE_SECONDS` timeout drops the cursor within 3 seconds. That timeout is the
+entire mechanism, which is also what makes it work for a player who alt-tabbed,
+lifted a finger, or disconnected mid-drag.
 
 ## Studio assets
 

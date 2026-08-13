@@ -67,20 +67,14 @@ return {
 	AIM_EPSILON = 0.05,
 
 	-- ---------------------------------------------------------------- gamepad --
-	-- The sticks are *alternatives* to the D-pad and buttons, never replacements:
-	-- left stick steers (analog, so a gentle push nudges), right stick rotates,
-	-- and D-pad / Y keep doing exactly what they did.
+	-- The left stick steers (analog, so a gentle push nudges) as an *alternative*
+	-- to the D-pad and the bumpers, never a replacement — all three stay live.
+	-- The right stick isn't a piece control at all: it drives the player's cursor.
 	--
 	-- Below this the left stick reads as centred, and control goes back to
-	-- whatever the D-pad is doing. Generous — a resting stick that drifts would
-	-- otherwise slide the piece on its own.
+	-- whatever the D-pad or bumpers are doing. Generous — a resting stick that
+	-- drifts would otherwise slide the piece on its own.
 	GAMEPAD_STEER_DEADZONE = 0.2,
-	-- Rotation is discrete, so the right stick is a *flick*: it fires once when
-	-- deflection crosses ROTATE, and won't fire again until the stick falls back
-	-- under ROTATE_RELEASE. Without that hysteresis, holding the stick over would
-	-- spin the piece every frame.
-	GAMEPAD_ROTATE_THRESHOLD = 0.65,
-	GAMEPAD_ROTATE_RELEASE = 0.35,
 
 	-- ----------------------------------------------------------------- blocks --
 	-- Impact sounds: below this speed a collision is a nudge, not a landing.

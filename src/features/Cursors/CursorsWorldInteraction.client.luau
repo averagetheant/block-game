@@ -171,6 +171,18 @@ local function sync()
 		entry.goal = Vector2.new(cursor.x, cursor.y)
 	end
 
+	-- The local player's own cursor, on the devices that draw one (console). Its
+	-- *position* isn't set here — the render loop reads it live every frame — but
+	-- its existence is, so it's created and destroyed by the same pass as
+	-- everyone else's.
+	if CursorsController.localCursor() ~= nil then
+		local userId = Players.LocalPlayer.UserId
+		seen[userId] = true
+		if drawn[userId] == nil then
+			drawn[userId] = build(userId)
+		end
+	end
+
 	for userId, entry in drawn do
 		if not seen[userId] then
 			entry.part:Destroy()
@@ -185,11 +197,40 @@ end
 -- means being ready for the first packet.
 CursorsController.Changed:Connect(sync)
 
+-- The local cursor has no packet to arrive, so nothing would ever call `sync`
+-- for it. This tracks whether it *should* exist and re-syncs on the edge — when
+-- a controller is picked up, or the setting is switched off mid-game.
+local hadLocal = false
+
 RunService.RenderStepped:Connect(function(deltaTime)
+	local localCursor = CursorsController.localCursor()
+	local hasLocal = localCursor ~= nil
+	if hasLocal ~= hadLocal then
+		hadLocal = hasLocal
+		sync()
+	end
+
+	local localUserId = Players.LocalPlayer.UserId
 	-- Framerate-independent exponential ease, the same shape the camera follow
 	-- uses, so a cursor and the shot it sits in move alike.
 	local alpha = 1 - math.exp(-Constants.FOLLOW_RATE * deltaTime)
-	for _, entry in drawn do
+
+	for userId, entry in drawn do
+		-- Your own cursor is driven live and placed outright. The ease exists to
+		-- hide the gaps between other people's 12Hz reports; your own position is
+		-- known this frame, and smoothing a pointer against the stick pushing it
+		-- is just latency you added yourself.
+		if userId == localUserId and localCursor ~= nil then
+			entry.goal = localCursor
+			entry.placed = true
+			entry.part.Position = Vector3.new(
+				localCursor.X,
+				localCursor.Y,
+				TowerConstants.PLANE_Z + Constants.PLANE_OFFSET_Z
+			)
+			continue
+		end
+
 		local goal = Vector3.new(
 			entry.goal.X,
 			entry.goal.Y,

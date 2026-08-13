@@ -11,7 +11,11 @@ local ServerFeatures = ServerScriptService:WaitForChild("Features")
 local modules = Loader.LoadDescendants(ServerFeatures, Loader.MatchesName("Service$"))
 Loader.SpawnAll(LoadOrdered(modules), "Start")
 
--- Discover server-realm presentations (e.g. Cmdr commands) — required for their
--- side effect (they self-register). No Start lifecycle; a feature adds a command
--- by dropping a *Command.server.luau, with no edit here.
+-- Discover server-realm presentations — required for their side effect (they
+-- self-register). No Start lifecycle; a feature adds one with no edit here.
+--
+-- Cmdr commands are NOT discovered from here: their definitions have to exist on
+-- both realms or the client console won't accept the name, so they live in a
+-- shared `Commands.luau` per feature that the Cmdr feature registers on each
+-- realm. See src/features/Cmdr/CommandRegistry.luau.
 Loader.LoadDescendants(ServerFeatures, Loader.MatchesName("Command$"))

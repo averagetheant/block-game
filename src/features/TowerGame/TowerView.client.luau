@@ -178,14 +178,10 @@ return function()
 		-- Touch-only: keyboard and gamepad go through ContextActionService, so a
 		-- PC player would just be looking at buttons they never press.
 		showControls = touchOnly,
-		-- A tap has no release event, so touch steering moves a fixed distance
-		-- rather than starting and stopping a glide.
-		onMoveLeft = function()
-			TowerAimController.nudge(-1)
-		end,
-		onMoveRight = function()
-			TowerAimController.nudge(1)
-		end,
+		-- The stick reports a continuous deflection, which goes straight into the
+		-- same analog steer the gamepad uses — a drag holds the piece moving for
+		-- as long as the thumb is down, and reports 0 when it lifts.
+		onSteer = TowerAimController.setSteer,
 		onRotate = TowerAimController.rotate,
 		onDrop = TowerAimController.drop,
 	})

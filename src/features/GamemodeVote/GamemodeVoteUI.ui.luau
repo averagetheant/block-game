@@ -9,6 +9,7 @@
 -- along the bottom of the panel you picked, clear of the icon and the name.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
@@ -27,7 +28,18 @@ local ICON_SIZE = 78
 local NAME_HEIGHT = 40
 local BLURB_HEIGHT = 26
 local AVATAR_SIZE = 34
-local AVATAR_GAP = 6
+-- The stamp. It starts oversized and slams down to 1 — a vote is a commitment
+-- and the screen should feel it, so this lands rather than fading in.
+local STAMP_SCALE_FROM = 2.2
+local STAMP_SECONDS = 0.18
+-- Max tilt either way, in degrees. Small: a stamp is *slightly* crooked, and
+-- much past this reads as a bug rather than as hand-placed.
+local STAMP_ROTATION = 14
+-- How far stamps scatter from the centre of the strip — X as a fraction of the
+-- panel's width, Y in pixels. Overlap is fine and wanted; stamps piling onto
+-- each other is what makes a popular panel *look* popular.
+local STAMP_SPREAD_X = 0.44
+local STAMP_SPREAD_Y = 14
 
 -- What a panel that lost fades to once the winner is in. Panel's default glass
 -- is 0.8; pushing it further sinks the losers behind the winner.
@@ -51,17 +63,66 @@ local function headshot(userId: number): string
 	return `rbxthumb://type=AvatarHeadShot&id={userId}&w=150&h=150`
 end
 
--- One voter: a circle with a thin stroke, small enough to sit in the panel's
--- bottom margin without crowding the content above it.
-local function avatar(userId: number, layoutOrder: number): any
+-- Where a voter's stamp lands and how far it's turned.
+--
+-- Hashed from the user id rather than rolled, for the same reason cursor colours
+-- are: it costs nothing, every client places the stamps identically, and — the
+-- part that actually matters here — it's *stable across re-renders*. A
+-- `math.random` in the render body would re-roll the whole wall of stamps every
+-- time anyone else voted.
+--
+-- The multipliers are three arbitrary irrationals; using one for all three would
+-- correlate the offsets and tilt, and the stamps would fall along a diagonal.
+local function stampFor(userId: number): (number, number, number)
+	local x = (userId * 0.6180339887) % 1
+	local y = (userId * 0.7548776662) % 1
+	local turn = (userId * 0.4142135624) % 1
+	return (x - 0.5) * STAMP_SPREAD_X, (y - 0.5) * STAMP_SPREAD_Y, (turn - 0.5) * 2 * STAMP_ROTATION
+end
+
+-- One voter: a circle with a thin stroke, stamped onto the panel it voted for.
+--
+-- The stamp is the whole point of the animation — it lands hard rather than
+-- fading in, because a vote is a commitment and the screen should feel it. The
+-- scale is driven by TweenService off a ref rather than by state, so the slam
+-- costs no re-renders and can't fight React over the value.
+local function Avatar(props: { userId: number })
+	local scaleRef = React.useRef(nil :: UIScale?)
+	local offsetX, offsetY, rotation = stampFor(props.userId)
+
+	React.useEffect(function()
+		local scale = scaleRef.current
+		if scale == nil then
+			return
+		end
+		local tween = TweenService:Create(
+			scale,
+			TweenInfo.new(STAMP_SECONDS, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
+			{ Scale = 1 }
+		)
+		tween:Play()
+		return function()
+			tween:Cancel()
+			tween:Destroy()
+		end
+	end, {})
+
 	return React.createElement("ImageLabel", {
 		Size = UDim2.fromOffset(AVATAR_SIZE, AVATAR_SIZE),
+		-- Scattered around the centre of the strip rather than laid out in a row.
+		Position = UDim2.new(0.5 + offsetX, 0, 0.5, offsetY),
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Rotation = rotation,
 		BackgroundColor3 = Color3.fromRGB(24, 26, 34),
 		BackgroundTransparency = 0.3,
 		BorderSizePixel = 0,
-		Image = headshot(userId),
-		LayoutOrder = layoutOrder,
+		Image = headshot(props.userId),
 	}, {
+		-- Rendered mid-slam; the tween above owns it from here.
+		Scale = React.createElement("UIScale", {
+			Scale = STAMP_SCALE_FROM,
+			ref = scaleRef,
+		}),
 		Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
 		Stroke = React.createElement("UIStroke", {
 			Thickness = 1,
@@ -81,8 +142,11 @@ local function optionPanel(props: {
 	onVote: () -> (),
 }): any
 	local avatars: { [string]: any } = {}
-	for index, userId in props.voters do
-		avatars[`Voter{userId}`] = avatar(userId, index)
+	for _, userId in props.voters do
+		-- Keyed by user id so a voter's stamp is the *same* element across
+		-- re-renders and doesn't re-slam every time somebody else votes. Moving
+		-- to another panel is a real unmount, so that does stamp again.
+		avatars[`Voter{userId}`] = React.createElement(Avatar, { userId = userId })
 	end
 
 	-- Stroke sits inside the panel edge, so pad past it (see CLAUDE.md).
@@ -125,11 +189,14 @@ local function optionPanel(props: {
 				else nil,
 		}),
 
-		Voters = React.createElement(ui.Row, {
-			gap = AVATAR_GAP,
-			size = UDim2.new(1, -inset * 2, 0, AVATAR_SIZE),
-			position = UDim2.new(0.5, 0, 1, -inset),
-			anchorPoint = Vector2.new(0.5, 1),
+		-- A plain frame, not a Row: the stamps place themselves (see `stampFor`),
+		-- so any layout here would fight them for the position property.
+		Voters = React.createElement("Frame", {
+			Size = UDim2.new(1, -inset * 2, 0, AVATAR_SIZE),
+			Position = UDim2.new(0.5, 0, 1, -inset),
+			AnchorPoint = Vector2.new(0.5, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
 		}, avatars),
 	}
 

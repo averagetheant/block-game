@@ -21,7 +21,12 @@ ballot is empty; remove GamemodeVote and TowerGame stops asking (see
    what gives the vote the single-frame invariant (it takes over from whatever
    window the player had up) and the blur + FOV focus effect, for free.
 3. Players click panels for `VOTE_SECONDS` (15). A click sends the id; clicking
-   the id you already hold takes the vote back, so there's no un-vote button.
+   the id you already hold takes the vote back, so there's no un-vote button. A
+   vote lands as a **stamp**: the voter's headshot slams down from oversized to
+   full at a hashed position and slight tilt, so a popular panel visibly piles
+   up. The hash is off the user id — stable across re-renders (a `math.random`
+   in the render body would re-scatter every stamp each time anyone voted) and
+   identical on every client.
 4. The clock ends, the server picks the winner, and it stays on screen for
    `RESULT_SECONDS` (3) before the frame closes.
 5. `startVote()` returns the winning id to its caller, which does whatever that
@@ -63,6 +68,25 @@ registering feature from closing a require cycle.
 
 `modifier` is never read here. It's a payload the registering feature hands
 itself back, so a new kind of modifier needs no change in this folder.
+
+### The ballot
+
+A poll shows `BALLOT_SIZE` (3) panels, not every registered mode:
+
+- every mode with **`pinned = true`** is always on it;
+- the remaining slots are filled at random from the rest, **re-rolled per vote**.
+
+So registering a tenth gamemode makes the ballot more varied rather than wider —
+three panels is what fits a phone in landscape, and a wall of options is a worse
+choice than a short one.
+
+`pinned` exists for the "leave it alone" option a poll needs: a ballot of nothing
+but twists gives the players no way to decline one. GamemodeVote doesn't know or
+care *which* mode that is — the registering feature says so, and this feature
+still names nobody. (TowerGame pins Classic.)
+
+The chosen set is sorted back into `order` before it goes out, so a pinned mode
+sits where its `order` says rather than merely first-because-pinned.
 
 **The discovery pass lives in `Registry.luau`, not `init.luau`** — unlike
 PlayerData and Settings. The server entry script only loads `*Service` modules,
@@ -145,6 +169,7 @@ GamemodeVote names neither TowerGame nor any other feature.
 | Key | Default | What it controls |
 | --- | ------- | ---------------- |
 | `VOTE_SECONDS` | `15` | How long the poll is open. Short on purpose — everything else is parked while it runs. |
+| `BALLOT_SIZE` | `3` | Panels per ballot. Every `pinned` mode is always on it; the rest are rolled at random per vote. |
 | `RESULT_SECONDS` | `3` | How long the winner stays up before the frame closes. |
 | `FRAME_ID` | `"GamemodeVote"` | The UIShell frame id the screen opens itself on. |
 

@@ -24,6 +24,11 @@ export type Gamemode = {
 	blurb: string?,
 	-- Sort order across the panels (low → high). Ties break by name.
 	order: number?,
+	-- Always on the ballot, never one of the random picks. For the "leave it
+	-- alone" option a poll needs: a ballot of nothing but twists gives the
+	-- players no way to decline one. GamemodeVote doesn't know or care *which*
+	-- mode that is — the registering feature says so.
+	pinned: boolean?,
 	-- Handed back to the registering feature when this mode wins. Never read here.
 	modifier: any?,
 }

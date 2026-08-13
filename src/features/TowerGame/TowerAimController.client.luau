@@ -212,15 +212,6 @@ function TowerAimController.drop()
 	teardown()
 end
 
--- A touch tap has no key-up, so it moves a fixed distance instead of holding.
-function TowerAimController.nudge(dir: number)
-	if not active then
-		return
-	end
-	local step = dir * Constants.STEER_SPEED * Constants.TOUCH_NUDGE_SECONDS
-	aimX = math.clamp(aimX + step, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X)
-end
-
 -- ----------------------------------------------------------------- the loop --
 
 local function step(deltaTime: number)

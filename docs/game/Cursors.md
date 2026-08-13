@@ -54,12 +54,20 @@ On **mouse and touch**, that's the whole story. The cursor *is* the system
 pointer or the finger, and drawing a second arrow under something you're already
 looking at makes any lag between them read as the game being broken.
 
-**Console is the exception, because there's nothing underneath.** A stick-driven
-cursor has no system pointer behind it, so not drawing it would leave the player
-pushing an invisible pointer around. `usesStickCursor()` answers both "does this
-device drive its cursor with a stick" and "should the player see their own" — one
-predicate, so the two can never disagree and leave someone steering something
-they can't see.
+**A connected gamepad is the exception, because there may be nothing
+underneath.** A stick-driven cursor has no system pointer behind it, so not
+drawing it would leave the player pushing an invisible pointer around.
+
+Two predicates, and the gap between them is deliberate:
+
+| | Condition | |
+| --- | --- | --- |
+| `usesStickCursor()` | `GamepadEnabled and not MouseEnabled` | Which input *drives* the cursor. A mouse outranks a pad — someone on a PC with a controller plugged in is still pointing with the mouse. |
+| `showsOwnCursor()` | `GamepadEnabled` | Whether the player *sees* their own. Any connected pad gets it. |
+
+The invariant that matters is one-way: `showsOwnCursor` must never be **narrower**
+than `usesStickCursor`, or a player could be steering a cursor they can't see. A
+superset is safe — the worst case is an arrow trailing your own mouse.
 
 The local cursor is drawn from **`localCursor()`, not the server's echo** — the
 live per-frame value. A pointer the player is actively pushing has to answer the

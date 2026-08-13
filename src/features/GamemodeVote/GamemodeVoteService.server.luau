@@ -84,6 +84,54 @@ function GamemodeVoteService.isActive(): boolean
 	return endsAt ~= 0
 end
 
+-- The ballot for one poll: every pinned mode, then random picks from the rest up
+-- to BALLOT_SIZE, in display order.
+--
+-- Rolled per vote rather than fixed, so a game with more modes registered than
+-- fit on a ballot shows a different pair each round instead of burying the extra
+-- ones forever. Which mode is pinned is the registering feature's call — this
+-- file knows nothing about any of them.
+--
+-- Returns the ids only; the client looks the rest up in its own Registry copy.
+local function buildBallot(): { string }
+	local pinned: { Registry.Gamemode } = {}
+	local rest: { Registry.Gamemode } = {}
+	for _, mode in Registry.list() do
+		table.insert(if mode.pinned then pinned else rest, mode)
+	end
+
+	-- Partial Fisher-Yates: shuffle only as far as the slots that are left, which
+	-- for a handful of modes is the whole list anyway and stays correct if that
+	-- list ever grows.
+	local slots = math.max(Constants.BALLOT_SIZE - #pinned, 0)
+	for index = 1, math.min(slots, #rest) do
+		local pick = math.random(index, #rest)
+		rest[index], rest[pick] = rest[pick], rest[index]
+	end
+
+	local chosen = pinned
+	for index = 1, math.min(slots, #rest) do
+		table.insert(chosen, rest[index])
+	end
+
+	-- Back into display order, so the pinned mode sits where its `order` says
+	-- rather than merely first-because-pinned.
+	table.sort(chosen, function(a, b)
+		local orderA = a.order or 0
+		local orderB = b.order or 0
+		if orderA ~= orderB then
+			return orderA < orderB
+		end
+		return a.name < b.name
+	end)
+
+	local ids = {}
+	for _, mode in chosen do
+		table.insert(ids, mode.id)
+	end
+	return ids
+end
+
 -- Highest tally wins. Ties break randomly among the tied, and a poll nobody
 -- voted in picks at random too — the caller always gets a mode back, so it
 -- never has to carry a "what if they all abstained" branch.
@@ -117,14 +165,9 @@ function GamemodeVoteService.startVote(): string?
 		return nil
 	end
 
-	local modes = Registry.list()
-	if #modes == 0 then
+	options = buildBallot()
+	if #options == 0 then
 		return nil
-	end
-
-	options = {}
-	for _, mode in modes do
-		table.insert(options, mode.id)
 	end
 	votes = {}
 	winnerId = ""

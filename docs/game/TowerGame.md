@@ -2,7 +2,7 @@
 
 A Tricky Towers-style co-op stacker. Everyone plays **one shared tower**: players
 take turns, each turn hands the holder a tetromino they can slide and rotate, and
-a 10-second clock drops it for them if they dither. Over the top of that runs the
+a 15-second clock drops it for them if they dither. Over the top of that runs the
 **storm** — a stage clock demanding a target height, which pays out a permanent
 floor when the players make it, blows up everything below it, and moves the run
 into a new zone. Roughly one piece in twenty is a *type* — a bomb, a burning
@@ -19,7 +19,7 @@ and no scoring (see [Not built yet](#not-built-yet)).
 1. `TowerService` builds the arena (base platform) at server start.
 2. Players enter a round-robin `queue` on join.
 3. **Turn** — the holder gets a piece spawned clear of the tower (see
-   [The held piece](#the-held-piece)) and `TURN_SECONDS` (10) on the clock.
+   [The held piece](#the-held-piece)) and `TURN_SECONDS` (15) on the clock.
 4. The holder steers (continuous left/right) and spins (quarter turns). The piece
    is an *anchored, non-colliding, server-owned Model*, so every player watches
    the same aim with no transform packets involved.
@@ -125,11 +125,16 @@ modes and it's what asks:
 | Blitz Builder | Half the turn clock. The storm clock is left alone, so shorter turns buy the players *more* attempts, not fewer. |
 | Mystery Mode | Special-piece odds ×6. Still capped by `BlockTypes.MAX_CHANCE`, so it's "most pieces", not "all". |
 
-**Classic is always the first panel** (`order = 0`, and nothing else claims it). A
-ballot of nothing but twists gives the players no way to decline one; Classic is
-that answer, and a fixed position makes it the one panel you can pick without
-reading. Its modifier *is* `Gamemodes.DEFAULT` — winning Classic and skipping the
-vote have to produce the same round, or one of them is lying.
+**Classic is always on the ballot** — it carries `pinned = true`, so GamemodeVote
+keeps it and rolls the remaining slots from the twists. A ballot of nothing but
+twists gives the players no way to decline one; Classic is that answer. It also
+sits first (`order = 0`, and nothing else claims it), so it's the one panel you
+can pick without reading. Its modifier *is* `Gamemodes.DEFAULT` — winning Classic
+and skipping the vote have to produce the same round, or one of them is lying.
+
+A ballot is **three panels** (`BALLOT_SIZE`): Classic plus two of the twists,
+re-rolled every vote. Registering a fifth mode makes the ballot more varied, not
+wider.
 
 **The winner holds for the whole round**, across as many checkpoints as the
 players clear. `runCheckpoint` deliberately doesn't re-vote: changing the rules
@@ -398,9 +403,15 @@ a state rather than an event:
   never moved, and the server clears the steer direction on every new turn, so the
   controller re-asserts what's held when the piece becomes ours.
 
-Touch is the exception: a tap has no key-up, so the HUD buttons send a fixed
-`TOUCH_NUDGE_SECONDS` pulse — one tap is worth about
-`STEER_SPEED × TOUCH_NUDGE_SECONDS` studs of glide.
+Touch steers with a **drag**, not taps: `SteerStick` reports a continuous
+`[-1, 1]` into the same analog `setSteer` the gamepad uses, so holding a
+deflection keeps the piece moving. It self-centres — releasing reports `0`
+exactly once, because a stick that stayed where you left it would keep the piece
+sliding after your thumb was gone. The control is also cleared when it's
+disabled, since it's greyed out between turns rather than unmounted.
+
+(This replaced a pair of LEFT / RIGHT buttons that each sent a fixed pulse. They
+couldn't express *how far* to move, so every placement was a burst of taps.)
 
 ## Stats and saving
 
@@ -571,6 +582,8 @@ devices.
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
 | `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
 | `StormFade.ui.luau` | shared | The storm's one-shot white-out, played on `PHASE.GAMEOVER` |
+| `SteerStick.ui.luau` | shared | Touch steering: a horizontal drag track reporting analog `[-1, 1]` |
+| `SteerStick.story.luau` | shared | UI Labs story — drag it with the mouse, with a live value readout |
 | `TowerHUD.story.luau` | shared | UI Labs story — every prop on a slider, including both clocks |
 | `StormFade.story.luau` | shared | UI Labs story — replays the white-out on demand |
 | `TowerPresentation.client.luau` | client | Registers the HUD as a UIRegistry **root** |
@@ -599,6 +612,13 @@ from `zoneBaseHeight` (where the current zone started) to `targetHeight` — so 
 run always begins at the left dot no matter how tall the tower already is. The
 tower is a dot for now; it's a separate element rather than a bar fill precisely
 so it can grow into a little stack later.
+
+**The whole storm row is dropped during `PHASE.GAMEOVER.`** The round is over,
+the tower it measured is wreckage, and the server has frozen `stormEndsAt` — but
+the client draws the clock as `stormEndsAt - now`, so leaving it up counted a
+dead deadline down behind the gamemode vote and then snapped back when the next
+round started. It stays up through a checkpoint, where the line showing the leg
+just built is the point of the moment.
 
 The status line lives at the **bottom**, where the player is already looking when
 they're about to place, and lifts clear of the touch controls when those show.
@@ -648,7 +668,7 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 
 | Constant | Effect |
 | -------- | ------ |
-| `TURN_SECONDS` | The drop clock (10) |
+| `TURN_SECONDS` | The drop clock (15) |
 | `SETTLE_SECONDS` | Pause between turns |
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `GAMEPAD_STEER_DEADZONE` | Below this the left stick reads as centred and the D-pad / bumpers take over (0.2) |

@@ -12,6 +12,13 @@ return {
 	-- How long the poll is open.
 	VOTE_SECONDS = 15,
 
+	-- How many panels a ballot holds. Every `pinned` mode is always on it; the
+	-- rest of the slots are filled at random from what's left, re-rolled per
+	-- vote. Registering a tenth gamemode should make the ballot more varied, not
+	-- wider — three panels is what fits a phone in landscape, and a wall of
+	-- options is a worse choice than a short one.
+	BALLOT_SIZE = 3,
+
 	-- How long the winner stays on screen after the clock ends, before the frame
 	-- closes and play resumes.
 	RESULT_SECONDS = 3,

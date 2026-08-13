@@ -25,6 +25,7 @@ local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
 local ProgressLine = require(script.Parent.ProgressLine)
 local RadialTimer = require(script.Parent.RadialTimer)
+local SteerStick = require(script.Parent.SteerStick)
 local StormFade = require(script.Parent.StormFade)
 local TurnStrip = require(script.Parent.TurnStrip)
 local Zones = require(script.Parent.Zones)
@@ -44,7 +45,9 @@ local DROP_SIZE = UDim2.fromOffset(160, 88)
 local CONTROL_GAP = 12
 local EDGE_MARGIN = 20
 local CONTROL_ROW_HEIGHT = 88
-local CONTROL_ROW_WIDTH = 110 * 3 + 160 + CONTROL_GAP * 3
+-- The steering stick, then TURN and DROP, with a double gap between the stick
+-- and the buttons.
+local CONTROL_ROW_WIDTH = Constants.STICK_TRACK_WIDTH + 110 + 160 + CONTROL_GAP * 4
 
 local STORM_LABEL_HEIGHT = 24
 local STORM_LABEL_TEXT_SIZE = 22
@@ -99,8 +102,9 @@ export type Props = {
 	zoneWarning: Zones.Zone?,
 	showControls: boolean?,
 	showHint: boolean?,
-	onMoveLeft: (() -> ())?,
-	onMoveRight: (() -> ())?,
+	-- Touch steering, -1 to 1. Continuous: the stick reports every drag frame and
+	-- 0 exactly once when the thumb lifts.
+	onSteer: ((value: number) -> ())?,
 	onRotate: (() -> ())?,
 	onDrop: (() -> ())?,
 }
@@ -206,10 +210,18 @@ return function(props: Props)
 				})
 				else nil,
 		}),
+	}
 
-		-- The climb to the next checkpoint, as a journey between two dots rather
-		-- than a bar: it measures this leg only, so every zone starts at the left.
-		Storm = React.createElement(ui.Stack, {
+	-- The climb to the next checkpoint, as a journey between two dots rather
+	-- than a bar: it measures this leg only, so every zone starts at the left.
+	--
+	-- Gone during the round break. The round is over, the tower it measured is
+	-- wreckage, and the server has frozen `stormEndsAt` — but the client draws
+	-- the clock as `stormEndsAt - now`, so leaving it up counts a dead deadline
+	-- down behind the gamemode vote and then snaps back when the next round
+	-- starts. Nothing to show is the honest answer.
+	if props.phase ~= PHASE.GAMEOVER then
+		column.Storm = React.createElement(ui.Stack, {
 			gap = 2,
 			size = UDim2.new(1, 0, 0, PROGRESS_HEIGHT + STORM_LABEL_HEIGHT + 2),
 			layoutOrder = 3,
@@ -233,8 +245,8 @@ return function(props: Props)
 				size = UDim2.new(1, 0, 0, STORM_LABEL_HEIGHT),
 				layoutOrder = 2,
 			}),
-		}),
-	}
+		})
+	end
 
 	local children: { [string]: any } = {
 		Column = React.createElement(ui.Stack, {
@@ -331,19 +343,21 @@ return function(props: Props)
 	end
 
 	if props.showControls then
+		-- Steering is a drag, the two actions are taps, so they're different
+		-- shapes of control and sit apart: the stick on the left where a thumb
+		-- rests, TURN and DROP on the right for the other one. The old LEFT /
+		-- RIGHT buttons couldn't express how *far* to move — every placement was
+		-- a burst of taps — which is what the stick fixes.
 		children.Controls = React.createElement(ui.Row, {
-			gap = CONTROL_GAP,
+			gap = CONTROL_GAP * 2,
 			size = UDim2.fromOffset(CONTROL_ROW_WIDTH, CONTROL_ROW_HEIGHT),
 			position = UDim2.new(0.5, 0, 1, -EDGE_MARGIN),
 			anchorPoint = Vector2.new(0.5, 1),
 		}, {
-			Left = React.createElement(ui.Button, {
-				variant = "blue",
-				text = "LEFT",
-				size = BUTTON_SIZE,
+			Steer = React.createElement(SteerStick, {
 				disabled = not canAct,
 				layoutOrder = 1,
-				onClick = props.onMoveLeft,
+				onSteer = props.onSteer,
 			}),
 			Rotate = React.createElement(ui.Button, {
 				variant = "purple",
@@ -353,20 +367,12 @@ return function(props: Props)
 				layoutOrder = 2,
 				onClick = props.onRotate,
 			}),
-			Right = React.createElement(ui.Button, {
-				variant = "blue",
-				text = "RIGHT",
-				size = BUTTON_SIZE,
-				disabled = not canAct,
-				layoutOrder = 3,
-				onClick = props.onMoveRight,
-			}),
 			Drop = React.createElement(ui.Button, {
 				variant = "red",
 				text = "DROP",
 				size = DROP_SIZE,
 				disabled = not canAct,
-				layoutOrder = 4,
+				layoutOrder = 3,
 				onClick = props.onDrop,
 			}),
 		})

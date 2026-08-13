@@ -59,6 +59,9 @@ Gamemodes.List = {
 		blurb = "The game, played straight.",
 		icon = assets.Icons.book,
 		order = 0,
+		-- Always on the ballot; the other slots are rolled from the twists. The
+		-- players must always have a way to decline a modifier.
+		pinned = true,
 		-- Literally the un-voted numbers: winning Classic and skipping the vote
 		-- have to land on the same round, or one of them is lying.
 		modifier = Gamemodes.DEFAULT,

@@ -28,7 +28,7 @@ local LINES: { [string]: { string } } = {
 		"Drop — click or Space",
 	},
 	touch = {
-		"Move — LEFT / RIGHT",
+		"Move — drag the stick",
 		"Rotate — TURN",
 		"Drop — DROP",
 	},

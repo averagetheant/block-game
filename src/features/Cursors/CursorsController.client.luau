@@ -73,15 +73,27 @@ function CursorsController.enabled(): boolean
 	return SettingsController.get(Constants.SETTING_ID) ~= false
 end
 
--- True when this device drives its cursor with a thumbstick — i.e. console.
---
--- It's also the answer to "should the player see their own cursor". Everywhere
--- else the cursor *is* the system pointer or the finger, and drawing a second
--- one under it reads as lag. A stick-driven cursor has nothing underneath it, so
--- not drawing it would leave the player pushing an invisible pointer around.
--- Both questions share this one predicate so they can never disagree.
+-- True when this device drives its cursor with a thumbstick. A mouse outranks a
+-- pad: someone on a PC with a controller plugged in is almost certainly still
+-- pointing with the mouse, and taking cursor control off it would be a
+-- regression for the sake of a device they aren't using.
 function CursorsController.usesStickCursor(): boolean
 	return UserInputService.GamepadEnabled and not UserInputService.MouseEnabled
+end
+
+-- Whether the player sees their own cursor. Deliberately *wider* than
+-- `usesStickCursor`: any connected pad gets it, mouse or not.
+--
+-- The reason to hide it elsewhere is that the cursor is already drawn for you —
+-- the system pointer, or your finger — so a second arrow under it reads as lag.
+-- A stick has nothing underneath, so hiding it there leaves the player pushing
+-- an invisible pointer.
+--
+-- The invariant that matters is the one-way one: this must never be *narrower*
+-- than `usesStickCursor`, or a player could be steering a cursor they can't see.
+-- A superset is safe — the worst case is an arrow trailing your own mouse.
+function CursorsController.showsOwnCursor(): boolean
+	return UserInputService.GamepadEnabled
 end
 
 -- The local player's own cursor, or nil when it shouldn't be drawn. Read from
@@ -89,7 +101,7 @@ end
 -- the player is actively pushing has to answer the stick immediately, and a
 -- round trip through the server at SEND_INTERVAL would visibly lag it.
 function CursorsController.localCursor(): Vector2?
-	if not CursorsController.usesStickCursor() or not CursorsController.enabled() then
+	if not CursorsController.showsOwnCursor() or not CursorsController.enabled() then
 		return nil
 	end
 	return current

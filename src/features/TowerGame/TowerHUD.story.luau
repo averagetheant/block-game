@@ -128,11 +128,8 @@ return {
 			stormSeconds = Constants.STORM_SECONDS,
 			checkpoints = c.checkpoints,
 			showControls = c.showControls,
-			onMoveLeft = function()
-				print("[TowerHUD.story] move left")
-			end,
-			onMoveRight = function()
-				print("[TowerHUD.story] move right")
+			onSteer = function(value)
+				print(`[TowerHUD.story] steer {string.format("%.2f", value)}`)
 			end,
 			onRotate = function()
 				print("[TowerHUD.story] rotate")

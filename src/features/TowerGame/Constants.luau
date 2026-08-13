@@ -41,7 +41,7 @@ return {
 
 	-- ---------------------------------------------------------------- turns --
 	-- Hard cap on how long the holder may aim before the piece drops itself.
-	TURN_SECONDS = 10,
+	TURN_SECONDS = 15,
 	-- Grace period after a drop before the next player is handed a piece.
 	SETTLE_SECONDS = 1.5,
 	-- Clear air between the *bottom* of a fresh piece and the top of everything it
@@ -56,9 +56,21 @@ return {
 	-- Studs per second while a direction is held. Steering is continuous, not
 	-- one cell per press.
 	STEER_SPEED = 18,
-	-- A touch tap has no key-up, so the HUD buttons send a pulse of this length
-	-- instead: one tap ≈ STEER_SPEED * TOUCH_NUDGE_SECONDS studs of travel.
-	TOUCH_NUDGE_SECONDS = 0.16,
+	-- ----------------------------------------------------- the steering stick --
+	-- Touch steering: a horizontal track with a knob dragged along it, reporting
+	-- a continuous [-1, 1] into the same analog `setSteer` the gamepad uses.
+	-- One axis, because the game is one axis — a round stick would promise a
+	-- vertical control the piece doesn't have.
+	--
+	-- Wide, because precision here is the whole game and a thumb is blunt: the
+	-- track's half-width is the full steering range, so a wider track means finer
+	-- control per pixel of travel.
+	STICK_TRACK_WIDTH = 260,
+	STICK_TRACK_HEIGHT = 74,
+	STICK_KNOB_SIZE = 62,
+	STICK_TRACK_COLOR = Color3.fromRGB(18, 20, 30),
+	STICK_KNOB_COLOR = Color3.fromRGB(86, 142, 255),
+	STICK_STROKE_COLOR = Color3.fromRGB(226, 230, 245),
 	-- Placement streaming: the holder's client owns the *feel* of aiming and
 	-- reports where the piece is. This is how often that report goes out (the
 	-- rate spectators see the piece move at) and the movement below which it

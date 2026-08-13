@@ -13,6 +13,14 @@ return {
 	-- shrinks back to this on close.
 	ENTER_SCALE_FROM = 0.8,
 
+	-- FocusEffect: the world's reaction while any frame is open. The blur is
+	-- pushed into Lighting; the FOV change is *subtracted* from the camera's
+	-- current field of view, so a narrower view = a slight zoom in. Keep the
+	-- zoom small — it's a nudge that says "this is on top", not a cutscene.
+	FOCUS_BLUR_SIZE = 18,
+	FOCUS_FOV_ZOOM = 6,
+	FOCUS_TWEEN_INFO = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+
 	-- HideWhenFrameOpen: how far off-screen (in parent scale units) the
 	-- hidden element slides. 1.0 = one full parent-width/height, which
 	-- guarantees off-screen for any element narrower than its parent.

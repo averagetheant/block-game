@@ -46,7 +46,7 @@ return {
 				}, {
 					Label = React.createElement(ui.Text, {
 						text = "0.0 studs",
-						textSize = 30,
+						textSize = ui.theme.textSizeRegular,
 						weight = Enum.FontWeight.Heavy,
 						shadow = true,
 						xAlignment = Enum.TextXAlignment.Center,

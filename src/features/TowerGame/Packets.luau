@@ -68,6 +68,13 @@ return ByteNet.defineNamespace("TowerGame", function()
 				-- strip rotates this so the holder lands dead center; the entry at
 				-- the end is whoever played immediately before (the cycle wraps).
 				order = ByteNet.array(ByteNet.float64),
+				-- The player who takes the *next* piece as well as this one,
+				-- because they own Double Turn; 0 when nobody does. Sent instead
+				-- of listing them in `order` twice: the strip keys its chips by
+				-- user id, so a second entry would be the same chip, not a
+				-- second slot. The HUD badges them "2x" and the order stays
+				-- honest about who is actually up next.
+				repeatUserId = ByteNet.float64,
 				-- Storm stage: the height to beat, when the clock runs out (server
 				-- time, same deal as turnEndsAt), and how many checkpoint
 				-- platforms have been earned so far.

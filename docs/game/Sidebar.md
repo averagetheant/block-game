@@ -145,7 +145,7 @@ React.createElement(Sidebar.UI, {
           onClick = function() ... end },
     },
     iconSize  = 72,                       -- optional, square item size (px)
-    labelSize = 18,                       -- optional, label TextSize
+    labelSize = 32,                       -- optional, label TextSize
     spacing   = 12,                       -- optional, gap between items
     padding   = 12,                       -- optional, outer padding
     position  = UDim2.fromScale(0, 0.5),  -- defaults to left-center
@@ -185,9 +185,9 @@ React.createElement(Sidebar.Item, {
 | Key | Default | What it controls |
 | --- | --- | --- |
 | `DEFAULT_ICON_SIZE`      | `72` | Square item side length (px). |
-| `DEFAULT_LABEL_SIZE`     | `26` | Label `TextSize` (px). |
+| `DEFAULT_LABEL_SIZE`     | `theme.textSizeRegular` (`32`) | Label `TextSize` (px). The shared ladder's body tier — a phone halves it to ~16px, so this is the floor rather than a starting point. |
 | `LABEL_STROKE_THICKNESS` | `2`  | Miter UIStroke thickness on the label. Set to `0` and update SidebarItem to drop the outline. |
-| `LABEL_BOTTOM_INSET`     | `6`  | Pixels between the label's bottom edge and the icon's bottom edge — keeps the label inside the icon. |
+| `LABEL_BOTTOM_INSET`     | `0`  | Pixels between the label's bottom edge and the icon's bottom edge — keeps the label inside the icon. `0` sits it flush with the icon's bottom edge, still inside the art's visual bounds. |
 | `HOVER_TILT_MIN_DEG`     | `4`  | Minimum random tilt magnitude applied to the icon on hover (degrees). |
 | `HOVER_TILT_MAX_DEG`     | `12` | Maximum random tilt magnitude. Set to `0` (both) to disable the tilt entirely. |
 | `ITEM_SPACING`       | `12` | Vertical gap between sibling items (px). |

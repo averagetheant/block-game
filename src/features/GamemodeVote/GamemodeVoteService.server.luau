@@ -10,10 +10,16 @@
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local ServerScriptService = game:GetService("ServerScriptService")
 
 local Constants = require(ReplicatedStorage.Features.GamemodeVote.Constants)
 local Packets = require(ReplicatedStorage.Features.GamemodeVote.Packets)
 local Registry = require(ReplicatedStorage.Features.GamemodeVote.Registry)
+
+-- The 2x Votes gamepass (registered as a card in this feature's Store.luau).
+-- Ownership is asked here rather than sent by the client for the obvious reason:
+-- a weight the client claimed would be a tally the client wrote.
+local StoreService = require(ServerScriptService.Features.Store.StoreService)
 
 local GamemodeVoteService = {}
 
@@ -29,11 +35,25 @@ local options: { string } = {}
 -- userId -> gamemode id. Keyed by user id rather than Player because the screen
 -- shows a vote as that player's headshot, and the id is what fetches it.
 local votes: { [number]: string } = {}
+-- userId -> what that vote counts for. Stamped when the vote is cast rather than
+-- read at the count, so buying the pass mid-poll doesn't retroactively reweigh a
+-- stamp that's been sitting on a panel — re-vote and it counts double.
+local weights: { [number]: number } = {}
+
+-- How much one player's vote counts for. One stamp either way: the screen shows
+-- presence, and a second headshot for the same player would read as a second
+-- player rather than as a heavier vote.
+local function weightOf(player: Player): number
+	if StoreService.ownsGamepass(player, Constants.GAMEPASS_DOUBLE_VOTE) then
+		return Constants.DOUBLE_VOTE_WEIGHT
+	end
+	return 1
+end
 
 local function payload()
 	local voters = {}
 	for userId, optionId in votes do
-		table.insert(voters, { userId = userId, optionId = optionId })
+		table.insert(voters, { userId = userId, optionId = optionId, weight = weights[userId] or 1 })
 	end
 	-- Stable order so a client re-render can't shuffle the headshots around a
 	-- panel for no reason.
@@ -74,8 +94,10 @@ function GamemodeVoteService.castVote(player: Player, optionId: string)
 	-- separate un-vote affordance.
 	if votes[player.UserId] == optionId then
 		votes[player.UserId] = nil
+		weights[player.UserId] = nil
 	else
 		votes[player.UserId] = optionId
+		weights[player.UserId] = weightOf(player)
 	end
 	broadcast()
 end
@@ -137,8 +159,8 @@ end
 -- never has to carry a "what if they all abstained" branch.
 local function pickWinner(): string
 	local counts: { [string]: number } = {}
-	for _, optionId in votes do
-		counts[optionId] = (counts[optionId] or 0) + 1
+	for userId, optionId in votes do
+		counts[optionId] = (counts[optionId] or 0) + (weights[userId] or 1)
 	end
 
 	local best = 0
@@ -170,6 +192,7 @@ function GamemodeVoteService.startVote(): string?
 		return nil
 	end
 	votes = {}
+	weights = {}
 	winnerId = ""
 	endsAt = workspace:GetServerTimeNow() + Constants.VOTE_SECONDS
 	broadcast()
@@ -187,6 +210,7 @@ function GamemodeVoteService.startVote(): string?
 	endsAt = 0
 	winnerId = ""
 	votes = {}
+	weights = {}
 	options = {}
 	broadcast()
 
@@ -214,6 +238,7 @@ function GamemodeVoteService.Start()
 			return
 		end
 		votes[player.UserId] = nil
+		weights[player.UserId] = nil
 		broadcast()
 	end)
 end

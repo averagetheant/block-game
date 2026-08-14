@@ -55,6 +55,9 @@ return {
 		stormSecondsLeft = UILabs.Slider(148, 0, Constants.STORM_SECONDS, 1),
 		checkpoints = UILabs.Slider(1, 0, 20, 1),
 		playerCount = UILabs.Slider(4, 1, 8, 1),
+		-- Tags the current player's chip "2x" — what a Double Turn owner's
+		-- headshot looks like while their second piece is still coming.
+		doubleTurn = false,
 		cash = UILabs.Slider(1250, 0, 100000, 10),
 		-- The composed piece name, exactly as TowerView builds it from the shape
 			-- and the block type.
@@ -115,6 +118,8 @@ return {
 			holderName = "BlockFan42",
 			holderUserId = if phase == Constants.PHASE.AIMING then order[1] or 0 else 0,
 			order = order,
+			-- The Double Turn tag on the current player's chip.
+			repeatUserId = if c.doubleTurn then order[1] or 0 else 0,
 			device = c.device,
 			cash = c.cash,
 			-- A stand-in for the controller's signal: the story fires it from the

@@ -12,14 +12,17 @@ return {
 	-- SidebarItem square size (pixels). The whole item is one icon — the
 	-- label rides on top of it, anchored to the bottom edge.
 	DEFAULT_ICON_SIZE = 72,
-	-- Label TextSize (pixels).
-	DEFAULT_LABEL_SIZE = 26,
+	-- Label TextSize (pixels). On the shared ladder's body tier — these are
+	-- navigation labels, and a phone halves every pixel here (see
+	-- `useViewportScale`), so anything below this stops being readable.
+	DEFAULT_LABEL_SIZE = theme.textSizeRegular,
 	-- Miter UIStroke thickness on the label. Matches the gem text outline
 	-- minus the offset shadow layer — readable on top of any icon.
 	LABEL_STROKE_THICKNESS = theme.thinStrokeThickness,
 	-- Distance (pixels) from the bottom edge of the icon to the baseline of
-	-- the label. Keeps the label inside the icon's visual bounds.
-	LABEL_BOTTOM_INSET = 6,
+	-- the label. 0 sits the label flush with the icon's bottom edge — still
+	-- inside its visual bounds, since the art doesn't reach the edge.
+	LABEL_BOTTOM_INSET = 0,
 	-- Rotation tilt picked at random on hover-enter (degrees). Magnitude
 	-- comes from [MIN, MAX]; sign is 50/50. Set MAX = 0 to disable.
 	HOVER_TILT_MIN_DEG = 4,

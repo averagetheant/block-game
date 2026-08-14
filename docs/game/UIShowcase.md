@@ -26,6 +26,8 @@ Inventory and Shop currently fall through to placeholder rows; mount real featur
 
 Besides the mounted demo, the folder carries story-only screen prototypes (no `.ui.luau`, nothing ships to the game) used to iterate layouts in UI Labs before a real feature owns them: `IndexUI.story.luau`, `RebirthUI.story.luau`, and `UpgradesUI.story.luau` (upgrade list — name over a muted level label, now ► next stat preview, green price button that flips to a disabled MAXED at cap; cost/level advance live on click).
 
+A prototype graduates by *moving*: the daily-rewards frame started here and now lives in `src/features/DailyRewards/` with a service, a registry and a topbar button behind it (see [DailyRewards.md](DailyRewards.md)). When that happens, delete the prototype rather than leaving a second copy to drift — the story moves with the UI.
+
 ## Studio assets it expects
 
 None at runtime — every asset is referenced as a literal `rbxassetid://`. The "Rebirth" icon (`rbxassetid://137349421699691`), gem font (`rbxassetid://12187373592`), and noise texture (`rbxassetid://127211237265741`) are all uploaded assets, not Studio instances.

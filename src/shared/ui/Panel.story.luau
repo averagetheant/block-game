@@ -51,7 +51,7 @@ return {
 				BorderSizePixel = 0,
 				Text = "Panel content",
 				TextColor3 = Color3.fromRGB(255, 255, 255),
-				TextSize = 28,
+				TextSize = ui.theme.textSizeRegular,
 				FontFace = font,
 			}),
 		})

@@ -23,6 +23,15 @@ return {
 	-- closes and play resumes.
 	RESULT_SECONDS = 3,
 
+	-- The 2x Votes gamepass, configured on the Roblox place. Its owner's stamp
+	-- counts for DOUBLE_VOTE_WEIGHT in the tally instead of 1 — one stamp, worth
+	-- more. Ownership is read on the *server* (StoreService.ownsGamepass); the
+	-- weight goes out with the poll only so the screen can say so.
+	--
+	-- The card for it is registered in this feature's Store.luau.
+	GAMEPASS_DOUBLE_VOTE = 1948166343,
+	DOUBLE_VOTE_WEIGHT = 2,
+
 	-- The thud a landing stamp makes. A Studio-authored Sound of this name under
 	-- `ReplicatedStorage.Assets.Sounds`, played through `Boil.audio.playCue` — a
 	-- missing one costs the cue and nothing else.

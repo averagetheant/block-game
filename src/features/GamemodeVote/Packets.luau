@@ -41,6 +41,10 @@ return ByteNet.defineNamespace("GamemodeVote", function()
 				voters = ByteNet.array(ByteNet.struct({
 					userId = ByteNet.float64,
 					optionId = ByteNet.string,
+					-- What that stamp counts for in the tally: 1, or more with
+					-- the 2x Votes gamepass. Sent so the screen can say so — the
+					-- count itself is the server's, and always was.
+					weight = ByteNet.uint8,
 				})),
 			}),
 			reliabilityType = "reliable",

@@ -14,6 +14,12 @@
 -- The knob is driven imperatively from the input events, not from React state.
 -- A dragged control updates every frame it moves, and routing that through state
 -- would re-render the whole HUD for the length of the drag.
+--
+-- Styling is composed, not drawn: the track is `ui.Panel`'s dark-glass surface
+-- (the same one the gem ProgressBar sits in) and the knob is `ui.Panel`'s gem
+-- mode — noise, fill gradient, glow and shine, exactly what a gem Button's face
+-- is made of. Nothing here paints a colour of its own, so the stick follows the
+-- active skin along with every other primitive.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService = game:GetService("UserInputService")
@@ -24,10 +30,16 @@ local Constants = require(script.Parent.Constants)
 
 local theme = ui.theme
 
+-- Matches the gem Button's disabled wash, so a greyed stick reads as the same
+-- kind of "not now" as the greyed TURN / DROP buttons beside it.
+local DISABLED_OVERLAY_TRANSPARENCY = 0.45
+
 export type Props = {
 	-- Fires with the deflection, -1 (full left) to 1 (full right). Called with 0
 	-- exactly once when the thumb lifts.
 	onSteer: (value: number) -> (),
+	-- Gem palette for the knob. Defaults to Constants.STICK_KNOB_VARIANT.
+	variant: string?,
 	disabled: boolean?,
 	position: UDim2?,
 	anchorPoint: Vector2?,
@@ -44,7 +56,13 @@ return function(props: Props)
 	-- below can tell this gesture from any other finger on the screen.
 	local tracked = React.useRef(nil :: InputObject?)
 
-	local half = Constants.STICK_TRACK_WIDTH / 2 - Constants.STICK_KNOB_SIZE / 2
+	-- The knob sits inside the track's stroke, not against it: a gem surface
+	-- placed at the bare padding crowds the outline it's sitting in. Derived at
+	-- render from the tokens so a live theme edit re-inserts it.
+	local knobInset = theme.padding + theme.strokeThickness
+	local knobSize = Constants.STICK_TRACK_HEIGHT - knobInset * 2
+
+	local half = Constants.STICK_TRACK_WIDTH / 2 - knobSize / 2
 
 	-- The knob follows the finger *past* the end of the track, up to
 	-- STICK_OVERREACH. Pinning it hard at the edge is what read as a snap: the
@@ -135,62 +153,82 @@ return function(props: Props)
 		end
 	end, { update, release } :: { any })
 
-	return React.createElement("TextButton", {
+	-- Same shape as a gem Button: the visuals are inert and one invisible
+	-- Trigger on top owns the input. The outer Frame is what gets measured, so
+	-- `steerFrom` reads the track's true bounds however the HUD places it.
+	return React.createElement("Frame", {
 		ref = trackRef,
 		Size = UDim2.fromOffset(Constants.STICK_TRACK_WIDTH, Constants.STICK_TRACK_HEIGHT),
 		Position = props.position,
 		AnchorPoint = props.anchorPoint,
 		LayoutOrder = props.layoutOrder,
-		BackgroundColor3 = Constants.STICK_TRACK_COLOR,
-		BackgroundTransparency = if props.disabled then 0.75 else 0.45,
+		BackgroundTransparency = 1,
 		BorderSizePixel = 0,
-		AutoButtonColor = false,
-		Active = not props.disabled,
-		Text = "",
-		[React.Event.InputBegan] = function(_, input: InputObject)
-			if props.disabled then
-				return
-			end
-			if
-				input.UserInputType ~= Enum.UserInputType.Touch
-				and input.UserInputType ~= Enum.UserInputType.MouseButton1
-			then
-				return
-			end
-			dragging.current = true
-			-- Remembered so the service-level move/end hooks can recognise this
-			-- finger after it has left the control.
-			tracked.current = input
-			update(input.Position.X)
-		end,
 	}, {
-		Corner = React.createElement("UICorner", {
-			CornerRadius = UDim.new(0, Constants.STICK_TRACK_HEIGHT / 2),
-		}),
-		Stroke = React.createElement("UIStroke", {
-			Color = Constants.STICK_STROKE_COLOR,
-			Thickness = theme.strokeThickness,
-			Transparency = if props.disabled then 0.7 else 0.35,
+		Track = React.createElement(ui.Panel, {
+			size = UDim2.fromScale(1, 1),
+			transparency = if props.disabled
+				then Constants.STICK_TRACK_DISABLED_TRANSPARENCY
+				else Constants.STICK_TRACK_TRANSPARENCY,
+			zIndex = 1,
 		}),
 
+		-- A transparent positioner: the gem surface inside it fills the frame,
+		-- and the drag moves the frame. Keeping the two apart means the imperative
+		-- Position write never touches the skinned content.
 		Knob = React.createElement("Frame", {
 			ref = knobRef,
-			Size = UDim2.fromOffset(Constants.STICK_KNOB_SIZE, Constants.STICK_KNOB_SIZE),
+			Size = UDim2.fromOffset(knobSize, knobSize),
 			Position = UDim2.fromScale(0.5, 0.5),
 			AnchorPoint = Vector2.new(0.5, 0.5),
-			BackgroundColor3 = Constants.STICK_KNOB_COLOR,
-			BackgroundTransparency = if props.disabled then 0.5 else 0,
+			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
-			-- The track owns the input; a knob that took its own would swallow
-			-- the drag the moment the thumb landed on it.
-			Active = false,
+			ZIndex = 2,
 		}, {
-			Corner = React.createElement("UICorner", { CornerRadius = UDim.new(1, 0) }),
-			Stroke = React.createElement("UIStroke", {
-				Color = Constants.STICK_STROKE_COLOR,
-				Thickness = theme.strokeThickness,
-				Transparency = 0.2,
+			Gem = React.createElement(ui.Panel, {
+				variant = props.variant or Constants.STICK_KNOB_VARIANT,
+				hasShine = true,
+				-- The badge tile, not the button one: the noise has to read at
+				-- knob scale, and the full-size tile barely repeats across 60px.
+				tileSize = theme.badgeTileSize,
+				size = UDim2.fromScale(1, 1),
 			}),
+		}),
+
+		DisabledOverlay = if props.disabled
+			then React.createElement("Frame", {
+				Size = UDim2.fromScale(1, 1),
+				BackgroundColor3 = Color3.fromRGB(0, 0, 0),
+				BackgroundTransparency = DISABLED_OVERLAY_TRANSPARENCY,
+				BorderSizePixel = 0,
+				ZIndex = 3,
+			})
+			else nil,
+
+		Trigger = React.createElement("TextButton", {
+			Size = UDim2.fromScale(1, 1),
+			BackgroundTransparency = 1,
+			BorderSizePixel = 0,
+			AutoButtonColor = false,
+			Active = not props.disabled,
+			Text = "",
+			ZIndex = 10,
+			[React.Event.InputBegan] = function(_, input: InputObject)
+				if props.disabled then
+					return
+				end
+				if
+					input.UserInputType ~= Enum.UserInputType.Touch
+					and input.UserInputType ~= Enum.UserInputType.MouseButton1
+				then
+					return
+				end
+				dragging.current = true
+				-- Remembered so the service-level move/end hooks can recognise this
+				-- finger after it has left the control.
+				tracked.current = input
+				update(input.Position.X)
+			end,
 		}),
 	})
 end

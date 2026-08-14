@@ -15,6 +15,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local PlayerDataService = require(ServerScriptService.Features.PlayerData.PlayerDataService)
+local StoreService = require(ServerScriptService.Features.Store.StoreService)
 
 local CashService = {}
 
@@ -28,6 +29,20 @@ local function slice(player: Player): { [string]: any }?
 	return if data then data[KEY] else nil
 end
 
+-- What the 2x Cash gamepass multiplies this player's earnings by.
+--
+-- It hangs off the single write path below rather than off each award site, so
+-- every way the game pays — zones, height, the clock, and anything a later
+-- feature adds — is doubled by the same rule. Coins bought with Robux are a
+-- purchase rather than earnings and are granted by StoreService, which never
+-- comes through here.
+local function multiplierFor(player: Player): number
+	if StoreService.ownsGamepass(player, Constants.GAMEPASSES.DOUBLE_CASH) then
+		return Constants.DOUBLE_CASH_MULTIPLIER
+	end
+	return 1
+end
+
 -- The one write path. Returns quietly for a player whose profile hasn't loaded
 -- yet — they'll earn on the next award rather than banking onto a nil.
 function CashService.award(player: Player, amount: number)
@@ -35,7 +50,9 @@ function CashService.award(player: Player, amount: number)
 	if saved == nil or amount <= 0 then
 		return
 	end
-	PlayerDataService.SetValue(player, { KEY, "Cash" }, (saved.Cash or 0) + amount)
+	-- Floored, so a multiplier can never mint a fraction of a coin.
+	local paid = math.floor(amount * multiplierFor(player))
+	PlayerDataService.SetValue(player, { KEY, "Cash" }, (saved.Cash or 0) + paid)
 end
 
 function CashService.awardAll(amount: number)

@@ -38,9 +38,11 @@ local PHASE = Constants.PHASE
 -- one ("SomePlayer is placing the Bomb T-Shape") has to fit inside.
 local COLUMN_WIDTH = 460
 local STATS_HEIGHT = 66
-local STATUS_HEIGHT = 38
 local STAT_TEXT_SIZE = 34
-local STATUS_TEXT_SIZE = 30
+-- The status line names who is placing what; it's read mid-round at a glance,
+-- so it holds the body floor and its row is sized from the tier.
+local STATUS_TEXT_SIZE = ui.theme.textSizeRegular
+local STATUS_HEIGHT = STATUS_TEXT_SIZE + 8
 local TOP_MARGIN = 10
 local STACK_GAP = 6
 
@@ -53,8 +55,8 @@ local CONTROL_ROW_HEIGHT = 88
 -- and the buttons.
 local CONTROL_ROW_WIDTH = Constants.STICK_TRACK_WIDTH + 110 + 160 + CONTROL_GAP * 4
 
-local STORM_LABEL_HEIGHT = 28
-local STORM_LABEL_TEXT_SIZE = 25
+local STORM_LABEL_TEXT_SIZE = ui.theme.textSizeRegular
+local STORM_LABEL_HEIGHT = STORM_LABEL_TEXT_SIZE + 8
 local PROGRESS_HEIGHT = 26
 local PANEL_RESIZE = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 -- The camera toggle, sitting above the cash panel on the right edge.
@@ -64,7 +66,13 @@ local CASH_HEIGHT = 58
 local CASH_TEXT_SIZE = 32
 local CASH_ICON = 34
 local WARNING_WIDTH = 460
-local WARNING_HEIGHT = 104
+-- Sized from its contents: title row + gap + detail row + the Stack's padding
+-- on both sides. Grows if either text tier does.
+local WARNING_TITLE_ROW = 54
+local WARNING_DETAIL_ROW = 40
+local WARNING_GAP = 2
+local WARNING_PAD = 8
+local WARNING_HEIGHT = WARNING_TITLE_ROW + WARNING_GAP + WARNING_DETAIL_ROW + WARNING_PAD * 2
 
 -- The storm's white-out covers the screen, and the HUD is part of the screen —
 -- so it sits above every other child rather than among them.
@@ -89,6 +97,8 @@ export type Props = {
 	holderUserId: number,
 	-- Turn order as user ids, current holder first.
 	order: { number },
+	-- Who takes the next piece as well as this one (Double Turn); 0 for nobody.
+	repeatUserId: number?,
 	shapeName: string,
 	nextShapeName: string,
 	secondsLeft: number,
@@ -170,6 +180,7 @@ return function(props: Props)
 		Turns = React.createElement(TurnStrip, {
 			order = props.order,
 			holderUserId = props.holderUserId,
+			repeatUserId = props.repeatUserId or 0,
 			layoutOrder = 1,
 		}),
 
@@ -334,24 +345,24 @@ return function(props: Props)
 			anchorPoint = Vector2.new(0.5, 0.5),
 			zIndex = 5,
 		}, {
-			Stack = React.createElement(ui.Stack, { gap = 2, padding = 8 }, {
+			Stack = React.createElement(ui.Stack, { gap = WARNING_GAP, padding = WARNING_PAD }, {
 				Title = React.createElement(ui.Text, {
 					text = props.zoneWarning.name,
-					textSize = 38,
+					textSize = ui.theme.textSizeLarge,
 					weight = Enum.FontWeight.Heavy,
 					shadow = true,
 					color = props.zoneWarning.tint,
 					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(1, 0, 0, 46),
+					size = UDim2.new(1, 0, 0, WARNING_TITLE_ROW),
 					layoutOrder = 1,
 				}),
 				Detail = React.createElement(ui.Text, {
 					text = props.zoneWarning.warning or "",
-					textSize = 27,
+					textSize = ui.theme.textSizeRegular,
 					weight = Enum.FontWeight.Bold,
 					shadow = true,
 					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(1, 0, 0, 34),
+					size = UDim2.new(1, 0, 0, WARNING_DETAIL_ROW),
 					layoutOrder = 2,
 				}),
 			}),

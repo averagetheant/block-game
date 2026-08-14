@@ -168,6 +168,7 @@ return function()
 		holderName = if holder then holder.DisplayName else nil,
 		holderUserId = state.holderUserId,
 		order = state.order,
+		repeatUserId = state.repeatUserId,
 		shapeName = pieceName,
 		nextShapeName = Shapes.nameOf(state.nextShapeId),
 		secondsLeft = clocks.turn,

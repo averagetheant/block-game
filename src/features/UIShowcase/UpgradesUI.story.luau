@@ -28,20 +28,25 @@ local GOLD_TEXT = Color3.fromRGB(255, 209, 64)
 ------------------------------------------------------------------------------
 -- Layout tokens
 ------------------------------------------------------------------------------
-local ROW_HEIGHT = 84
+-- The row fits its two stacked text rows; it isn't a round number the text has
+-- to squeeze into. "Lv. 3" is state the player reads, so it sits on the body
+-- tier rather than the decorative one.
+local NAME_TEXT_HEIGHT = 46
+local LEVEL_TEXT_HEIGHT = 38
+local ROW_HEIGHT = NAME_TEXT_HEIGHT + LEVEL_TEXT_HEIGHT + 12
 local ROW_ICON_SIZE = 56
 
 local NAME_ZONE_WIDTH = 260
 local NAME_TEXT_WIDTH = 190
 local NAME_TEXT_SIZE = theme.textSizeLarge
-local NAME_TEXT_HEIGHT = 46
 
-local LEVEL_TEXT_SIZE = theme.textSizeSmall
-local LEVEL_TEXT_HEIGHT = 26
+local LEVEL_TEXT_SIZE = theme.textSizeRegular
 local LEVEL_TEXT_COLOR = Color3.fromRGB(185, 195, 215)
 
 local STAT_VALUE_WIDTH = 52
-local STAT_ARROW_WIDTH = 24
+-- Wide enough for the glyph at body size — it sits between two stat numbers
+-- and reads as part of that line, so it matches their tier.
+local STAT_ARROW_WIDTH = 32
 local STAT_TEXT_SIZE = theme.textSizeRegular
 
 local BUTTON_ZONE_WIDTH = 150
@@ -168,7 +173,7 @@ function statPreview(upgrade, level: number): any
 		}),
 		Arrow = React.createElement(ui.Text, {
 			text = "►",
-			textSize = theme.textSizeSmall,
+			textSize = theme.textSizeRegular,
 			weight = Enum.FontWeight.Heavy,
 			shadow = true,
 			size = UDim2.new(0, STAT_ARROW_WIDTH, 1, 0),

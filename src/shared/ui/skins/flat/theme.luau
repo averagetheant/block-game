@@ -14,8 +14,18 @@ theme.itemSpacing = 8
 theme.contentSpacing = 12
 theme.cornerRadius = UDim.new(0, 4)
 
-theme.textSize = 24
-theme.titleTextSize = 28
+-- Text sizes are authored against the 1280x720 reference and halved on a phone
+-- (see useViewportScale), so 32 is the readability floor for anything a player
+-- has to read. "Flat" is about surfaces — solid fills, thin borders, no
+-- gradients or shine — not about smaller type, so these track the gem ladder
+-- rather than shrinking below it.
+theme.textSize = 44      -- Component default: Text, Button, Badge, ProgressBar.
+theme.titleTextSize = 60 -- Window title bar.
+-- Text that sizes to its box rather than to body copy: the Window close "X"
+-- and the ProgressBar's inline label, both of which live in a short clipped
+-- container. Still on the 32 floor — this is the smallest tier, not a licence
+-- to go under it.
+theme.compactTextSize = 32
 
 theme.buttonSize = UDim2.fromOffset(60, 60)
 theme.windowSize = UDim2.fromOffset(797, 595)

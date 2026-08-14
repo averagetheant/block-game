@@ -28,9 +28,12 @@ type Props = {
 }
 
 local ACTION_HEIGHT = 48
-local NAME_HEIGHT = 34
-local NAME_TEXT_SIZE = 28
-local DESC_TEXT_SIZE = 20
+-- Both labels sit on the shared ladder: the pack name and its description are
+-- the copy a player reads to decide on a purchase, so neither drops below the
+-- body floor. CARD_HEIGHT is sized to hold the description at this tier.
+local NAME_TEXT_SIZE = ui.theme.textSizeRegular
+local NAME_HEIGHT = NAME_TEXT_SIZE + 8
+local DESC_TEXT_SIZE = ui.theme.textSizeRegular
 local GAP = 6
 
 local DESC_COLOR = Color3.fromRGB(196, 203, 224)

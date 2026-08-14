@@ -146,7 +146,7 @@ right:
 | Packet | Direction | Payload |
 | ------ | --------- | ------- |
 | `Cast` | Client → Server | `{ optionId }`. Sending the id you already hold takes the vote back. Unknown ids, and votes cast outside an open poll, are dropped server-side. |
-| `State` | Server → All | `{ endsAt, winnerId, options, voters }`. Sent on change, not on a tick. |
+| `State` | Server → All | `{ endsAt, winnerId, options, voters }`. Sent on change, not on a tick. Each voter is `{ userId, optionId, weight }`. |
 
 `endsAt` is a `workspace:GetServerTimeNow()` stamp, so clients run the clock
 locally instead of us shipping a packet a second. It doubles as the "a vote is
@@ -155,7 +155,23 @@ stays at its (now past) value through the result window so the winner has a
 moment on screen.
 
 `voters` is who voted for what, not a count, because the screen shows a vote as
-that player's headshot.
+that player's headshot. `weight` rides along only so the screen can *say* a vote
+counts double — the tally itself is the server's, and always was.
+
+## 2x Votes
+
+The gamepass (`Constants.GAMEPASS_DOUBLE_VOTE`, id `1948166343`) makes one
+player's stamp count `DOUBLE_VOTE_WEIGHT` (2) in the tally. The card is
+registered in this feature's `Store.luau`; ownership is read on the server with
+`StoreService.ownsGamepass` when the vote is cast, never sent up by the client.
+
+It's still **one stamp**. The row along the bottom of a panel shows who is on it,
+and a second headshot for the same player would read as a second player — so the
+stamp gets a small `x2` tag instead.
+
+The weight is recorded **when the vote is cast**, not when the count runs, so
+buying the pass mid-poll doesn't retroactively reweigh a stamp that's already
+sitting on a panel. Re-vote and it counts double.
 
 ## The screen
 
@@ -185,7 +201,14 @@ TowerGame → GamemodeVote, one way, in two places:
   in the round break. Removing GamemodeVote without removing that call breaks
   TowerGame, the same way removing PlayerData would break Notes.
 
-GamemodeVote names neither TowerGame nor any other feature.
+GamemodeVote names TowerGame nowhere. It does name **Store**, in two places, and
+both are about the 2x Votes gamepass:
+
+- `GamemodeVote/Store.luau` registers the card (soft — auto-discovered by Store,
+  and never required by this feature itself).
+- `GamemodeVoteService` **hard-requires** `StoreService` to ask whether a voter
+  owns the pass. Uninstall Store and this require has to go with it, along with
+  `weightOf` — every vote then weighs 1, which is what it weighed before.
 
 ## Constants worth knowing
 
@@ -197,11 +220,15 @@ GamemodeVote names neither TowerGame nor any other feature.
 | `BALLOT_SIZE` | `3` | Panels per ballot. Every `pinned` mode is always on it; the rest are rolled at random per vote. |
 | `RESULT_SECONDS` | `3` | How long the winner stays up before the frame closes. |
 | `FRAME_ID` | `"GamemodeVote"` | The UIShell frame id the screen opens itself on. |
+| `GAMEPASS_DOUBLE_VOTE` | `1948166343` | The 2x Votes gamepass. Must exist on the place. |
+| `DOUBLE_VOTE_WEIGHT` | `2` | What that pass makes one stamp count for. |
 
 ## Priority
 
 `GamemodeVoteService.Priority = 5` — no dependency on another service's startup;
-the vote does nothing until something calls `startVote()`.
+the vote does nothing until something calls `startVote()`. It starts *ahead* of
+Store (10) and that's fine: the only thing it asks Store is whether a voter owns
+2x Votes, and the first poll is a whole storm stage away.
 
 ## Not built yet
 

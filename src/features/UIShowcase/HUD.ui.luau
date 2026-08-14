@@ -50,13 +50,13 @@ local function placeholderRows(label: string): { [string]: any }
 	local rows: { [string]: any } = {}
 	for i = 1, 6 do
 		rows[`Row{i}`] = React.createElement("TextLabel", {
-			Size = UDim2.new(1, 0, 0, 40),
+			Size = UDim2.new(1, 0, 0, ui.theme.textSizeRegular + ui.theme.padding * 2),
 			BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 			BackgroundTransparency = 0.85,
 			BorderSizePixel = 0,
 			Text = `{label} row {i}`,
 			TextColor3 = Color3.fromRGB(255, 255, 255),
-			TextSize = 18,
+			TextSize = ui.theme.textSizeRegular,
 			LayoutOrder = i,
 		})
 	end

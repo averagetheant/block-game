@@ -30,6 +30,8 @@ export type State = {
 	blockTypeId: number,
 	nextShapeId: number,
 	order: { number },
+	-- Who goes again after the current turn (Double Turn), 0 for nobody.
+	repeatUserId: number,
 	targetHeight: number,
 	zoneBaseHeight: number,
 	stormEndsAt: number,
@@ -57,6 +59,7 @@ local data: State = {
 	blockTypeId = 0,
 	nextShapeId = 0,
 	order = {},
+	repeatUserId = 0,
 	targetHeight = Constants.STORM_FIRST_TARGET,
 	zoneBaseHeight = 0,
 	stormEndsAt = 0,

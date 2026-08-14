@@ -34,8 +34,27 @@ local function useCatalogVersion()
 	end, {})
 end
 
+-- Gamepass ownership isn't replica state — it's Roblox's answer, and it lands a
+-- moment after join and again when a purchase prompt closes. Same shape as the
+-- catalog subscription above, for the same reason: a shop that read once at
+-- mount would sit on "Buy" for a pass the player already has.
+local function useGamepassVersion()
+	local _, setVersion = React.useState(0)
+	React.useEffect(function()
+		local conn = StoreController.GamepassesChanged:Connect(function()
+			setVersion(function(v: number): number
+				return v + 1
+			end)
+		end)
+		return function()
+			conn:Disconnect()
+		end
+	end, {})
+end
+
 return function()
 	useCatalogVersion()
+	useGamepassVersion()
 
 	-- Subscribing to the whole profile rather than one key: a purchase moves
 	-- both the Store slice and whichever feature's slice holds the currency.
@@ -49,8 +68,14 @@ return function()
 		balances[currency.id] = StoreController.balance(currency.id)
 	end
 
+	local ownedGamepasses: { [number]: boolean } = {}
+	for _, pass in Catalog.listGamepasses() do
+		ownedGamepasses[pass.id] = StoreController.ownsGamepass(pass.id)
+	end
+
 	return React.createElement(ShopUI, {
 		owned = owned,
+		ownedGamepasses = ownedGamepasses,
 		balances = balances,
 		onBuyPack = StoreController.purchase,
 		onBuyProduct = StoreController.promptProduct,

@@ -35,6 +35,15 @@ theme.glassTransparency = 0.8
 ------------------------------------------------------------------------------
 -- Padding & spacing (all in pixels)
 ------------------------------------------------------------------------------
+-- ONE OWNER PER AXIS. These values are sized to be applied once between two
+-- pieces of content, not once per nesting level. Window content padding,
+-- stroke compensation, a Stack `gap`, a Slot `padding`, and a child UIPadding
+-- are each individually defensible and silently sum to 40-60px of dead air
+-- when stacked. Before adding a padding or gap, check whether the parent
+-- already spaces this axis — if it does, that's the owner; leave the child at
+-- zero. `AutomaticSize` hides the mistake by growing the container instead of
+-- letting content push back, so judge the composed screen, not one level.
+--
 -- Default inner padding used by TextField, Badge (horizontal), and Window
 -- content edges.
 theme.padding = 10
@@ -52,12 +61,22 @@ theme.contentSpacing = 15
 ------------------------------------------------------------------------------
 -- Standardized size ladder. Prefer these tier tokens at feature call sites
 -- over hard-coded numbers — a single edit here re-scales every UI that uses
--- the ladder. Use cases noted in each comment.
-theme.textSizeXL = 60      -- Window / badge titles (e.g. "Index" header).
-theme.textSizeLarge = 44   -- Section headers, prominent stats.
-theme.textSizeRegular = 32 -- Body labels (card rarity / name, captions).
-theme.textSizeSmall = 24   -- Sidebar pills, secondary copy.
-theme.textSizeXS = 20      -- Tiny metadata (progress-bar counters, footnotes).
+-- the ladder.
+--
+-- READ THE SECOND COLUMN BEFORE PICKING A TIER. Every number here is authored
+-- against the 1280x720 reference and `useViewportScale` clamps down to
+-- MIN_SCALE = 0.5, so a phone renders each tier at roughly *half* the value.
+-- Desktop-sized intuition (16px body copy, 14px captions) picks tiers one or
+-- two steps too small — the numbers below only look large in the UI Labs
+-- preview, which runs at full scale.
+--
+--                            phone   use for
+theme.textSizeXL = 60      -- ~30px   Window / badge titles (e.g. "Index").
+theme.textSizeLarge = 44   -- ~22px   Section headers, prominent stats.
+theme.textSizeRegular = 32 -- ~16px   THE BODY FLOOR. Default for labels,
+                           --         captions, list rows, button text.
+theme.textSizeSmall = 24   -- ~12px   Squints on a phone. Needs a reason.
+theme.textSizeXS = 20      -- ~10px   Decorative only — never load-bearing copy.
 
 -- Component defaults. Mapped to the ladder so existing primitives stay in
 -- step: Badge title is XL, Button label is XL, TextField input is Large.

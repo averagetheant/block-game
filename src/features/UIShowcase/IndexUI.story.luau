@@ -33,6 +33,11 @@ local RARITIES = {
 -- 15 grid slots: one revealed ("Common — Lirili Larila"), the rest locked.
 local GRID_SLOTS = 15
 
+-- The top bar holds a two-line stats column (percent over counter). Derived
+-- from the tiers it has to fit plus breathing room, so re-tiering either row
+-- moves the bar instead of squashing the text.
+local STATS_TOP_BAR_HEIGHT = 76
+
 local function buildSidebar(): { [string]: any }
 	local entries: { [string]: any } = {
 		UIListLayout = React.createElement("UIListLayout", {
@@ -294,11 +299,13 @@ return {
 		-- and "N / total discovered" (white, Small). Heights derive from the
 		-- ladder tokens so the rows scale with the theme.
 		local percent = if c.total > 0 then math.floor((c.discovered / c.total) * 100) else 0
-		-- Two right-aligned lines anchored to the top and bottom edges of
-		-- the bar. Each label is one ladder tier minus 5 — slightly trimmed
-		-- so the pair reads tight against the 60px topbar.
-		local percentSize = ui.theme.textSizeLarge - 5
-		local counterSize = ui.theme.textSizeRegular - 5
+		-- Two right-aligned lines anchored to the top and bottom edges of the
+		-- bar. Both sit on the ladder rather than being trimmed a few pixels to
+		-- fit: the counter is state the player reads, so it holds the body
+		-- floor and the top bar grows to hold the pair instead (see
+		-- STATS_TOP_BAR_HEIGHT).
+		local percentSize = ui.theme.textSizeLarge
+		local counterSize = ui.theme.textSizeRegular
 		local statsColumn = React.createElement("Frame", {
 			Size = UDim2.fromScale(1, 1),
 			BackgroundTransparency = 1,
@@ -340,6 +347,9 @@ return {
 			title = "Index",
 			icon = ui.assets.Icons.book,
 			titleVariant = "blue",
+			-- The stats column stacks two ladder-tier rows; the default 60px
+			-- bar would force both below the readability floor to fit.
+			topBarHeight = STATS_TOP_BAR_HEIGHT,
 			-- Override Window's per-side defaults so all four insets match
 			-- the cell gap (visually equal spacing all around).
 			contentPadding = {

@@ -43,7 +43,7 @@ return function(props: contract.ProgressBarProps)
 				BackgroundTransparency = 1,
 				Text = label,
 				TextColor3 = theme.textColor,
-				TextSize = props.textSize or theme.textSize,
+				TextSize = props.textSize or theme.compactTextSize,
 				FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold),
 				ZIndex = 3,
 			})

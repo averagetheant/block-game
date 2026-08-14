@@ -30,7 +30,23 @@ return {
 		-- The left-rail entry that opens the window. Off = Settings is still
 		-- reachable (the world station, `Settings.linkTo`) but has no icon.
 		sidebar = true,
+		-- The native Roblox topbar icon (TopbarPlus). Off = the topbar is left
+		-- untouched; the rail entry and the world station still reach Settings.
+		-- Redundant with `sidebar` on purpose — pick one, or run both.
+		topbar = true,
 	},
+
+	-- Native-topbar icon (TopbarPlus). Drawn by Roblox's own topbar, outside the
+	-- React tree and outside ScaleLayer, so none of the shared theme / 1280×720
+	-- pixel rules reach it — TopbarPlus sizes itself against the real topbar and
+	-- handles mobile + gamepad on its own. The image is `assets.Icons.settings`,
+	-- the same one the rail entry uses.
+	--
+	-- Where the icon sits on the topbar (TopbarPlus sorts left-aligned icons by
+	-- this, low → high). 2 puts Settings after DailyRewards, which claims 1.
+	TOPBAR_ORDER = 2,
+	-- Hover / controller caption. Empty string = no caption.
+	TOPBAR_CAPTION = "Settings",
 
 	-- CollectionService tag a part must carry to become a Settings toggle
 	-- station, plus the attribute that names which setting it flips.

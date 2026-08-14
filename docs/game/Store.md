@@ -13,9 +13,10 @@ that Store's auto-discovery loop picks up on both realms.
 
 None in code, but the **developer products and gamepasses must exist on the
 place**. A product id that isn't configured makes `PromptProductPurchase` throw.
-The ids TowerGame registers are in `TowerGame/Constants.luau` § `PRODUCTS`; the
-bundled gamepass is a placeholder with id `0`, which the Buy button declines
-politely instead of prompting.
+The ids TowerGame registers are in `TowerGame/Constants.luau` § `PRODUCTS` and
+§ `GAMEPASSES`; GamemodeVote's one pass is `GAMEPASS_DOUBLE_VOTE` in its own
+Constants. A gamepass registered with id `0` is a placeholder — the Buy button
+declines politely instead of prompting.
 
 ## Packets
 
@@ -86,7 +87,7 @@ come from the client.
 | `registerPack{ id, kind, name, description, icon?, price, currency, variant?, order? }` | A buyable, equippable thing | `id` is persisted — append, don't rename. |
 | `registerCurrency{ id, name, icon?, path }` | A soft currency | `path` is the profile path its balance lives at, e.g. `{ "TowerGame", "Cash" }`. Store reads and debits through it. |
 | `registerProduct{ id, name, description?, icon?, group, order?, variant?, amount?, currency? }` | A developer product | `group = "currency"` shows it in the Robux tab and grants `amount` of `currency` generically. `group = "action"` keeps it out of the shop entirely — its button lives elsewhere and a **server handler** runs the effect. |
-| `registerGamepass{ id, name, description, icon?, order?, variant? }` | A gamepass card | Display only for now; ownership isn't checked. |
+| `registerGamepass{ id, name, description, icon?, order?, variant? }` | A gamepass card | Store sells it and tracks ownership; what it *does* is your feature's server code — see [Gamepasses](#gamepasses). |
 
 ### Action products need a server handler
 
@@ -115,6 +116,36 @@ running.
 `MarketplaceService.ProcessReceipt` is Store's — one callback per game. A second
 feature assigning it would silently replace this one and every purchase Store
 knows about would stop being granted.
+
+### Gamepasses
+
+A gamepass is bought once and owned forever, which makes it the opposite of a
+receipt: there's nothing to grant and nothing to remember. Ownership is Roblox's
+answer, so Store *asks* rather than stores it — one
+`UserOwnsGamePassAsync` per registered pass when a player joins, and again
+whenever a purchase prompt closes over one. Nothing goes on the profile: a
+refunded pass has to stop working, and a profile would remember it forever.
+
+```lua
+-- Server, in whatever service the perk belongs to:
+if StoreService.ownsGamepass(player, MY_PASS_ID) then
+    amount *= 2
+end
+```
+
+`ownsGamepass` is **non-yielding**. It's read from gameplay code — a cash award,
+a turn being handed out — and a web call in the middle of a turn isn't something
+the game can wait on. The cost is that a pass reads as unowned for the moment
+between joining and the query landing, which is the safe direction to be wrong
+in; passes that apply per-turn or per-award recover on the next one.
+
+The client has `StoreController.ownsGamepass(id)` plus a `GamepassesChanged`
+signal, and that's what turns the shop card from **Buy** into **Owned**. It's for
+display: everything a pass actually does is checked again on the server, because
+a client saying "I own it" is not a grant.
+
+A pass with id **0** is a placeholder — the Buy button declines politely instead
+of prompting, and neither realm asks Roblox about it.
 
 ### Registering your own Inventory tab
 
@@ -146,6 +177,8 @@ StoreController.equip(kind, packId)
 StoreController.unequip(kind)
 StoreController.promptProduct(productId)
 StoreController.promptGamepass(gamepassId)
+StoreController.ownsGamepass(gamepassId)  -- display only; the server asks again
+StoreController.GamepassesChanged         -- fires when an answer lands
 ```
 
 Nothing is applied locally. A rejected request simply never changes anything,
@@ -157,10 +190,15 @@ rather than flickering into the bought state and back.
 local StoreService = require(ServerScriptService.Features.Store.StoreService)
 
 StoreService.owns(player, packId)
+StoreService.ownsGamepass(player, gamepassId)  -- non-yielding; see Gamepasses
+StoreService.equipped(player, kind)
 StoreService.getBalance(player, currencyId)
 StoreService.credit(player, currencyId, amount)
+StoreService.grantPack(player, packId)         -- ownership without payment
 StoreService.registerProductHandler(productId, handler)
 ```
+
+`grantPack` is how a pack arrives by any route that isn't buying it — a daily reward, a promo, an admin grant — so ownership is always written through one line instead of each caller reaching into the profile. It declines an unregistered pack (ownership of something no catalog describes can never be rendered or equipped) and treats already-owned as success, so a reward doesn't fail just because the pack was bought yesterday.
 
 ## Constants worth knowing
 

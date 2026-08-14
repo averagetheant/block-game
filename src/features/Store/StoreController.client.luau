@@ -17,6 +17,7 @@ require(ReplicatedStorage.Features.Store)
 local Constants = require(ReplicatedStorage.Features.Store.Constants)
 local Catalog = require(ReplicatedStorage.Features.Store.Catalog)
 local Packets = require(ReplicatedStorage.Features.Store.Packets)
+local Signal = require(ReplicatedStorage.Packages.Signal)
 local audio = require(ReplicatedStorage.Shared.Boil).audio
 
 -- Client-realm sibling controller.
@@ -67,6 +68,41 @@ function StoreController.balance(currencyId: string): number
 		node = node[step]
 	end
 	return if typeof(node) == "number" then node else 0
+end
+
+-- Gamepass ownership, asked of Roblox rather than read off the replica: it isn't
+-- ours to store, and what the client learns here only decides between a Buy
+-- button and an Owned badge. Everything a pass actually *does* is checked again
+-- on the server (StoreService.ownsGamepass) — a client saying "I own it" is not
+-- a grant.
+--
+-- Answers arrive a moment after join, so the shop re-renders off the signal
+-- rather than reading once at mount.
+StoreController.GamepassesChanged = Signal.new()
+
+local gamepassOwned: { [number]: boolean } = {}
+
+function StoreController.ownsGamepass(gamepassId: number): boolean
+	return gamepassOwned[gamepassId] == true
+end
+
+local function setGamepassOwned(gamepassId: number, owns: boolean)
+	if gamepassOwned[gamepassId] == owns then
+		return
+	end
+	gamepassOwned[gamepassId] = owns
+	StoreController.GamepassesChanged:Fire()
+end
+
+local function refreshGamepass(gamepassId: number)
+	local ok, owns = pcall(function()
+		return MarketplaceService:UserOwnsGamePassAsync(Players.LocalPlayer.UserId, gamepassId)
+	end)
+	if not ok then
+		warn(`[Store] gamepass {gamepassId} ownership check failed: {owns}`)
+		return
+	end
+	setGamepassOwned(gamepassId, owns == true)
 end
 
 function StoreController.canAfford(packId: string): boolean
@@ -121,6 +157,25 @@ function StoreController.promptGamepass(gamepassId: number)
 end
 
 function StoreController.Start()
+	-- One query per registered pass, spawned so a slow web call doesn't hold up
+	-- the rest of the client's startup. Id 0 is a placeholder card and asking
+	-- about it throws.
+	for _, pass in Catalog.listGamepasses() do
+		if pass.id > 0 then
+			task.spawn(refreshGamepass, pass.id)
+		end
+	end
+
+	-- A pass bought mid-session: the prompt closing is the only notice Roblox
+	-- gives, and the card behind it is still showing "Buy".
+	MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(_, gamepassId, wasPurchased)
+		if not wasPurchased then
+			return
+		end
+		audio.playUI("purchase")
+		setGamepassOwned(gamepassId, true)
+	end)
+
 	-- The purchase cue fires on the *grant*, not the request. Playing it when
 	-- the packet goes up would chime for a purchase the server then declined —
 	-- and this file's whole premise is that the replica coming back is the only

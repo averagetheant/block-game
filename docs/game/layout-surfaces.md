@@ -29,7 +29,7 @@ content surfaces).
 ## Viewport scale
 
 Arrangement is authored in **pixels against a 1280×720 reference** — a `62`-tall
-panel, a `20` edge margin, `textSize = 30`. Pixels are absolute, so left alone
+panel, a `20` edge margin, `textSize = 32`. Pixels are absolute, so left alone
 those numbers eat a phone screen whole. `src/client/init.client.luau` mounts one
 `ui.ScaleLayer` as the React root: a Frame holding a single `UIScale` fitted to
 the viewport (`min` of the two axis ratios, clamped to `[0.5, 1]`).
@@ -37,6 +37,25 @@ the viewport (`min` of the two axis ratios, clamped to `[0.5, 1]`).
 Everything below it shrinks together — sizes, margins, TextSize, stroke, padding
 — and stays anchored where it was: a bottom-right panel stays bottom-right, just
 smaller, with a proportionally smaller gap to the corner.
+
+### The halving, and what it means for text
+
+That `0.5` floor is the number to design against: **every pixel you write is
+roughly halved on a phone.** Desktop intuition — 16px body copy, 14px captions —
+picks text sizes one or two tiers too small here, because the reference frame is
+not a CSS pixel grid. `theme.textSizeRegular` (`32`) renders at ~16px on a phone,
+which makes it the *floor* for anything a player reads, not the middle of the
+ladder. `textSizeSmall` (`24`) lands at ~12px and `textSizeXS` (`20`) at ~10px;
+both are decorative tiers that need a reason.
+
+The practical rule: when a label doesn't fit, **grow the box, don't shrink the
+text.** Trimming a tier by a few pixels to squeeze into a fixed height (`textSize
+= theme.textSizeRegular - 5`) reads as fine in the UI Labs preview, which runs at
+full scale, and is unreadable on the device that matters. Size heights from the
+tier (`TIER + padding`) so re-tiering a label moves its row instead of clipping
+it. Text that genuinely sizes to its container rather than to the ladder — an
+emoji glyph, a close-button `X` — is the exception, and should derive from the
+box explicitly (see `Constants.GLYPH_FIT` in the Reactions feature).
 
 That last part is only true because the layer is **sized `1 / scale` of the
 screen**, not `1, 1`. A `UIScale` transforms its parent's whole subtree about the

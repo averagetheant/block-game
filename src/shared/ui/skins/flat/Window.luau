@@ -76,7 +76,7 @@ return function(props: contract.WindowProps)
 				BorderSizePixel = 0,
 				Text = "X",
 				TextColor3 = theme.textColor,
-				TextSize = theme.textSize,
+				TextSize = theme.compactTextSize,
 				FontFace = Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold),
 				[React.Event.Activated] = props.onClose,
 			}, {

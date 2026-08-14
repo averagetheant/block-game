@@ -20,6 +20,8 @@ local Packets = require(ReplicatedStorage.Features.GamemodeVote.Packets)
 export type Voter = {
 	userId: number,
 	optionId: string,
+	-- What the vote counts for: 1, or more with the 2x Votes gamepass.
+	weight: number,
 }
 
 export type State = {

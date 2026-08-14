@@ -37,10 +37,13 @@ local MULTIPLIER_TEXT_SIZE = theme.textSizeRegular
 local HEADING_HEIGHT = 36
 local HEADING_TEXT_SIZE = theme.textSizeRegular
 
-local REQUIREMENTS_PANEL_HEIGHT = 150
+-- Tall enough for an icon plus a body-tier amount and the slot's gap. The
+-- amount is the number a player checks against their balance, so it stays on
+-- the body tier and the panel grows to hold it.
+local REQUIREMENTS_PANEL_HEIGHT = 160
 local REQ_ICON_SIZE = 80
 local REQ_SLOT_WIDTH = 120
-local REQUIREMENT_LABEL_SIZE = theme.textSizeSmall
+local REQUIREMENT_LABEL_SIZE = theme.textSizeRegular
 
 local ACTION_HEIGHT = 60
 local ACTION_BUTTON_GAP = 12
@@ -310,9 +313,9 @@ local function actionRow(
 			skipChildren.CostBadge = React.createElement(ui.Badge, {
 				variant = "yellow",
 				text = skipCost,
-				textSize = theme.textSizeSmall,
+				textSize = theme.textSizeRegular,
 				icon = skipCostIcon,
-				size = UDim2.fromOffset(80, 32),
+				size = UDim2.fromOffset(96, theme.textSizeRegular + theme.tightPadding * 2),
 				position = UDim2.new(1, 6, 0, -6),
 				anchorPoint = Vector2.new(1, 0),
 				zIndex = 5,

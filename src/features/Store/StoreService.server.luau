@@ -110,6 +110,55 @@ function StoreService.equipped(player: Player, kind: string): string?
 	return if typeof(packId) == "string" and #packId > 0 then packId else nil
 end
 
+-- Gamepasses ------------------------------------------------------------------
+
+-- Ownership is Roblox's answer, so it's asked for rather than stored: every
+-- registered pass is queried once when a player joins, and again when a purchase
+-- prompt closes over one. Nothing goes on the profile — a refunded pass has to
+-- stop working, and a profile would remember it forever.
+--
+-- player -> gamepassId -> owns.
+local gamepassOwned: { [Player]: { [number]: boolean } } = {}
+
+local function queryGamepass(player: Player, gamepassId: number)
+	local ok, owns = pcall(function()
+		return MarketplaceService:UserOwnsGamePassAsync(player.UserId, gamepassId)
+	end)
+	if not ok then
+		warn(`[Store] gamepass {gamepassId} ownership check failed for {player.Name}: {owns}`)
+		return
+	end
+	local owned = gamepassOwned[player]
+	-- They left while the call was out.
+	if owned == nil then
+		return
+	end
+	owned[gamepassId] = owns == true
+end
+
+local function trackGamepasses(player: Player)
+	gamepassOwned[player] = {}
+	for _, pass in Catalog.listGamepasses() do
+		-- Id 0 is a placeholder card (see StoreController.promptGamepass); asking
+		-- Roblox about it throws.
+		if pass.id <= 0 then
+			continue
+		end
+		task.spawn(queryGamepass, player, pass.id)
+	end
+end
+
+-- Whether `player` owns a gamepass. Deliberately non-yielding: this is read from
+-- gameplay code (a cash award, a turn handed out), and a web call in the middle
+-- of a turn is not something the game can wait on. The cost is that a pass reads
+-- as unowned for the moment between joining and the query landing — the safe
+-- direction to be wrong in, and the passes in the game are per-turn or per-award
+-- rather than one-shot.
+function StoreService.ownsGamepass(player: Player, gamepassId: number): boolean
+	local owned = gamepassOwned[player]
+	return owned ~= nil and owned[gamepassId] == true
+end
+
 -- Register what a non-currency developer product actually does. The handler
 -- returns true when the effect was applied; false means "not now" and the
 -- receipt is left for Roblox to re-deliver rather than being eaten.
@@ -122,8 +171,28 @@ end
 
 -- Purchases -------------------------------------------------------------------
 
-local function grant(player: Player, packId: string)
-	PlayerDataService.SetValue(player, { KEY, "Owned", packId }, true)
+-- Mark a pack owned, no payment involved. Public because buying is not the only
+-- way a pack can arrive — a daily reward, a promo, an admin grant — and every
+-- one of those should write ownership through the same line rather than
+-- reaching into the profile itself.
+--
+-- Declines an unregistered pack: ownership of something no catalog describes is
+-- a row nothing can ever render or equip.
+function StoreService.grantPack(player: Player, packId: string): boolean
+	if typeof(packId) ~= "string" or #packId == 0 or #packId > Constants.MAX_PACK_ID_LENGTH then
+		return false
+	end
+	if Catalog.getPack(packId) == nil then
+		warn(`[Store] refusing to grant unregistered pack "{packId}"`)
+		return false
+	end
+	-- Already owned counts as success: the caller asked for the player to have
+	-- it, and they do. A daily reward shouldn't fail (and stay claimable) just
+	-- because the pack was bought yesterday.
+	if StoreService.owns(player, packId) then
+		return true
+	end
+	return PlayerDataService.SetValue(player, { KEY, "Owned", packId }, true)
 end
 
 local function onPurchase(payload: { packId: string }, player: Player)
@@ -155,7 +224,7 @@ local function onPurchase(payload: { packId: string }, player: Player)
 	if not writeBalance(player, pack.currency, balance - pack.price) then
 		return
 	end
-	grant(player, packId)
+	StoreService.grantPack(player, packId)
 end
 
 local function onEquip(payload: { kind: string, packId: string }, player: Player)
@@ -270,6 +339,27 @@ function StoreService.Start()
 	-- ProcessReceipt would silently replace this one and every purchase Store
 	-- knows about would stop being granted — register a handler instead.
 	MarketplaceService.ProcessReceipt = processReceipt
+
+	for _, player in Players:GetPlayers() do
+		trackGamepasses(player)
+	end
+	Players.PlayerAdded:Connect(trackGamepasses)
+	Players.PlayerRemoving:Connect(function(player)
+		gamepassOwned[player] = nil
+	end)
+
+	-- A pass bought mid-session has to start working now, not next join. The
+	-- prompt closing is the only notice Roblox gives.
+	MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, gamepassId, wasPurchased)
+		if not wasPurchased then
+			return
+		end
+		local owned = gamepassOwned[player]
+		if owned == nil then
+			return
+		end
+		owned[gamepassId] = true
+	end)
 end
 
 return StoreService

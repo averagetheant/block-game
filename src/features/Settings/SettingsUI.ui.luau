@@ -28,7 +28,7 @@ local CATEGORY_LINE_THICKNESS = 3
 local CATEGORY_GAP = 14
 local CATEGORY_TOP_MARGIN = 8
 
-local EMPTY_TEXT_SIZE = 26
+local EMPTY_TEXT_SIZE = ui.theme.textSizeRegular
 
 type Props = {
 	sections: { Registry.Section },

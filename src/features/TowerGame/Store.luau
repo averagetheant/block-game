@@ -1,7 +1,7 @@
 -- TowerGame's entries in the Store catalog. Discovered by
 -- src/features/Store/init.luau at load time; see docs/game/Store.md.
 --
--- Three separate things get registered here, and they're separate on purpose:
+-- Four separate things get registered here, and they're separate on purpose:
 --
 --   * the "coins" currency — TowerGame earns it (CashService) and keeps it in
 --     its own profile slice, so Store is told *where* the balance lives rather
@@ -11,7 +11,10 @@
 --   * the developer products — the three cash bundles, which StoreService
 --     grants generically, and the two action products, whose effects are
 --     registered separately by TowerProductsService (a handler is server code
---     and this file loads on both realms).
+--     and this file loads on both realms);
+--   * the gamepasses, which are cards only for the same reason — what 2x Cash
+--     and Double Turn *do* lives in CashService and TowerService, both of which
+--     ask StoreService whether the player owns the pass.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local assets = require(ReplicatedStorage.Shared.Boil).assets
@@ -20,6 +23,7 @@ local SkinPacks = require(script.Parent.SkinPacks)
 
 local CASH_ICON = Constants.CASH_IMAGE
 local PRODUCTS = Constants.PRODUCTS
+local GAMEPASSES = Constants.GAMEPASSES
 
 return function(Store)
 	Store.registerCurrency({
@@ -70,16 +74,26 @@ return function(Store)
 		})
 	end
 
-	-- A placeholder until real gamepasses are configured on the place. Id 0 is
-	-- what makes the button decline politely instead of erroring — see
-	-- StoreController.promptGamepass.
+	-- The two gamepasses. A card is all that's registered here — the effects are
+	-- server code (CashService multiplies its payouts, TowerService hands out the
+	-- second turn), and this file loads on both realms.
 	Store.registerGamepass({
-		id = 0,
-		name = "Coming Soon",
-		description = "A gamepass will live here. Set its id on this registration to switch it on.",
-		icon = assets.Icons.questionMark,
-		variant = "yellow",
+		id = GAMEPASSES.DOUBLE_CASH,
+		name = "2x Cash",
+		-- Kept short on purpose: the card gives a description four wrapped lines
+		-- before it clips (Store.Constants.CARD_HEIGHT).
+		description = `Every coin you earn counts {Constants.DOUBLE_CASH_MULTIPLIER}x — height, zones, and the clock.`,
+		icon = CASH_ICON,
+		variant = "green",
 		order = 1,
+	})
+	Store.registerGamepass({
+		id = GAMEPASSES.DOUBLE_TURN,
+		name = "Double Turn",
+		description = `Take {Constants.DOUBLE_TURN_TURNS} pieces in a row every time the queue comes round to you.`,
+		icon = assets.Icons.rebirth,
+		variant = "purple",
+		order = 2,
 	})
 
 	if not Constants.Presentations.actions then

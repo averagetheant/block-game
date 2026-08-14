@@ -26,14 +26,7 @@ Inventory and Shop currently fall through to placeholder rows; mount real featur
 
 Besides the mounted demo, the folder carries story-only screen prototypes (no `.ui.luau`, nothing ships to the game) used to iterate layouts in UI Labs before a real feature owns them: `IndexUI.story.luau`, `RebirthUI.story.luau`, and `UpgradesUI.story.luau` (upgrade list — name over a muted level label, now ► next stat preview, green price button that flips to a disabled MAXED at cap; cost/level advance live on click).
 
-`DailyRewardsUI.story.luau` is the seven-day login-rewards frame: six square days in a 3×2 `ui.Grid` plus one tall day-7 grand-prize card spanning both rows. Worth knowing if you build the real feature from it:
-
-- **One card function, two shapes.** `rewardCard` takes the box and the type sizes; only `nameOverlay` forks the structure. On a square card the reward name rides on the bottom of the art the way a `SidebarItem` label rides on its icon (plain text + miter stroke, no drop shadow) so the row it would have cost goes to the picture instead. The grand card has the height for its own name line, so it takes one.
-- **The type ladder carries the hierarchy.** Day header Regular, square reward name Large, grand-prize name XL — each reward name sits a tier above its own day number, because the reward is what the card is for and the day is just its address in the week. The square names cost no layout to grow: they're overlaid, so a tier bump eats into the art rather than into a row.
-- **Geometry flows outward.** The `squareSize` / `grandWidth` controls are the inputs; the grid, the grand card's height and the window all derive from them, and the art slot takes whatever the header and the action row leave. Shrinking a card squeezes the picture rather than pushing text below the readability floor.
-- **State comes from one place.** `statusFor(day, currentDay, claimedToday)` returns `ready` / `claimed` / `locked`, so the grid and the grand card can't disagree about what's claimable.
-- **Every state is the same `ui.Button`.** Claimed and locked are `disabled = true` (the skin dims them, drops hover, and ignores clicks). They're deliberately *not* `ui.Badge`: Badge hardcodes left-aligned text and a leading icon slot, so as a status row it would left-align "Day 5" while the live "Claim" sits centered.
-- Reward art is `ui.assets.Icons`, so the story needs no new uploads.
+A prototype graduates by *moving*: the daily-rewards frame started here and now lives in `src/features/DailyRewards/` with a service, a registry and a topbar button behind it (see [DailyRewards.md](DailyRewards.md)). When that happens, delete the prototype rather than leaving a second copy to drift — the story moves with the UI.
 
 ## Studio assets it expects
 

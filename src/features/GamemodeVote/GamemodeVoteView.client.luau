@@ -73,6 +73,10 @@ return function()
 	end
 
 	local votersByOption: { [string]: { number } } = {}
+	-- Kept beside the panels rather than inside them: a weight belongs to the
+	-- voter, not to the option they picked, and the UI only needs it to tag the
+	-- stamp.
+	local voteWeights: { [number]: number } = {}
 	for _, voter in state.voters do
 		local list = votersByOption[voter.optionId]
 		if list == nil then
@@ -80,6 +84,7 @@ return function()
 			votersByOption[voter.optionId] = list
 		end
 		table.insert(list, voter.userId)
+		voteWeights[voter.userId] = voter.weight
 	end
 
 	return React.createElement(UIShell.Frame, {
@@ -88,6 +93,7 @@ return function()
 		Vote = React.createElement(GamemodeVoteUI, {
 			options = options,
 			votersByOption = votersByOption,
+			voteWeights = voteWeights,
 			secondsLeft = secondsLeft,
 			winnerId = state.winnerId,
 			onVote = GamemodeVoteController.castVote,

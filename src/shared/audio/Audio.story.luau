@@ -52,7 +52,7 @@ return {
 			children[`UI_{key}`] = React.createElement(ui.Button, {
 				variant = "blue",
 				text = key,
-				textSize = 28,
+				textSize = ui.theme.textSizeRegular,
 				size = UDim2.fromOffset(360, 56),
 				layoutOrder = i,
 				onClick = function()
@@ -72,7 +72,7 @@ return {
 			children[`Music_{key}`] = React.createElement(ui.Button, {
 				variant = "purple",
 				text = key,
-				textSize = 28,
+				textSize = ui.theme.textSizeRegular,
 				size = UDim2.fromOffset(360, 56),
 				layoutOrder = 100 + i,
 				onClick = function()
@@ -84,7 +84,7 @@ return {
 		children.StopMusic = React.createElement(ui.Button, {
 			variant = "red",
 			text = "Stop music",
-			textSize = 28,
+			textSize = ui.theme.textSizeRegular,
 			size = UDim2.fromOffset(360, 56),
 			layoutOrder = 999,
 			onClick = function()

@@ -23,10 +23,14 @@ local theme = ui.theme
 -- simply off it. TowerGame's ballot is four (Classic plus three twists), which
 -- at this width lands around 800px — comfortable on a phone in landscape.
 local PANEL_WIDTH = 190
-local PANEL_HEIGHT = 280
+-- Height follows the body stack, not the other way round: icon + name + a
+-- two-line blurb + the Stack's gaps and inset, plus the voter strip. The blurb
+-- is real copy a player reads to pick a mode, so it sits on the body tier and
+-- wraps at this width rather than shrinking to fit on one line.
+local PANEL_HEIGHT = 310
 local ICON_SIZE = 78
 local NAME_HEIGHT = 40
-local BLURB_HEIGHT = 26
+local BLURB_HEIGHT = 64
 local AVATAR_SIZE = 34
 -- The stamp. It starts oversized and slams down to 1 — a vote is a commitment
 -- and the screen should feel it, so this lands rather than fading in.
@@ -41,6 +45,12 @@ local STAMP_ROTATION = 14
 local STAMP_SPREAD_X = 0.44
 local STAMP_SPREAD_Y = 14
 
+-- The tag on a stamp worth more than one vote (the 2x Votes gamepass). Yellow
+-- and small: it's a note on the stamp, not a second stamp.
+local WEIGHT_COLOR = Color3.fromRGB(255, 214, 92)
+local WEIGHT_WIDTH = 40
+local WEIGHT_HEIGHT = 26
+
 -- What a panel that lost fades to once the winner is in. Panel's default glass
 -- is 0.8; pushing it further sinks the losers behind the winner.
 local LOST_TRANSPARENCY = 0.92
@@ -50,6 +60,10 @@ export type Props = {
 	options: { Registry.Gamemode },
 	-- gamemode id -> the user ids that voted for it.
 	votersByOption: { [string]: { number } },
+	-- userId -> what that vote counts for. Absent (or 1) is an ordinary vote;
+	-- anything more tags the stamp. One stamp either way — the row shows who is
+	-- on a panel, and a second headshot would read as a second player.
+	voteWeights: { [number]: number }?,
 	secondsLeft: number,
 	-- Set once the poll is resolved; until then the clock is what's shown.
 	winnerId: string?,
@@ -86,9 +100,10 @@ end
 -- fading in, because a vote is a commitment and the screen should feel it. The
 -- scale is driven by TweenService off a ref rather than by state, so the slam
 -- costs no re-renders and can't fight React over the value.
-local function Avatar(props: { userId: number })
+local function Avatar(props: { userId: number, weight: number? })
 	local scaleRef = React.useRef(nil :: UIScale?)
 	local offsetX, offsetY, rotation = stampFor(props.userId)
+	local weight = props.weight or 1
 
 	React.useEffect(function()
 		local scale = scaleRef.current
@@ -130,12 +145,31 @@ local function Avatar(props: { userId: number })
 			Transparency = 0.2,
 			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 		}),
+		-- A heavier vote says so on the stamp. It rides the same rotation as the
+		-- headshot (it's a child), so it stays part of the stamp rather than
+		-- looking like a label pinned over one.
+		Weight = if weight > 1
+			then React.createElement(ui.Text, {
+				text = `{weight}x`,
+				textSize = theme.textSizeRegular,
+				weight = Enum.FontWeight.Heavy,
+				color = WEIGHT_COLOR,
+				shadow = true,
+				size = UDim2.fromOffset(WEIGHT_WIDTH, WEIGHT_HEIGHT),
+				-- Straddling the bottom edge rather than the corner: the stamp is
+				-- a circle, and a corner tag on a circle floats off it.
+				position = UDim2.new(0.5, 0, 1, 0),
+				anchorPoint = Vector2.new(0.5, 0.5),
+				zIndex = 3,
+			})
+			else nil,
 	})
 end
 
 local function optionPanel(props: {
 	option: Registry.Gamemode,
 	voters: { number },
+	voteWeights: { [number]: number },
 	faded: boolean,
 	locked: boolean,
 	layoutOrder: number,
@@ -146,7 +180,10 @@ local function optionPanel(props: {
 		-- Keyed by user id so a voter's stamp is the *same* element across
 		-- re-renders and doesn't re-slam every time somebody else votes. Moving
 		-- to another panel is a real unmount, so that does stamp again.
-		avatars[`Voter{userId}`] = React.createElement(Avatar, { userId = userId })
+		avatars[`Voter{userId}`] = React.createElement(Avatar, {
+			userId = userId,
+			weight = props.voteWeights[userId],
+		})
 	end
 
 	-- Stroke sits inside the panel edge, so pad past it (see CLAUDE.md).
@@ -181,8 +218,9 @@ local function optionPanel(props: {
 			Blurb = if props.option.blurb
 				then React.createElement(ui.Text, {
 					text = props.option.blurb,
-					textSize = theme.textSizeXS,
+					textSize = theme.textSizeRegular,
 					color = Color3.fromRGB(196, 202, 224),
+					wrapped = true,
 					size = UDim2.new(1, 0, 0, BLURB_HEIGHT),
 					layoutOrder = 3,
 				})
@@ -229,6 +267,7 @@ return function(props: Props)
 		panels[option.id] = optionPanel({
 			option = option,
 			voters = props.votersByOption[option.id] or {},
+			voteWeights = props.voteWeights or {},
 			-- Once the winner is in, everything else steps back so the result is
 			-- the only thing lit.
 			faded = resolved and winnerId ~= option.id,

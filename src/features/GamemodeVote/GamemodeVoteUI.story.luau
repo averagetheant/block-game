@@ -26,6 +26,9 @@ return {
 	controls = {
 		crowdVotes = UILabs.Slider(4, 0, #CROWD, 1),
 		secondsLeft = UILabs.Slider(9, 0, 60, 1),
+		-- Gives the first stand-in the 2x Votes gamepass, so the tag on a
+		-- weighted stamp can be eyeballed against the plain ones next to it.
+		weightedVoter = false,
 		-- 0 = still voting. Anything else resolves the poll on that panel, which
 		-- locks the clicks and fades the others.
 		winnerIndex = UILabs.Slider(0, 0, 6, 1),
@@ -56,9 +59,12 @@ return {
 
 		local winner = options[c.winnerIndex]
 
+		local voteWeights = if c.weightedVoter then { [CROWD[1]] = 2 } else {}
+
 		return React.createElement(GamemodeVote.UI, {
 			options = options,
 			votersByOption = votersByOption,
+			voteWeights = voteWeights,
 			secondsLeft = c.secondsLeft,
 			winnerId = if winner then winner.id else nil,
 			onVote = function(optionId: string)

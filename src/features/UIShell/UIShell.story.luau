@@ -50,7 +50,7 @@ local function Demo(props)
 			OpenA = React.createElement(ui.Button, {
 				variant = "red",
 				text = "Open A",
-				textSize = 28,
+				textSize = ui.theme.textSizeRegular,
 				size = UDim2.fromOffset(130, 60),
 				layoutOrder = 1,
 				onClick = function()
@@ -60,7 +60,7 @@ local function Demo(props)
 			OpenB = React.createElement(ui.Button, {
 				variant = "blue",
 				text = "Open B",
-				textSize = 28,
+				textSize = ui.theme.textSizeRegular,
 				size = UDim2.fromOffset(130, 60),
 				layoutOrder = 2,
 				onClick = function()
@@ -70,7 +70,7 @@ local function Demo(props)
 			Close = React.createElement(ui.Button, {
 				variant = "white",
 				text = "Close",
-				textSize = 28,
+				textSize = ui.theme.textSizeRegular,
 				size = UDim2.fromOffset(130, 60),
 				layoutOrder = 3,
 				onClick = frames.close,
@@ -93,7 +93,7 @@ local function Demo(props)
 					BackgroundTransparency = 1,
 					Text = `Side bar\n(slides {props.sideBarDirection})`,
 					TextColor3 = Color3.fromRGB(255, 255, 255),
-					TextSize = 22,
+					TextSize = ui.theme.textSizeRegular,
 					TextWrapped = true,
 				}),
 			}),
@@ -115,7 +115,7 @@ local function Demo(props)
 					BackgroundTransparency = 1,
 					Text = "Click 'Open B' to swap. Watch A tween out as B tweens in.",
 					TextColor3 = Color3.fromRGB(255, 255, 255),
-					TextSize = 22,
+					TextSize = ui.theme.textSizeRegular,
 					TextWrapped = true,
 					LayoutOrder = 0,
 				}),
@@ -138,7 +138,7 @@ local function Demo(props)
 					BackgroundTransparency = 1,
 					Text = "Click 'Open A' to swap back, or 'Close' to dismiss.",
 					TextColor3 = Color3.fromRGB(255, 255, 255),
-					TextSize = 22,
+					TextSize = ui.theme.textSizeRegular,
 					TextWrapped = true,
 					LayoutOrder = 0,
 				}),

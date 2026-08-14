@@ -12,9 +12,59 @@ The Settings feature itself ships **no real settings** — it provides the regis
 - **UI**: `SettingsUI.ui.luau` is a pure React component (sections, values, onToggle, focusedId as props). `SettingsView.client.luau` wires it to `PlayerDataController`, `Registry.Changed`, and `SettingsController.LinkRequested`.
 - **Linking**: `SettingsController.linkTo("audio.music")` fires a signal the UI listens to and briefly highlights that row.
 
+## Presentations
+
+Settings is reachable from four surfaces, gated individually by
+`Constants.Presentations`. They're peers — none references another, and they
+stay in sync by routing through the same core intent
+(`SettingsController.setToggle`) and the same UIShell frame state.
+
+| Flag | File | Surface |
+| ---- | ---- | ------- |
+| `screen` | `SettingsPresentation.client.luau` | The window contents, registered as a UIShell *screen*. |
+| `topbar` | `SettingsTopbar.client.luau`, registered by the same presentation | A TopbarPlus icon in Roblox's native topbar that toggles that frame. Registered as a *root*. |
+| `sidebar` | `Sidebar.luau` | The left-rail icon that opens the same frame. |
+| `world` | `SettingsWorldInteraction.client.luau` | Parts tagged `SettingsToggleStation` that flip one setting via a ProximityPrompt. |
+
+`sidebar` and `topbar` are deliberately redundant — both open the same window.
+Ship one, or both; turning either off leaves Settings reachable through the
+rest.
+
+### The topbar icon
+
+`SettingsTopbar.client.luau` is the same shape as `DailyRewardsTopbar` — see
+that file if you're adding a third. It renders **no instance**: TopbarPlus
+(`ReplicatedStorage.Packages.TopbarPlus`, Wally `1foreverhd/topbarplus`) owns
+its own ScreenGui outside the React tree, so the component returns `nil` and
+ties the `Icon`'s lifetime and selected state to React through effects. It goes
+in as a *root* rather than a screen because a root is always mounted (a screen
+only renders inside an open window) and sits inside `FrameProvider`, so it can
+call `useFrame()`.
+
+State syncs both ways: clicking the icon opens the frame, and opening the frame
+from the rail (or via `Settings.linkTo`) lights the icon up. The `deselected`
+handler only closes when Settings is the frame that's actually open — TopbarPlus
+deselects an icon whenever another one is selected, and without that guard the
+button would slam shut a window it didn't open.
+
+Two things the shared UI rules don't cover here:
+
+- **No skin, no theme, no 1280×720 reference.** TopbarPlus sizes itself against
+  the real topbar and handles mobile and gamepad on its own. Restyle through
+  `Icon.modifyBaseTheme` / `:modifyTheme`, not `src/shared/ui/`.
+- **No UI Labs story**, same as `DailyRewardsTopbar`. A story would need a
+  `<FrameProvider>` to render at all (`useFrame()` errors without one), and
+  mounting it would spawn a real topbar icon in the Studio session rather than
+  draw anything in the preview pane.
+
+Client realm (`.client.luau`, not `.ui.luau`) on purpose: TopbarPlus reads
+`Players.LocalPlayer` and builds its container at require time, so the server
+must never load it.
+
 ## Studio assets it expects
 
-None. Everything is code.
+None. Everything is code — the topbar icon uses `assets.Icons.settings`, the
+same placeholder image as the rail entry. Swap it for your own art.
 
 ## Packets it speaks
 
@@ -125,7 +175,9 @@ The Settings UI listens to `LinkRequested`, sets the row's `focusedId` for `Cons
 - `Constants.PROFILE_KEY = "Settings"` — the key under `PlayerData` where values live. Don't write directly; use `SettingsController.setToggle` (client) or let `SettingsService` route packets (server).
 - `Constants.MAX_SETTING_ID_LENGTH = 128` — defensive cap on inbound packet ids.
 - `Constants.LINK_HIGHLIGHT_SECONDS = 1.6` — how long the link highlight lingers.
-- `Settings.FRAME_ID = "Settings"` — UIShell frame id used by the HUD's Settings sidebar entry.
+- `Settings.FRAME_ID = "Settings"` — UIShell frame id used by the HUD's Settings sidebar entry, and by the topbar icon.
+- `Constants.TOPBAR_ORDER = 2` — sort key among topbar icons, low → high. DailyRewards claims 1.
+- `Constants.TOPBAR_CAPTION = "Settings"` — hover / controller caption. `""` for none.
 
 ## Extending with new setting kinds
 

@@ -28,13 +28,16 @@ return {
 	-- Tall enough for four wrapped lines of description under the art. Three was
 	-- not: the neon pack's copy was being cut off mid-sentence, and a shop card
 	-- that can't finish its own sentence is worse than one with no copy at all.
-	CARD_HEIGHT = 306,
+	-- Tall enough that a body-tier description gets ~4 wrapped lines above the
+	-- action button. Grow this before shrinking the description's text size —
+	-- a card that can't finish its sentence is the failure this guards against.
+	CARD_HEIGHT = 360,
 	CARD_GAP = 14,
 	CARD_ICON = 88,
 	CARDS_PER_ROW = 3,
 	-- Tab strip.
 	TAB_HEIGHT = 54,
-	TAB_TEXT_SIZE = 26,
+	TAB_TEXT_SIZE = 32,
 	TAB_GAP = 8,
 	-- Balance pill in the shop's top bar.
 	BALANCE_WIDTH = 190,

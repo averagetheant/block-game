@@ -28,9 +28,9 @@ export type Props = {
 }
 
 local ROW_GAP = Constants.CARD_GAP
-local EMPTY_TEXT_SIZE = 24
+local EMPTY_TEXT_SIZE = ui.theme.textSizeRegular
 local ACTION_HEIGHT = 48
-local ACTION_TEXT_SIZE = 24
+local ACTION_TEXT_SIZE = ui.theme.textSizeRegular
 
 local function root(children: { [string]: any }): any
 	return React.createElement(ui.Stack, {

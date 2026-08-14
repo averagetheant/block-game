@@ -131,6 +131,12 @@ local base: BasePart
 local baseTopY = 0
 
 local queue: { Player } = {}
+-- Set while a Double Turn owner has another piece coming, with how many are
+-- left. Held as a separate slot rather than by pushing them onto the queue
+-- twice, because the queue *is* the rotation — a duplicate entry there would
+-- move everyone else's place in it. See `takeRepeatTurn`.
+local repeatTurnFor: Player? = nil
+local repeatTurnsLeft = 0
 local blocks: { Block } = {}
 -- Reverse index into `blocks`, so a part found by a spatial query can be traced
 -- back to the block that owns it without walking the list. Burning uses it to
@@ -169,6 +175,7 @@ local state = {
 	blockTypeId = 0,
 	nextShapeId = nextShape.id,
 	order = {},
+	repeatUserId = 0,
 	targetHeight = Constants.STORM_FIRST_TARGET,
 	zoneBaseHeight = 0,
 	stormEndsAt = 0,
@@ -240,6 +247,10 @@ end
 local function broadcast()
 	state.blockCount = #blocks
 	state.order = buildOrder()
+	-- Whoever goes again after the current turn. The strip badges that player
+	-- instead of listing them twice: `order` is keyed by user id on the client,
+	-- and a duplicate id there is the same player, not a second slot.
+	state.repeatUserId = if repeatTurnFor then repeatTurnFor.UserId else 0
 	lastBroadcast = os.clock()
 	Packets.State.sendToAll(state)
 end
@@ -2210,7 +2221,37 @@ end
 
 -- ----------------------------------------------------------------- the turns --
 
+-- The extra turn a Double Turn owner has coming, or nil for "read the queue".
+--
+-- The queue isn't touched for it: they were already rotated to the back when the
+-- first of their turns was handed out, so their place in the rotation — and
+-- everyone else's — is exactly where it was.
+local function takeRepeatTurn(): Player?
+	local again = repeatTurnFor
+	if again == nil then
+		return nil
+	end
+
+	repeatTurnsLeft -= 1
+	if repeatTurnsLeft <= 0 then
+		repeatTurnFor = nil
+	end
+
+	-- They left or opted out between the two: the rest of the run goes with them
+	-- rather than stalling the queue on a player who isn't taking pieces.
+	if again.Parent ~= Players or isSpectating(again) then
+		repeatTurnFor = nil
+		return nil
+	end
+	return again
+end
+
 local function nextPlayer(): Player?
+	local again = takeRepeatTurn()
+	if again ~= nil then
+		return again
+	end
+
 	-- Bounded by the queue length rather than `while #queue > 0`: a spectator is
 	-- put back on the queue rather than dropped from it, so an unbounded loop
 	-- would spin forever the moment everyone opted out.
@@ -2225,6 +2266,13 @@ local function nextPlayer(): Player?
 		-- put them straight back in.
 		table.insert(queue, player)
 		if not isSpectating(player) then
+			-- The Double Turn gamepass. Not gated on there being anyone else in
+			-- the server: alone, the queue is this player either way, so the
+			-- pass simply doesn't show.
+			if StoreService.ownsGamepass(player, Constants.GAMEPASSES.DOUBLE_TURN) then
+				repeatTurnFor = player
+				repeatTurnsLeft = Constants.DOUBLE_TURN_TURNS - 1
+			end
 			return player
 		end
 	end
@@ -2301,6 +2349,13 @@ local function removePlayer(player: Player)
 	local index = table.find(queue, player)
 	if index then
 		table.remove(queue, index)
+	end
+	-- A leaver's extra turn goes with them. `takeRepeatTurn` would drop it
+	-- anyway; clearing it here is what keeps the strip from badging a player who
+	-- isn't in the room.
+	if repeatTurnFor == player then
+		repeatTurnFor = nil
+		repeatTurnsLeft = 0
 	end
 end
 

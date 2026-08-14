@@ -66,16 +66,24 @@ return {
 	-- track's half-width is the full steering range, so a wider track means finer
 	-- control per pixel of travel.
 	STICK_TRACK_WIDTH = 260,
-	STICK_TRACK_HEIGHT = 74,
-	STICK_KNOB_SIZE = 62,
+	-- Matches the TURN / DROP button height so the three controls read as one
+	-- row. The knob isn't sized here: it's the track height minus the gem
+	-- padding + stroke inset, computed at render so a live theme edit moves it.
+	STICK_TRACK_HEIGHT = 88,
 	-- How far past the end of the track the knob may follow the finger, as a
 	-- multiple of the track's half-width. Steering is already saturated by then;
 	-- this exists purely so the knob doesn't stop dead under a thumb that's still
 	-- moving, which reads as the control letting go.
 	STICK_OVERREACH = 1.35,
-	STICK_TRACK_COLOR = Color3.fromRGB(18, 20, 30),
-	STICK_KNOB_COLOR = Color3.fromRGB(86, 142, 255),
-	STICK_STROKE_COLOR = Color3.fromRGB(226, 230, 245),
+	-- The knob is a gem stud; the track is the same dark-glass surface the gem
+	-- ProgressBar sits in. Blue because TURN is purple and DROP is red — the
+	-- three controls in the row want three palettes.
+	STICK_KNOB_VARIANT = "blue",
+	-- The glass track is more opaque than the shared default (theme
+	-- .glassTransparency): it sits over the play area, not over a panel, so it
+	-- needs to hold its own shape against whatever the tower is doing behind it.
+	STICK_TRACK_TRANSPARENCY = 0.45,
+	STICK_TRACK_DISABLED_TRANSPARENCY = 0.75,
 	-- Placement streaming: the holder's client owns the *feel* of aiming and
 	-- reports where the piece is. This is how often that report goes out (the
 	-- rate spectators see the piece move at) and the movement below which it
@@ -484,6 +492,21 @@ return {
 		-- happened to stop.
 		NEXT_CHECKPOINT = 3707809233,
 	},
+	-- Gamepasses, also configured on the place. Ownership is Roblox's answer;
+	-- StoreService caches it per session and this feature reads it through
+	-- `StoreService.ownsGamepass` on the server. Never trust a client for either.
+	GAMEPASSES = {
+		-- Multiplies everything CashService pays out.
+		DOUBLE_CASH = 1949354348,
+		-- Hands the owner the next piece as well as this one.
+		DOUBLE_TURN = 1951016323,
+	},
+	-- What "2x Cash" multiplies earnings by. Applied in CashService.award — the
+	-- one path everything the game *pays* goes through. Robux coin bundles are a
+	-- purchase rather than earnings, so they're granted at face value.
+	DOUBLE_CASH_MULTIPLIER = 2,
+	-- How many turns in a row a Double Turn owner takes.
+	DOUBLE_TURN_TURNS = 2,
 	-- The soft currency id this feature registers with the Store. Its balance
 	-- lives at { PROFILE_KEY, "Cash" } — Store debits it through that path.
 	CURRENCY_ID = "coins",

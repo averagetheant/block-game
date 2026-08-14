@@ -37,5 +37,6 @@ Features and skins are also **distributable packages** — one folder, one
 | [Music.md](Music.md) | Settings-driven background music |
 | [PickupFX.md](PickupFX.md) | Client-side pickup animation system |
 | [Sidebar.md](Sidebar.md) | The left rail + the `Sidebar.luau` registration convention |
+| [DailyRewards.md](DailyRewards.md) | Seven-day login run + the `DailyRewards.luau` registration convention |
 | [UIShell.md](UIShell.md) | Global frame open/close system |
 | [UIShowcase.md](UIShowcase.md) | Demo HUD / entry surface |

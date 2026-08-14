@@ -22,6 +22,13 @@ local React = require(ReplicatedStorage.Packages.React)
 local ui = require(ReplicatedStorage.Shared.Boil).ui
 local Constants = require(script.Parent.Constants)
 
+-- The Double Turn tag, on the corner of the chip of whoever goes again. Yellow
+-- because it's a perk rather than a warning, and the strip is otherwise grey.
+local REPEAT_TAG = "2x"
+local REPEAT_COLOR = Color3.fromRGB(255, 214, 92)
+local REPEAT_WIDTH = 40
+local REPEAT_HEIGHT = 26
+
 -- How long a chip takes to grow into (or out of) the active slot.
 local CHIP_TWEEN = TweenInfo.new(0.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
 -- Sliding sideways is a different motion to swelling, and reads better linear-ish.
@@ -32,6 +39,10 @@ export type Props = {
 	order: { number },
 	-- 0 when nobody holds a piece; then nobody is highlighted.
 	holderUserId: number,
+	-- Who has another piece coming straight after this one, because they own
+	-- Double Turn; 0 for nobody. Tagged rather than listed twice — the strip is
+	-- keyed by user id, so a second entry would be the same chip.
+	repeatUserId: number?,
 	size: UDim2?,
 	position: UDim2?,
 	anchorPoint: Vector2?,
@@ -72,6 +83,7 @@ end
 local function AvatarChip(props: {
 	userId: number,
 	isCurrent: boolean,
+	goesAgain: boolean,
 	offset: number,
 	layoutOrder: number,
 })
@@ -125,6 +137,24 @@ local function AvatarChip(props: {
 			Transparency = if props.isCurrent then 0 else 0.5,
 			ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
 		}),
+		-- "This one is taking two." A shadowed label on the corner of the chip
+		-- rather than a Badge: a gem badge at the body text floor is wider than
+		-- the chip it would sit on.
+		Repeat = if props.goesAgain
+			then React.createElement(ui.Text, {
+				text = REPEAT_TAG,
+				textSize = ui.theme.textSizeRegular,
+				weight = Enum.FontWeight.Heavy,
+				color = REPEAT_COLOR,
+				shadow = true,
+				size = UDim2.fromOffset(REPEAT_WIDTH, REPEAT_HEIGHT),
+				-- Straddling the bottom edge rather than the corner: a chip is a
+				-- circle, and a corner tag on a circle floats off it.
+				position = UDim2.new(0.5, 0, 1, 0),
+				anchorPoint = Vector2.new(0.5, 0.5),
+				zIndex = 3,
+			})
+			else nil,
 	})
 end
 
@@ -153,6 +183,7 @@ return function(props: Props)
 		children[`Player{userId}`] = React.createElement(AvatarChip, {
 			userId = userId,
 			isCurrent = isCurrent,
+			goesAgain = props.repeatUserId ~= nil and props.repeatUserId ~= 0 and userId == props.repeatUserId,
 			offset = offset,
 			layoutOrder = index,
 		})

@@ -20,7 +20,9 @@ return {
 
 	controls = {
 		iconSize = UILabs.Slider(72, 24, 160, 1),
-		labelSize = UILabs.Slider(18, 8, 48, 1),
+		-- Starts at the real default rather than an arbitrary small value, so
+		-- the story opens on what the game actually renders.
+		labelSize = UILabs.Slider(Sidebar.Constants.DEFAULT_LABEL_SIZE, 8, 60, 1),
 		spacing = UILabs.Slider(12, 0, 40, 1),
 	},
 

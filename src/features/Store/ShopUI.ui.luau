@@ -26,6 +26,10 @@ local ROBUX_TAB = "__robux"
 export type Props = {
 	-- packId → true.
 	owned: { [string]: boolean },
+	-- gamepassId → true. Separate from `owned` because a gamepass isn't a pack:
+	-- it isn't bought with a currency, isn't equipped, and Roblox owns the
+	-- answer rather than the profile.
+	ownedGamepasses: { [number]: boolean },
 	-- currencyId → balance.
 	balances: { [string]: number },
 	onBuyPack: (packId: string) -> (),
@@ -36,11 +40,11 @@ export type Props = {
 }
 
 local ROW_GAP = Constants.CARD_GAP
-local SECTION_TEXT_SIZE = 30
-local SECTION_HEIGHT = 40
-local EMPTY_TEXT_SIZE = 24
+local SECTION_TEXT_SIZE = ui.theme.textSizeLarge
+local SECTION_HEIGHT = SECTION_TEXT_SIZE + 10
+local EMPTY_TEXT_SIZE = ui.theme.textSizeRegular
 local ACTION_HEIGHT = 48
-local ACTION_TEXT_SIZE = 24
+local ACTION_TEXT_SIZE = ui.theme.textSizeRegular
 
 local function grid(children: { [string]: any }, rows: number, layoutOrder: number): any
 	return React.createElement(ui.Grid, {
@@ -239,11 +243,19 @@ return function(props: Props)
 	local gamepasses = Catalog.listGamepasses()
 	local passCards: { [string]: any } = {}
 	for index, pass in gamepasses do
-		passCards[`Pass_{pass.id}_{index}`] = React.createElement(PackCard, {
-			name = pass.name,
-			description = pass.description,
-			icon = pass.icon,
-			layoutOrder = index,
+		-- A pass is owned forever, so the card that sold it becomes the card that
+		-- confirms it — same treatment a bought pack gets.
+		local owned = props.ownedGamepasses[pass.id] == true
+
+		local action
+		if owned then
+			action = React.createElement(ui.Badge, {
+				variant = "green",
+				text = "Owned",
+				textSize = ACTION_TEXT_SIZE,
+				size = UDim2.new(1, 0, 0, ACTION_HEIGHT),
+			})
+		else
 			action = React.createElement(ui.Button, {
 				variant = (pass.variant or "purple") :: any,
 				text = "Buy",
@@ -252,7 +264,16 @@ return function(props: Props)
 				onClick = function()
 					props.onBuyGamepass(pass.id)
 				end,
-			}),
+			})
+		end
+
+		passCards[`Pass_{pass.id}_{index}`] = React.createElement(PackCard, {
+			name = pass.name,
+			description = pass.description,
+			icon = pass.icon,
+			action = action,
+			dimmed = owned,
+			layoutOrder = index,
 		})
 	end
 

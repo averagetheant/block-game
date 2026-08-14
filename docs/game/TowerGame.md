@@ -480,6 +480,13 @@ disabled, since it's greyed out between turns rather than unmounted.
 (This replaced a pair of LEFT / RIGHT buttons that each sent a fixed pulse. They
 couldn't express *how far* to move, so every placement was a burst of taps.)
 
+The stick is **composed from the shared kit**, not drawn: the track is `ui.Panel`'s
+dark-glass surface and the knob is `ui.Panel` in gem mode (`STICK_KNOB_VARIANT`,
+blue — TURN is purple and DROP is red), so it picks up the active skin like every
+other primitive. `STICK_TRACK_HEIGHT` matches the button height beside it and the
+knob is sized from it at render (`theme.padding + theme.strokeThickness` in from
+each edge), so a live theme edit in UI Labs re-fits the control.
+
 ## Stats and saving
 
 `Blocks Placed` and `Biggest Height` show on the in-game leaderboard and persist
@@ -522,6 +529,31 @@ spinning it in place.
 
 **None required to boot** — the server generates the base platform on first run,
 and every Studio asset below degrades to "leave it as it was" when it's missing.
+
+### Where the arena sits — building a map around it
+
+The arena is fixed in world space, so a background map can be built against
+these coordinates. **+Z is the front**: the camera always stands on the +Z side
+at `x = 0` and looks down −Z at the play plane (`CFrame.lookAt` in
+`TowerCameraController`), so scenery belongs at −Z and the corridor in front of
+the tower has to stay empty.
+
+| What | Where | From |
+| ---- | ----- | ---- |
+| Play plane | `z = 0`; blocks are 4 deep, so they occupy `z −2 … +2` | `PLANE_Z`, `BLOCK_DEPTH` |
+| Base platform | 48 × 4 × 8 centred at **(0, 40, 0)** — top surface **y = 42** | `PLATFORM_SIZE`, `BASE_POSITION` |
+| Build column | `x −24 … +24` (pieces steer to ±22 and overhang) | `STEER_LIMIT_X` |
+| First checkpoint floor | **y 102 – 106** (60 studs above the base top) | `STORM_FIRST_TARGET` |
+| Later checkpoints | +65, +70, +75 … above the last one; everything below each new floor is demolished | `STORM_GAP_GROWTH` |
+| Camera, desktop | (0, ≈66, **+78**), FOV 60 vertical | `CAMERA_DISTANCE` |
+| Camera, phone | (0, ≈57, **+94**) | `CAMERA_DISTANCE_TOUCH` |
+| Camera, max pullback | up to **z +420** on overview / checkpoint shots | `CAMERA_MAX_DISTANCE` |
+| On screen at round start | ≈160 wide × 90 tall at the play plane (16:9) | FOV × `CAMERA_DISTANCE` |
+
+Two consequences for scenery: **nothing may sit between `z = +6` and `z = +420`
+near `x = 0`**, or a wide shot will frame it instead of the tower; and the tower
+climbs without limit inside one stage, so anything meant to stay in frame either
+repeats vertically or lives far enough out to read as a skybox.
 
 ### Assets to create
 
@@ -931,6 +963,10 @@ The per-stud award pays the last dropper, tracked as `lastDropper`, whenever the
 tower's record grows — so extending the tower earns, and the two shared awards
 keep it from being purely individual.
 
+Every one of them goes through `CashService.award`, which is also where the **2x
+Cash** gamepass multiplies (see [Gamepasses](#gamepasses)) — one write path, one
+place a multiplier can live.
+
 There's no cash packet. It's persisted on the profile, so the replica diff *is*
 the event: `TowerFeedbackController` watches the value, and an increase becomes
 the sound plus a signal the HUD animates from. One source of truth, so the
@@ -1056,6 +1092,36 @@ running**. That isn't
 a failure — Store leaves the receipt undelivered, Roblox re-delivers it, and the
 player gets what they paid for a moment later instead of losing it. Detonating
 the tower under a camera holding a wide shot of it would read as a bug.
+
+## Gamepasses
+
+Also registered by `Store.luau`; ids live in `Constants.GAMEPASSES`. Ownership is
+Roblox's answer, cached per session by Store and read on the **server** through
+`StoreService.ownsGamepass` — never sent up by a client.
+
+| Pass | Id | What it does |
+| ---- | -- | ------------ |
+| 2x Cash | `1949354348` | `CashService.award` pays `DOUBLE_CASH_MULTIPLIER` × the amount |
+| Double Turn | `1951016323` | The owner takes `DOUBLE_TURN_TURNS` pieces each time the queue reaches them |
+
+**2x Cash** hangs off `CashService.award` rather than off each award site, so
+every way the game pays — zones, height, the clock, and anything a later feature
+adds — doubles by one rule. Coins bought with Robux are a *purchase* rather than
+earnings and are granted by `StoreService` at face value; they never come through
+`award`.
+
+**Double Turn** doesn't touch the queue. The owner is rotated to the back when
+their first turn is handed out, exactly like anyone else, and the extra turns are
+held in `repeatTurnFor` / `repeatTurnsLeft`, which `nextPlayer` reads before the
+queue — so nobody else's place in the rotation moves. A player who leaves or
+flips on "Not playing" between the two loses the rest of the run rather than
+stalling the queue.
+
+The HUD says so while it's pending: `state.repeatUserId` carries whoever goes
+again, and `TurnStrip` tags that chip **2x**. It's a tag rather than a second
+entry in `order` because the strip keys its chips by user id — a duplicate id
+would be the same chip, not a second slot — and because the order has to stay
+honest about who is actually up next.
 
 ## Cmdr commands
 

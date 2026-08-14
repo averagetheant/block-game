@@ -38,9 +38,13 @@ return {
 		end
 
 		local owned = {}
+		local ownedGamepasses = {}
 		if c.ownEverything then
 			for _, pack in Store.Catalog.listPacks() do
 				owned[pack.id] = true
+			end
+			for _, pass in Store.Catalog.listGamepasses() do
+				ownedGamepasses[pass.id] = true
 			end
 		end
 
@@ -52,6 +56,7 @@ return {
 		}, {
 			Content = React.createElement(Store.ShopUI, {
 				owned = owned,
+				ownedGamepasses = ownedGamepasses,
 				balances = balances,
 				onBuyPack = function(id)
 					print(`[Store] buy pack {id}`)

@@ -38,12 +38,17 @@ local TILE_GLYPH_TEXT = math.floor(TILE_GLYPH * Constants.GLYPH_FIT)
 -- The bar's own glyph size is tuned for the bar's much smaller button, so the
 -- inventory's larger slots derive their own instead of borrowing it.
 local SLOT_GLYPH_TEXT = math.floor(SLOT_SIZE * Constants.GLYPH_FIT)
-local NAME_HEIGHT = 26
-local NAME_TEXT_SIZE = 20
-local HEADER_TEXT_SIZE = 28
-local HEADER_HEIGHT = 36
-local HINT_TEXT_SIZE = 20
-local HINT_HEIGHT = 28
+-- Glyph sizes above derive from their boxes (GLYPH_FIT); the label sizes below
+-- are ordinary copy and sit on the shared ladder instead. Each HEIGHT is the
+-- tier plus breathing room, so re-tiering a label moves its row rather than
+-- clipping it.
+local NAME_TEXT_SIZE = ui.theme.textSizeRegular
+local NAME_HEIGHT = NAME_TEXT_SIZE + 8
+local HEADER_TEXT_SIZE = ui.theme.textSizeLarge
+local HEADER_HEIGHT = HEADER_TEXT_SIZE + 10
+local HINT_TEXT_SIZE = ui.theme.textSizeRegular
+-- Two lines: the hint is a full sentence and wraps at the window's body width.
+local HINT_HEIGHT = HINT_TEXT_SIZE * 2 + 8
 local ROW_GAP = 12
 
 local DIM_COLOR = Color3.fromRGB(184, 192, 214)
@@ -172,6 +177,7 @@ return function(props: Props)
 			textSize = HINT_TEXT_SIZE,
 			color = DIM_COLOR,
 			xAlignment = Enum.TextXAlignment.Left,
+			wrapped = true,
 			size = UDim2.new(1, 0, 0, HINT_HEIGHT),
 			layoutOrder = 3,
 		}),

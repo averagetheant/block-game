@@ -16,6 +16,7 @@ local ShopUI = require(ReplicatedStorage.Features.Store.ShopUI)
 -- Client-realm siblings (StarterPlayerScripts.Features tree).
 local StoreController = require(script.Parent.StoreController)
 local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
+local AnalyticsController = require(script.Parent.Parent.Analytics.AnalyticsController)
 
 -- Re-render when the catalog changes. Registration happens at load, so in
 -- practice this only fires for a feature that registers late — cheap insurance
@@ -52,9 +53,24 @@ local function useGamepassVersion()
 	end, {})
 end
 
+-- Opening the shop starts three funnels at once, because all three of them
+-- begin with the same event: the player is now looking at the cards. The
+-- Frame this renders inside unmounts its children on close (see
+-- UIShell/Frame.ui.luau), so an empty dependency list here is exactly
+-- once per open — not once per session, and not once per render.
+local function useShopOpened()
+	React.useEffect(function()
+		AnalyticsController.start("shop", "Shop Opened")
+		AnalyticsController.start("product", "Product Shown")
+		AnalyticsController.start("gamepass", "Gamepass Shown")
+		AnalyticsController.onboarding(5)
+	end, {})
+end
+
 return function()
 	useCatalogVersion()
 	useGamepassVersion()
+	useShopOpened()
 
 	-- Subscribing to the whole profile rather than one key: a purchase moves
 	-- both the Store slice and whichever feature's slice holds the currency.
@@ -80,5 +96,12 @@ return function()
 		onBuyPack = StoreController.purchase,
 		onBuyProduct = StoreController.promptProduct,
 		onBuyGamepass = StoreController.promptGamepass,
+		onTabViewed = function()
+			-- Which tab isn't recorded, only that they moved off the first one.
+			-- The step is "they went looking", and a per-tab breakdown would
+			-- need a custom field per kind — cardinality the dashboard charges
+			-- for and nothing here would read.
+			AnalyticsController.step("shop", "Tab Viewed")
+		end,
 	})
 end

@@ -123,15 +123,28 @@ return {
 	-- The blast is the loudest thing in the game; the kit's clip on its own sits
 	-- level with a block landing, which undersells it.
 	EXPLOSION_VOLUME = 1.7,
-	-- The Nuke product: a chain of blasts walked up the tower before the round
-	-- break takes it, so a nuke reads as a nuke rather than as the tower quietly
-	-- disappearing. Bigger and looser than a bomb — it isn't meant to be
-	-- survivable, it's meant to look like the end of the world.
+	-- The Nuke product: a chain of blasts walked up the tower it just cut loose,
+	-- so a nuke reads as a nuke rather than as the tower quietly disappearing.
+	-- Bigger and looser than a bomb — it isn't meant to be survivable, it's
+	-- meant to look like the end of the world.
+	--
+	-- Rungs up the tower, times blasts abreast at each rung. Both matter: the
+	-- rungs are what make it climb, and the width is what makes it cover the
+	-- play plane instead of one column of it.
 	NUKE_BLASTS = 8,
+	NUKE_BLASTS_ACROSS = 3,
+	-- How far a blast may wander from its slot in the row, as a fraction of the
+	-- steering limit. Enough that the barrage doesn't read as a grid, small
+	-- enough that the columns still cover their own share of the plane.
+	NUKE_BLAST_JITTER = 0.25,
 	NUKE_BLAST_INTERVAL = 0.12,
 	NUKE_RADIUS = 60,
 	NUKE_PRESSURE = 2000000,
 	NUKE_IMPULSE = 190,
+	-- How long the wreck is left flying after the *last* blast before it's
+	-- swept. Measured from the end of the chain rather than from the purchase,
+	-- so a piece can't be cleaned up out of a blast that was about to throw it.
+	NUKE_WRECK_SECONDS = 3.5,
 
 	-- A bomb doesn't go off on contact — it warns first. Three beeps with the
 	-- piece flashing red, which is long enough for the room to see it coming and
@@ -223,11 +236,14 @@ return {
 	-- Attribute the server stamps on the arena with the strike position. Clients
 	-- draw the bolt off it; attributes replicate, so the flash needs no packet.
 	STRIKE_ATTRIBUTE = "LightningAt",
-	-- Where the next bolt will land, or nil while none is pending. Clients draw
-	-- the red marker off this one.
+	-- Where the next bolt will land, or nil while none is pending. Just the X on
+	-- the play plane: the marker is a column, and what altitude it stands at is
+	-- the client's business — it has to sit on the floor the run is currently
+	-- building from, which moves every checkpoint (see TowerZoneController).
 	WARN_ATTRIBUTE = "LightningWarnAt",
-	-- The marker: a translucent red column standing on the doomed spot.
-	WARN_COLOR = Color3.fromRGB(255, 64, 56),
+	-- The marker: a translucent blue column standing on the doomed spot. Blue to
+	-- match the bolt it announces.
+	WARN_COLOR = Color3.fromRGB(64, 132, 255),
 	WARN_WIDTH = 9,
 	WARN_HEIGHT = 400,
 	WARN_TRANSPARENCY = 0.72,
@@ -274,6 +290,10 @@ return {
 	CASH_FLY_COUNT = 12,
 	CASH_FLY_SECONDS = 0.75,
 	CASH_IMAGE = "rbxassetid://73395222638222",
+	-- The Extend Storm button's icon. A game asset rather than a kit icon, so it
+	-- lives here beside CASH_IMAGE instead of in `Boil.assets.Icons` — the
+	-- shared registry is the framework's, and the framework names no feature.
+	EXTEND_STORM_ICON = "rbxassetid://81007673236910",
 
 	-- ------------------------------------------------------------------ hud --
 	-- Headshot strip: the current player sits dead center at the larger size,
@@ -484,14 +504,31 @@ return {
 		CASH_500 = 3707809246,
 		CASH_1000 = 3707809250,
 		CASH_10000 = 3707809258,
-		-- Throws the whole tower off the plane and starts the run over — the
-		-- storm's outcome, bought.
+		-- Cuts the standing tower loose and detonates it. The run itself carries
+		-- on — same checkpoints, same clock, same stage — so what it costs the
+		-- room is the climb above the last floor rather than the round.
 		NUKE = 3707809217,
 		-- Jumps the tower up to the target height and clears the stage there,
 		-- cutscene and all — buys the climb, not just a floor wherever play
 		-- happened to stop.
 		NEXT_CHECKPOINT = 3707809233,
+		-- Puts EXTEND_STORM_SECONDS back on the stage clock, for the whole room.
+		-- Bought from the HUD rather than the shop — the button sits beside the
+		-- clock it buys.
+		EXTEND_STORM = 3708160736,
 	},
+	-- How much time one Extend Storm purchase buys. A fifth of a stage
+	-- (STORM_SECONDS is 300): enough to finish a leg that was going to fall
+	-- just short, not enough to make the clock stop mattering. Stacks — two
+	-- purchases are two minutes.
+	EXTEND_STORM_SECONDS = 60,
+	-- Where the "X bought Nuke!" announcements go. The default general channel:
+	-- all three products change the game for everyone in the server, so the
+	-- notice belongs in the one channel everyone is already reading.
+	ANNOUNCE_CHANNEL = "RBXGeneral",
+	-- The buyer's name in that line, as a rich-text colour. Gold, because the
+	-- line is about a Robux purchase and the chat around it is white.
+	ANNOUNCE_NAME_COLOR = "#ffd75e",
 	-- Gamepasses, also configured on the place. Ownership is Roblox's answer;
 	-- StoreService caches it per session and this feature reads it through
 	-- `StoreService.ownsGamepass` on the server. Never trust a client for either.
@@ -510,6 +547,11 @@ return {
 	-- The soft currency id this feature registers with the Store. Its balance
 	-- lives at { PROFILE_KEY, "Cash" } — Store debits it through that path.
 	CURRENCY_ID = "coins",
+
+	-- The Needoh pack. Priced above Neon because it's the one pack that changes
+	-- what a landing *sounds* like, and because it's the daily run's grand prize
+	-- — a week of claims has to be worth more than an afternoon of coins.
+	NEEDOH_SKIN_PRICE = 250,
 
 	-- ------------------------------------------------------- colour skin packs --
 	-- The ten colour packs all cost the same: they're the same product in ten
@@ -561,6 +603,18 @@ return {
 	-- piece. Read on the *server* — a toggle the client alone honoured wouldn't
 	-- be a rule, it'd be a suggestion.
 	SETTING_NOT_PLAYING = "tower.notPlaying",
+
+	-- ------------------------------------------------------------ double turn --
+	-- Setting id (registered in Settings.luau) for the owner's own switch on the
+	-- Double Turn gamepass. On by default — someone who bought the pass wants it —
+	-- but taking two pieces every rotation is a thing you might not want in a room
+	-- of four friends, and "sell them a perk they can't put down" is a bad trade.
+	--
+	-- The row is registered on both realms so the server can validate the write,
+	-- and *shown* only to owners: the gate is set client-side in
+	-- TowerSettingsPresentation, because ownership is a MarketplaceService answer.
+	-- Read on the server, right next to the ownership check it qualifies.
+	SETTING_DOUBLE_TURN = "tower.doubleTurn",
 
 	-- --------------------------------------------------------------- phases --
 	-- Broadcast as a uint8; the HUD reads it to pick its status line.

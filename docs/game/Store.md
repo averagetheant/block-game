@@ -84,10 +84,30 @@ come from the client.
 | Call | Declares | Notes |
 | ---- | -------- | ----- |
 | `registerKind{ id, title, order?, inventory? }` | What a pack kind is *called* | One shop tab per kind that has packs. `inventory = false` when your feature ships its own Inventory tab. |
-| `registerPack{ id, kind, name, description, icon?, price, currency, variant?, order? }` | A buyable, equippable thing | `id` is persisted — append, don't rename. |
+| `registerPack{ id, kind, name, description, icon?, price, currency, variant?, order?, forSale? }` | A buyable, equippable thing | `id` is persisted — append, don't rename. `forSale = false` keeps it out of the shop and makes the server refuse to sell it — see [Reward-only packs](#reward-only-packs). |
 | `registerCurrency{ id, name, icon?, path }` | A soft currency | `path` is the profile path its balance lives at, e.g. `{ "TowerGame", "Cash" }`. Store reads and debits through it. |
 | `registerProduct{ id, name, description?, icon?, group, order?, variant?, amount?, currency? }` | A developer product | `group = "currency"` shows it in the Robux tab and grants `amount` of `currency` generically. `group = "action"` keeps it out of the shop entirely — its button lives elsewhere and a **server handler** runs the effect. |
 | `registerGamepass{ id, name, description, icon?, order?, variant? }` | A gamepass card | Store sells it and tracks ownership; what it *does* is your feature's server code — see [Gamepasses](#gamepasses). |
+
+### Reward-only packs
+
+`forSale = false` makes a pack **earnable but not buyable**. It stays a fully
+registered pack — `StoreService.grantPack` hands it over, ownership persists, it
+equips, and it draws in the Inventory once the player has it — it simply has no
+card in the shop, and `onPurchase` refuses it server-side. Both halves matter:
+`ShopUI` lists `Catalog.listForSale(kind)` instead of `listPacks(kind)`, and the
+server check is what makes a crafted `Purchase` packet useless.
+
+That's the difference between *not for sale* and *not registered*: an
+unregistered pack can't be granted at all, so a daily reward pointing at one
+would silently fail forever.
+
+`price` still means something on one of these — it's what the pack would cost if
+it ever went on sale, so putting it in the shop later is one flag rather than a
+number someone has to invent.
+
+Two ship this way, both [daily-run](DailyRewards.md) rewards: `skins.needoh`
+(day 7's grand prize) and `reactions.hearts` (day 4).
 
 ### Action products need a server handler
 

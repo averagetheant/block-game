@@ -39,9 +39,6 @@ return {
 	TAB_HEIGHT = 54,
 	TAB_TEXT_SIZE = 32,
 	TAB_GAP = 8,
-	-- Balance pill in the shop's top bar.
-	BALANCE_WIDTH = 190,
-	BALANCE_HEIGHT = 44,
 
 	-- Which surfaces this feature renders. Flip one off to drop that surface
 	-- without deleting code (see docs/game/presentations.md).

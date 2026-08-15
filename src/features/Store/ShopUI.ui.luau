@@ -30,13 +30,18 @@ export type Props = {
 	-- it isn't bought with a currency, isn't equipped, and Roblox owns the
 	-- answer rather than the profile.
 	ownedGamepasses: { [number]: boolean },
-	-- currencyId → balance.
+	-- currencyId → balance. Not displayed — it's what decides whether a pack's
+	-- buy button is affordable.
 	balances: { [string]: number },
 	onBuyPack: (packId: string) -> (),
 	onBuyProduct: (productId: number) -> (),
 	onBuyGamepass: (gamepassId: number) -> (),
 	-- Story hook: forces the open tab instead of letting the strip own it.
 	initialTab: string?,
+	-- Called with the tab id whenever the player switches tabs. Optional: the
+	-- UI Labs story renders this component with no wiring behind it, and a shop
+	-- that only works when something is listening would be the wrong shape.
+	onTabViewed: ((tabId: string) -> ())?,
 }
 
 local ROW_GAP = Constants.CARD_GAP
@@ -86,35 +91,6 @@ local function root(children: { [string]: any }): any
 	}, children)
 end
 
--- What the player has to spend, one pill per registered currency, pushed to the
--- right so it reads as a status line rather than a heading. It sits above the
--- tabs because it's true of every tab.
-local function balanceRow(balances: { [string]: number }, layoutOrder: number): any?
-	local currencies = Catalog.listCurrencies()
-	if #currencies == 0 then
-		return nil
-	end
-
-	local pills: { [string]: any } = {}
-	for index, currency in currencies do
-		pills[`Balance_{currency.id}`] = React.createElement(ui.Badge, {
-			variant = "blue",
-			icon = currency.icon,
-			text = tostring(balances[currency.id] or 0),
-			textSize = Constants.TAB_TEXT_SIZE,
-			size = UDim2.fromOffset(Constants.BALANCE_WIDTH, Constants.BALANCE_HEIGHT),
-			layoutOrder = index,
-		})
-	end
-
-	return React.createElement(ui.Row, {
-		gap = Constants.TAB_GAP,
-		horizontalAlignment = Enum.HorizontalAlignment.Right,
-		size = UDim2.new(1, 0, 0, Constants.BALANCE_HEIGHT),
-		layoutOrder = layoutOrder,
-	}, pills)
-end
-
 local function emptyState(text: string, layoutOrder: number): any
 	return React.createElement(ui.Text, {
 		text = text,
@@ -148,18 +124,30 @@ return function(props: Props)
 	end
 	local openTab = if tabExists then activeTab else tabs[1].id
 
+	-- Selecting a tab is both a state change and something worth reporting, and
+	-- the two are kept apart: this owns the state, and `onTabViewed` is an
+	-- optional callback the wiring layer fills in. The story renders without one.
+	local onSelect = React.useCallback(function(id: string)
+		setActiveTab(id)
+		if props.onTabViewed then
+			props.onTabViewed(id)
+		end
+	end, { props.onTabViewed } :: { any })
+
 	local children: { [string]: any } = {
-		Balances = balanceRow(props.balances, 0),
 		Tabs = React.createElement(TabStrip, {
 			tabs = tabs,
 			activeId = openTab,
-			onSelect = setActiveTab,
+			onSelect = onSelect,
 			layoutOrder = 1,
 		}),
 	}
 
 	if openTab ~= ROBUX_TAB then
-		local packs = Catalog.listPacks(openTab)
+		-- Not `listPacks`: a reward-only pack (the daily run's grand prize) is a
+		-- registered, ownable pack that simply has no card here. It shows up in
+		-- the Inventory once it's been earned.
+		local packs = Catalog.listForSale(openTab)
 		local cards: { [string]: any } = {}
 
 		for index, pack in packs do

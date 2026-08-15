@@ -25,6 +25,12 @@ local Catalog = require(ReplicatedStorage.Features.Store.Catalog)
 local Packets = require(ReplicatedStorage.Features.Store.Packets)
 local PlayerDataService = require(ServerScriptService.Features.PlayerData.PlayerDataService)
 
+-- Telemetry. This service is where every purchase in the game actually
+-- completes, so it owns the closing step of all three purchase funnels and the
+-- sink side of the economy. See docs/game/Analytics.md.
+local AnalyticsService = require(ServerScriptService.Features.Analytics.AnalyticsService)
+local AnalyticsConstants = require(ReplicatedStorage.Features.Analytics.Constants)
+
 local StoreService = {}
 
 -- After PlayerData (1), ahead of the feature services that register product
@@ -192,7 +198,16 @@ function StoreService.grantPack(player: Player, packId: string): boolean
 	if StoreService.owns(player, packId) then
 		return true
 	end
-	return PlayerDataService.SetValue(player, { KEY, "Owned", packId }, true)
+
+	local granted = PlayerDataService.SetValue(player, { KEY, "Owned", packId }, true)
+	if granted then
+		-- Onboarding step 6, fired here rather than in `onPurchase` so it counts
+		-- however the pack arrived. A player whose first pack was a daily reward
+		-- has still reached "owns something", and the funnel is about the player
+		-- getting there, not about the till.
+		AnalyticsService.onboarding(player, 6)
+	end
+	return granted
 end
 
 local function onPurchase(payload: { packId: string }, player: Player)
@@ -206,9 +221,23 @@ local function onPurchase(payload: { packId: string }, player: Player)
 		warn(`[Store] {player.Name} tried to buy unregistered pack "{packId}"`)
 		return
 	end
+	-- The shop never draws a card for one of these, so this is a crafted packet
+	-- rather than a mis-click. It's the whole guarantee behind a reward-only
+	-- pack: the only way to it is the thing that grants it.
+	if not Catalog.forSale(pack) then
+		warn(`[Store] {player.Name} tried to buy pack "{packId}", which isn't for sale`)
+		return
+	end
 	if StoreService.owns(player, packId) then
 		return
 	end
+
+	-- Logged before the affordability check, not after. This step is "the
+	-- player asked to buy something", and the gap between it and "Pack Granted"
+	-- is the players who wanted a pack and couldn't afford it — which is the
+	-- single most useful number the shop produces, and it disappears entirely
+	-- if the step only fires on success.
+	AnalyticsService.step(player, "shop", "Purchase Sent", { pack.kind })
 
 	local balance = readBalance(player, pack.currency)
 	if balance == nil then
@@ -221,10 +250,23 @@ local function onPurchase(payload: { packId: string }, player: Player)
 
 	-- Debit first: if the grant somehow fails the player is out the money but
 	-- can buy again, which is recoverable. The other order hands out free packs.
-	if not writeBalance(player, pack.currency, balance - pack.price) then
+	local remaining = balance - pack.price
+	if not writeBalance(player, pack.currency, remaining) then
 		return
 	end
-	StoreService.grantPack(player, packId)
+	if not StoreService.grantPack(player, packId) then
+		return
+	end
+
+	AnalyticsService.step(player, "shop", "Pack Granted", { pack.kind })
+	AnalyticsService.economy(
+		player,
+		"sink",
+		pack.price,
+		remaining,
+		AnalyticsConstants.TRANSACTION.SHOP,
+		packId
+	)
 end
 
 local function onEquip(payload: { kind: string, packId: string }, player: Player)
@@ -328,6 +370,23 @@ local function processReceipt(info: any): Enum.ProductPurchaseDecision
 	end
 
 	rememberReceipt(player, purchaseId)
+
+	AnalyticsService.step(player, "product", "Receipt Granted", { product.name })
+	-- Coins bought with Robux enter the economy here rather than through
+	-- CashService: `StoreService.credit` is a different write path, and it's the
+	-- right one — these coins are a purchase, not earnings, and lumping them in
+	-- with the gameplay taps would make the earn curve look twice as generous as
+	-- it is.
+	if product.group == "currency" then
+		AnalyticsService.economy(
+			player,
+			"source",
+			product.amount or 0,
+			StoreService.getBalance(player, product.currency or ""),
+			AnalyticsConstants.TRANSACTION.IAP,
+			product.name
+		)
+	end
 	return Enum.ProductPurchaseDecision.PurchaseGranted
 end
 
@@ -351,14 +410,34 @@ function StoreService.Start()
 	-- A pass bought mid-session has to start working now, not next join. The
 	-- prompt closing is the only notice Roblox gives.
 	MarketplaceService.PromptGamePassPurchaseFinished:Connect(function(player, gamepassId, wasPurchased)
+		-- Fired whether or not they paid, which is what makes the gap between
+		-- this step and "Pass Owned" a cancel rate rather than a mystery.
+		AnalyticsService.step(player, "gamepass", "Prompt Closed", { tostring(gamepassId) })
 		if not wasPurchased then
 			return
 		end
+		AnalyticsService.step(player, "gamepass", "Pass Owned", { tostring(gamepassId) })
+
 		local owned = gamepassOwned[player]
 		if owned == nil then
 			return
 		end
 		owned[gamepassId] = true
+	end)
+
+	-- The same beat for developer products. Nothing is granted here — that's
+	-- ProcessReceipt's job and it may arrive later or not at all — so this only
+	-- reports. Roblox hands this one a user id rather than a Player.
+	MarketplaceService.PromptProductPurchaseFinished:Connect(function(userId, productId, isPurchased)
+		local player = Players:GetPlayerByUserId(userId)
+		if player == nil then
+			return
+		end
+		local product = Catalog.getProduct(productId)
+		AnalyticsService.step(player, "product", "Prompt Closed", {
+			if product then product.name else tostring(productId),
+			if isPurchased then "Paid" else "Cancelled",
+		})
 	end)
 end
 

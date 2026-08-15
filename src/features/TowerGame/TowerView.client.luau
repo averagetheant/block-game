@@ -29,6 +29,9 @@ local TowerCameraController = require(script.Parent.TowerCameraController)
 local TowerController = require(script.Parent.TowerController)
 local TowerFeedbackController = require(script.Parent.TowerFeedbackController)
 local TowerZoneController = require(script.Parent.TowerZoneController)
+-- Prompting a purchase is a client call. The HUD only gets a callback — it
+-- never learns there's a product id behind the button.
+local StoreController = require(script.Parent.Parent.Store.StoreController)
 
 -- What the machine has, used until the player touches something. Keyboard wins
 -- when several are available (Studio emulation, a laptop with a touchscreen),
@@ -199,5 +202,14 @@ return function()
 		onToggleCamera = function()
 			setOverview(TowerCameraController.toggleOverview())
 		end,
+
+		-- Gated on the same flag as the rail's Nuke and Skip: a build with the
+		-- actions presentation off shouldn't offer this one either. nil here is
+		-- what makes the HUD leave the button out entirely.
+		onExtendStorm = if Constants.Presentations.actions
+			then function()
+				StoreController.promptProduct(Constants.PRODUCTS.EXTEND_STORM)
+			end
+			else nil,
 	})
 end

@@ -25,6 +25,9 @@ export type Props = {
 	onEquip: (kind: string, packId: string) -> (),
 	onUnequip: (kind: string) -> (),
 	initialTab: string?,
+	-- Called with the tab id whenever the player switches tabs. Optional, for
+	-- the same reason as ShopUI's: the story renders with nothing behind it.
+	onTabViewed: ((tabId: string) -> ())?,
 }
 
 local ROW_GAP = Constants.CARD_GAP
@@ -147,6 +150,16 @@ return function(props: Props)
 
 	local activeTab, setActiveTab = React.useState(props.initialTab or (if tabs[1] then tabs[1].id else ""))
 
+	-- Declared above the empty-state return below: hooks have to run in the same
+	-- order on every render, and an early return between two of them is the one
+	-- way to break that.
+	local onSelect = React.useCallback(function(id: string)
+		setActiveTab(id)
+		if props.onTabViewed then
+			props.onTabViewed(id)
+		end
+	end, { props.onTabViewed } :: { any })
+
 	if #tabs == 0 then
 		return root({
 			Empty = React.createElement(ui.Text, {
@@ -172,7 +185,7 @@ return function(props: Props)
 		Tabs = React.createElement(TabStrip, {
 			tabs = tabs,
 			activeId = openTab,
-			onSelect = setActiveTab,
+			onSelect = onSelect,
 			layoutOrder = 1,
 		}),
 	}

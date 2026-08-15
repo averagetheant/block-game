@@ -54,6 +54,16 @@ export type Pack = {
 	order: number?,
 	-- Gem palette for the pack's card.
 	variant: string?,
+	-- False = the shop never lists it and the server refuses to sell it. It's
+	-- still a fully registered pack: grantable (a daily reward, a promo, an admin
+	-- grant), ownable, equippable, and it still shows in the Inventory once the
+	-- player has it. That's the difference between "not for sale" and "not
+	-- registered" — the latter can't be handed over at all.
+	--
+	-- `price` stays meaningful on one of these: it's what the pack would cost if
+	-- it ever went on sale, so putting it in the shop is one flag rather than a
+	-- number someone has to invent later. Defaults to true.
+	forSale: boolean?,
 }
 
 -- A soft currency, e.g. the coins TowerGame pays out. `path` is the profile
@@ -264,6 +274,27 @@ function Catalog.listPacks(kind: PackKind?): { Pack }
 		end
 	end
 	return byOrderThenName(result) :: { Pack }
+end
+
+-- Whether a pack can be bought at all. One place, because the shop and the
+-- server both have to agree — a card the client hides but the server would sell
+-- is an exploit, and the reverse is a card that does nothing.
+function Catalog.forSale(pack: Pack): boolean
+	return pack.forSale ~= false
+end
+
+-- The packs of one kind the shop should list: everything but the reward-only
+-- ones. Kept separate from `listPacks` rather than filtering inside it, because
+-- the Inventory has to keep showing a reward pack the player already owns — the
+-- shop asks "what's buyable", the inventory asks "what exists".
+function Catalog.listForSale(kind: PackKind?): { Pack }
+	local result: { Pack } = {}
+	for _, pack in Catalog.listPacks(kind) do
+		if Catalog.forSale(pack) then
+			table.insert(result, pack)
+		end
+	end
+	return result
 end
 
 -- The kinds that actually have packs, sorted. A kind with nothing in it is a

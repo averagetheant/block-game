@@ -20,8 +20,12 @@ local Packets = require(ReplicatedStorage.Features.Store.Packets)
 local Signal = require(ReplicatedStorage.Packages.Signal)
 local audio = require(ReplicatedStorage.Shared.Boil).audio
 
--- Client-realm sibling controller.
+-- Client-realm sibling controllers.
 local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
+-- Telemetry for the half of the purchase journey the server can't see: which
+-- card was clicked, and whether a prompt was ever asked for. Reported from here
+-- rather than from ShopUI so the views stay dumb — see docs/game/headless-core.md.
+local AnalyticsController = require(script.Parent.Parent.Analytics.AnalyticsController)
 
 local StoreController = {}
 
@@ -119,6 +123,11 @@ function StoreController.purchase(packId: string)
 	if typeof(packId) ~= "string" or #packId == 0 then
 		return
 	end
+	-- The click, as distinct from the server's "Purchase Sent" — which is the
+	-- same event one hop later. Both exist because the hop can fail: a card that
+	-- reports Pack Selected and never reaches Purchase Sent is a packet that
+	-- didn't land, and that looks nothing like a player who couldn't afford it.
+	AnalyticsController.step("shop", "Pack Selected")
 	Packets.Purchase.send({ packId = packId })
 end
 
@@ -130,6 +139,8 @@ function StoreController.equip(kind: string, packId: string)
 	-- something off shouldn't sound like putting it on.
 	if #packId > 0 then
 		audio.playUI("equip")
+		-- Unequipping isn't the end of the equip funnel; it's the opposite of it.
+		AnalyticsController.step("inventory", "Pack Equipped")
 	end
 	Packets.Equip.send({ kind = kind, packId = packId })
 end
@@ -140,9 +151,20 @@ function StoreController.unequip(kind: string)
 end
 
 function StoreController.promptProduct(productId: number)
+	-- A product still on its 0 placeholder until the real one is configured on
+	-- the place. Prompting with it throws, so decline politely — and say so,
+	-- the way promptGamepass does: a button that does nothing at all is
+	-- indistinguishable from a broken one when you're testing in Studio.
 	if typeof(productId) ~= "number" or productId <= 0 then
+		warn("[Store] product has no id yet; set one on its registration to enable the button")
 		return
 	end
+	-- A step, not a new session. The product funnel's session is opened when the
+	-- shop opens ("Product Shown"), because that's the population this is a
+	-- conversion *of* — starting a session here instead would mean every row in
+	-- the funnel began at step 2 and the drop-off from seeing to clicking, the
+	-- thing worth knowing, would never appear.
+	AnalyticsController.step("product", "Prompt Requested")
 	MarketplaceService:PromptProductPurchase(Players.LocalPlayer, productId)
 end
 
@@ -153,6 +175,8 @@ function StoreController.promptGamepass(gamepassId: number)
 		warn("[Store] gamepass has no id yet; set one on its registration to enable the button")
 		return
 	end
+	-- A step for the same reason as promptProduct above.
+	AnalyticsController.step("gamepass", "Prompt Requested")
 	MarketplaceService:PromptGamePassPurchase(Players.LocalPlayer, gamepassId)
 end
 

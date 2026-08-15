@@ -99,5 +99,21 @@ return ByteNet.defineNamespace("TowerGame", function()
 			}),
 			reliabilityType = "reliable",
 		}),
+
+		-- Server -> All: someone bought one of the action products; say so in
+		-- chat. Sent only once the effect has actually applied, so the room is
+		-- never told about a purchase that was deferred for redelivery.
+		--
+		-- Two ids and no text. The wording is the client's business (chat is a
+		-- presentation), the product's name comes out of the Store catalog both
+		-- realms already share, and a name resolved from a user id is one the
+		-- buyer can't have made up.
+		Announce = ByteNet.definePacket({
+			value = ByteNet.struct({
+				productId = ByteNet.float64,
+				userId = ByteNet.float64,
+			}),
+			reliabilityType = "reliable",
+		}),
 	}
 end)

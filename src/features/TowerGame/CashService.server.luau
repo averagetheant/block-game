@@ -17,6 +17,11 @@ local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local PlayerDataService = require(ServerScriptService.Features.PlayerData.PlayerDataService)
 local StoreService = require(ServerScriptService.Features.Store.StoreService)
 
+-- Every coin the game pays out passes through `award`, which makes this the one
+-- place the economy's source side can be measured. See docs/game/Analytics.md.
+local AnalyticsService = require(ServerScriptService.Features.Analytics.AnalyticsService)
+local AnalyticsConstants = require(ReplicatedStorage.Features.Analytics.Constants)
+
 local CashService = {}
 
 -- After PlayerData (1), alongside the other TowerGame services.
@@ -45,25 +50,48 @@ end
 
 -- The one write path. Returns quietly for a player whose profile hasn't loaded
 -- yet — they'll earn on the next award rather than banking onto a nil.
-function CashService.award(player: Player, amount: number)
+--
+-- `source` names which tap paid out. It exists for the analytics event rather
+-- than for the write — coins are coins whatever earned them — but "the earn
+-- curve is too fast" is unanswerable without knowing which tap it's running
+-- from, and that question decides what the Robux bundles can be priced at.
+--
+-- Roblox counts unique SKUs per experience (100 of them), so these stay a
+-- handful of literals: never a player name, a round number, or anything else
+-- that grows.
+function CashService.award(player: Player, amount: number, source: string?)
 	local saved = slice(player)
 	if saved == nil or amount <= 0 then
 		return
 	end
 	-- Floored, so a multiplier can never mint a fraction of a coin.
 	local paid = math.floor(amount * multiplierFor(player))
-	PlayerDataService.SetValue(player, { KEY, "Cash" }, (saved.Cash or 0) + paid)
+	local balance = (saved.Cash or 0) + paid
+	PlayerDataService.SetValue(player, { KEY, "Cash" }, balance)
+
+	-- The *paid* amount, after the gamepass multiplier: the dashboard should
+	-- show what actually entered the economy, not what it would have been
+	-- without the pass. `endingBalance` is Roblox's ask and is why this sits
+	-- after the write rather than before it.
+	AnalyticsService.economy(
+		player,
+		"source",
+		paid,
+		balance,
+		AnalyticsConstants.TRANSACTION.GAMEPLAY,
+		source or "Unknown"
+	)
 end
 
-function CashService.awardAll(amount: number)
+function CashService.awardAll(amount: number, source: string?)
 	for _, player in Players:GetPlayers() do
-		CashService.award(player, amount)
+		CashService.award(player, amount, source)
 	end
 end
 
 -- Called by TowerService when a checkpoint pushes the run into a new zone.
 function CashService.awardZone()
-	CashService.awardAll(Constants.CASH_PER_ZONE)
+	CashService.awardAll(Constants.CASH_PER_ZONE, "Zone")
 end
 
 function CashService.Start()
@@ -73,7 +101,7 @@ function CashService.Start()
 	task.spawn(function()
 		while true do
 			task.wait(Constants.CASH_INTERVAL_SECONDS)
-			CashService.awardAll(Constants.CASH_PER_INTERVAL)
+			CashService.awardAll(Constants.CASH_PER_INTERVAL, "Idle")
 		end
 	end)
 end

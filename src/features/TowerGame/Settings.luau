@@ -53,4 +53,18 @@ return function(Settings)
 		order = 2,
 		variant = "green",
 	})
+
+	-- Registered for everyone so both realms agree the id exists (the server
+	-- validates writes against that), but only *shown* to players who own the
+	-- Double Turn gamepass — that gate is set in TowerSettingsPresentation, which
+	-- is client-only because ownership is a MarketplaceService answer.
+	Settings.registerSetting({
+		kind = "toggle",
+		id = Constants.SETTING_DOUBLE_TURN,
+		label = "Double Turn",
+		category = "gameplay",
+		default = true,
+		order = 3,
+		variant = "purple",
+	})
 end

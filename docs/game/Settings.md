@@ -6,7 +6,7 @@ The Settings feature itself ships **no real settings** — it provides the regis
 
 ## What it does
 
-- **Registry** (`Registry.luau`, shared): two flat tables (`settings`, `categories`) with a `Changed` signal. Both client and server load this module; both realms keep their own copy.
+- **Registry** (`Registry.luau`, shared): two flat tables (`settings`, `categories`) with a `Changed` signal. Both client and server load this module; both realms keep their own copy. A third table holds per-setting *visibility* predicates, which are presentation rather than registration — see "Showing a setting conditionally" below.
 - **Persistence**: setting values live under a `Settings = {}` key on the player profile as a `[settingId] = value` map. That key is registered into the PlayerData profile template by `src/features/Settings/PlayerData.luau` (see docs/game/PlayerData.md) — the PlayerData feature itself doesn't know Settings exists. Writes route through `PlayerDataService.SetValue` so the Replica diff and the next ProfileStore autosave stay in sync.
 - **Networking**: one ByteNet packet per setting kind. Today there's just `SetToggle`; new kinds add their own packet.
 - **UI**: `SettingsUI.ui.luau` is a pure React component (sections, values, onToggle, focusedId as props). `SettingsView.client.luau` wires it to `PlayerDataController`, `Registry.Changed`, and `SettingsController.LinkRequested`.
@@ -117,6 +117,47 @@ Settings.registerSetting({ kind = "toggle", id = "myfeature.cool_thing", ... })
 ```
 
 If you call this *after* the Settings UI has mounted, the `Registry.Changed` signal will trigger a re-render so the new entry appears live. Use this when registrations depend on runtime state (e.g. unlocked content).
+
+## Showing a setting conditionally
+
+A row can be hidden behind a predicate — a perk only its owners can switch off, a
+toggle for content that isn't unlocked yet:
+
+```lua
+-- In a *Presentation.client.luau, not in the shared Settings.luau.
+local Settings = require(ReplicatedStorage.Features.Settings)
+local StoreController = require(script.Parent.Parent.Store.StoreController)
+
+Settings.setVisibility("myfeature.cool_thing", function()
+    return StoreController.ownsGamepass(SOME_GAMEPASS_ID)
+end)
+
+-- The predicate's answer can change after load; say so when it does.
+StoreController.GamepassesChanged:Connect(function()
+    Settings.invalidate()
+end)
+```
+
+`Registry.list()` drops gated-off settings, so `SettingsUI` needs no change, and
+a category left with nothing in it renders as nothing — hiding the last row of a
+category hides its header too.
+
+Three things to keep straight:
+
+- **Register shared, gate client-side.** The setting itself still goes in the
+  shared `Settings.luau`: both realms have to agree the id exists or
+  `SettingsService` rejects every write to it. Only the *gate* is client-only,
+  which is also the only realm where "shown" means anything.
+- **`setVisibility` is exempt from the seal**, deliberately. The seal stops the
+  two realms' *registries* drifting; visibility isn't part of a registry, so
+  client-only code may set one long after load.
+- **Hidden is not locked.** The server still accepts a write to a hidden row.
+  Anything the setting actually gates must be re-checked server-side — see
+  TowerGame's Double Turn toggle, which `nextPlayer` reads through
+  `SettingsService.get` next to the gamepass check it qualifies.
+
+A predicate that throws is treated as "show it": a bug worth noticing beats
+silently taking a setting away from a player.
 
 ## Reading values from feature code
 

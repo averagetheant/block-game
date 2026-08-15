@@ -149,6 +149,11 @@ return {
 			onDrop = function()
 				print("[TowerHUD.story] drop")
 			end,
+			-- Present so the button renders here; in game this is nil whenever
+			-- the actions presentation is off.
+			onExtendStorm = function()
+				print("[TowerHUD.story] extend storm")
+			end,
 		})
 	end,
 }

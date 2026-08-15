@@ -7,19 +7,27 @@
 -- edges rather than following the centered-by-default rule for feature UIs.
 -- Centering a height readout would sit it on top of the tower being aimed at.
 --
---   top center     turn strip → height/best → turn clock → storm clock
+--   top center     turn strip → height/best → storm clock
+--   flanking those  Extend Storm (left) and the turn dial (right)
 --   bottom left    controls hint (fades out on its own)
 --   bottom center  touch controls (touch devices only)
 --
 -- The top column flows through one Stack rather than being positioned by hand,
--- so a row appearing or disappearing (the turn clock only exists while someone
--- is aiming) reflows the rest instead of leaving a hole.
+-- so a row appearing or disappearing reflows the rest instead of leaving a hole.
+--
+-- The two things flanking the stats row are the exception, and deliberately so:
+-- they sit *outside* the column at a computed y (FLANK_Y) rather than inside it.
+-- The turn dial used to be laid out beside the stats panel, which meant the
+-- panel had to shrink to make room and the whole readout resized and slid
+-- sideways twice a turn. Nothing that comes and goes each turn should be able to
+-- move the things that don't.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TweenService = game:GetService("TweenService")
 
 local React = require(ReplicatedStorage.Packages.React)
-local ui = require(ReplicatedStorage.Shared.Boil).ui
+local Boil = require(ReplicatedStorage.Shared.Boil)
+local ui = Boil.ui
+local audio = Boil.audio
 local CashFly = require(script.Parent.CashFly)
 local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
@@ -58,9 +66,21 @@ local CONTROL_ROW_WIDTH = Constants.STICK_TRACK_WIDTH + 110 + 160 + CONTROL_GAP 
 local STORM_LABEL_TEXT_SIZE = ui.theme.textSizeRegular
 local STORM_LABEL_HEIGHT = STORM_LABEL_TEXT_SIZE + 8
 local PROGRESS_HEIGHT = 26
-local PANEL_RESIZE = TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
 -- The camera toggle, sitting above the cash panel on the right edge.
 local CAMERA_BUTTON = 62
+-- Extend Storm. Matched to CAMERA_BUTTON rather than given its own size: they
+-- are the HUD's two icon buttons and reading as a pair is the point.
+local EXTEND_BUTTON = CAMERA_BUTTON
+-- What TurnStrip sizes itself to (`AVATAR_SIZE + 8`, see TurnStrip.ui.luau).
+-- Needed here to line the Extend button up with the stats row *below* the strip
+-- — derived from the same expression rather than hardcoded, so a bigger avatar
+-- moves both.
+local TURN_STRIP_HEIGHT = Constants.AVATAR_SIZE + 8
+-- Where the two things that flank the stats row sit vertically: Extend Storm on
+-- the left, the turn dial on the right. Walks the column's own stack — top
+-- margin, the turn strip, the gap, then half the stats row — so a taller avatar
+-- or a bigger stat row carries both with it.
+local FLANK_Y = TOP_MARGIN + TURN_STRIP_HEIGHT + STACK_GAP + STATS_HEIGHT / 2
 local CASH_WIDTH = 205
 local CASH_HEIGHT = 58
 local CASH_TEXT_SIZE = 32
@@ -127,6 +147,10 @@ export type Props = {
 	onToggleCamera: (() -> ())?,
 	onRotate: (() -> ())?,
 	onDrop: (() -> ())?,
+	-- Prompts the Extend Storm purchase. Optional: the story renders the HUD
+	-- without one, and so does a build with the actions presentation switched
+	-- off — no handler, no button.
+	onExtendStorm: (() -> ())?,
 }
 
 local function clock(seconds: number): string
@@ -159,22 +183,26 @@ return function(props: Props)
 	local aiming = props.phase == PHASE.AIMING
 	local canAct = aiming and props.isMyTurn
 
-	-- The height panel gives up room for the turn dial and takes it back between
-	-- turns; tweened so the handover reads as one motion with the dial.
-	local statsRef = React.useRef(nil :: GuiObject?)
+	-- The last five seconds of a turn tick audibly. Keyed on the whole second
+	-- rather than on the raw countdown, which changes every frame — and latched,
+	-- so a re-render inside the same second doesn't double up.
+	--
+	-- The latch is cleared whenever the countdown is outside the window, which
+	-- is what re-arms it for the next turn without needing to watch for the turn
+	-- itself changing.
+	local secondsWhole = math.ceil(props.secondsLeft)
+	local tickedAt = React.useRef(nil :: number?)
 	React.useEffect(function()
-		local panel = statsRef.current
-		if panel == nil then
+		if not aiming or secondsWhole > URGENT_SECONDS or secondsWhole <= 0 then
+			tickedAt.current = nil
 			return
 		end
-		local width = if aiming then -(STATS_HEIGHT + 10) else 0
-		local tween = TweenService:Create(panel, PANEL_RESIZE, { Size = UDim2.new(1, width, 0, STATS_HEIGHT) })
-		tween:Play()
-		return function()
-			tween:Cancel()
-			tween:Destroy()
+		if tickedAt.current == secondsWhole then
+			return
 		end
-	end, { aiming } :: { any })
+		tickedAt.current = secondsWhole
+		audio.playUI("tick")
+	end, { secondsWhole, aiming } :: { any })
 
 	local column: { [string]: any } = {
 		Turns = React.createElement(TurnStrip, {
@@ -184,52 +212,34 @@ return function(props: Props)
 			layoutOrder = 1,
 		}),
 
-		-- Height, with the turn clock beside it. The dial only exists while
-		-- someone is aiming, so between turns the panel takes the full width.
-		HeightRow = React.createElement(ui.Row, {
-			gap = 10,
+		-- Height. Always the full column width — the turn dial used to sit beside
+		-- it in a row and the panel gave up room for it, which meant the whole
+		-- readout resized and shifted twice a turn. The dial is now placed
+		-- absolutely outside the column (see children.Timer), so nothing the
+		-- dial does moves anything else.
+		Stats = React.createElement(ui.Panel, {
 			size = UDim2.new(1, 0, 0, STATS_HEIGHT),
 			layoutOrder = 2,
 		}, {
-			Stats = React.createElement(ui.Panel, {
-				-- Tweened rather than set: the dial appearing and disappearing
-				-- each turn would otherwise snap the panel's width twice a turn.
-				ref = statsRef,
-				size = UDim2.new(1, 0, 0, STATS_HEIGHT),
-				layoutOrder = 1,
-			}, {
-				Row = React.createElement(ui.Row, { size = UDim2.fromScale(1, 1) }, {
-					Height = React.createElement(ui.Text, {
-						text = `{string.format("%.1f", props.height)} studs`,
-						textSize = STAT_TEXT_SIZE,
-						weight = Enum.FontWeight.Heavy,
-						shadow = true,
-						xAlignment = Enum.TextXAlignment.Center,
-						size = UDim2.new(0.55, 0, 1, 0),
-						layoutOrder = 1,
-					}),
-					Best = React.createElement(ui.Text, {
-						text = `best {string.format("%.1f", props.maxHeight)}`,
-						textSize = STAT_TEXT_SIZE - 6,
-						color = Color3.fromRGB(184, 192, 214),
-						xAlignment = Enum.TextXAlignment.Center,
-						size = UDim2.new(0.45, 0, 1, 0),
-						layoutOrder = 2,
-					}),
+			Row = React.createElement(ui.Row, { size = UDim2.fromScale(1, 1) }, {
+				Height = React.createElement(ui.Text, {
+					text = `{string.format("%.1f", props.height)} studs`,
+					textSize = STAT_TEXT_SIZE,
+					weight = Enum.FontWeight.Heavy,
+					shadow = true,
+					xAlignment = Enum.TextXAlignment.Center,
+					size = UDim2.new(0.55, 0, 1, 0),
+					layoutOrder = 1,
+				}),
+				Best = React.createElement(ui.Text, {
+					text = `best {string.format("%.1f", props.maxHeight)}`,
+					textSize = STAT_TEXT_SIZE - 6,
+					color = Color3.fromRGB(184, 192, 214),
+					xAlignment = Enum.TextXAlignment.Center,
+					size = UDim2.new(0.45, 0, 1, 0),
+					layoutOrder = 2,
 				}),
 			}),
-
-			Timer = if aiming
-				then React.createElement(RadialTimer, {
-					progress = props.secondsLeft / math.max(props.turnSeconds, 1),
-					color = if props.secondsLeft <= URGENT_SECONDS
-						then Color3.fromRGB(232, 96, 96)
-						else Color3.fromRGB(112, 214, 122),
-					size = STATS_HEIGHT,
-					label = tostring(math.ceil(props.secondsLeft)),
-					layoutOrder = 2,
-				})
-				else nil,
 		}),
 	}
 
@@ -306,6 +316,57 @@ return function(props: Props)
 		anchorPoint = Vector2.new(1, 1),
 		onClick = props.onToggleCamera,
 	})
+
+	-- Immediately left of the stats panel and vertically centred on it, rather
+	-- than out at the screen edge. It buys time on the clock this column is
+	-- about, so it sits beside the readout it changes — and the left edge is
+	-- already taken twice over, by the sidebar rail (centred) and the controls
+	-- hint (bottom).
+	--
+	-- The y offset walks the column's own stack: top margin, the turn strip,
+	-- the gap, then half the stats row. Derived rather than measured, so a
+	-- taller avatar or a bigger stat row carries the button with it.
+	--
+	-- The x offset clears the column by half the dial's footprint *on top of*
+	-- the usual margin. At rest the stats panel is flush with the column, but
+	-- when the dial appears the panel is still full width for the length of its
+	-- resize tween — for those 0.3s the row is wider than the column and centres
+	-- itself, pushing the panel half a dial to the left. Clearing only the
+	-- column would put the button under the panel twice a turn, every turn.
+	--
+	-- Hidden during the round break for the same reason the storm row above is:
+	-- the clock is frozen and the tower it was counting down to is wreckage, so
+	-- there is nothing to extend. Offering it there would be selling a minute of
+	-- a stage that no longer exists.
+	if props.onExtendStorm and props.phase ~= PHASE.GAMEOVER then
+		children.ExtendStorm = React.createElement(ui.IconButton, {
+			icon = Constants.EXTEND_STORM_ICON,
+			variant = "yellow",
+			size = UDim2.fromOffset(EXTEND_BUTTON, EXTEND_BUTTON),
+			position = UDim2.new(0.5, -(COLUMN_WIDTH / 2 + EDGE_MARGIN), 0, FLANK_Y),
+			anchorPoint = Vector2.new(1, 0.5),
+			onClick = props.onExtendStorm,
+		})
+	end
+
+	-- The turn dial, flanking the stats row on the right exactly as Extend
+	-- Storm flanks it on the left — same y, same margin, mirrored anchor.
+	--
+	-- Outside the column and absolutely positioned, which is the whole point:
+	-- laid out in a row it took space from the stats panel, so the readout
+	-- resized and slid sideways every time a turn started and ended. Nothing
+	-- moves now; the dial simply appears in the gap that was always there.
+	if aiming then
+		children.Timer = React.createElement(RadialTimer, {
+			progress = props.secondsLeft / math.max(props.turnSeconds, 1),
+			color = if props.secondsLeft <= URGENT_SECONDS
+				then Color3.fromRGB(232, 96, 96)
+				else Color3.fromRGB(112, 214, 122),
+			size = STATS_HEIGHT,
+			label = tostring(math.ceil(props.secondsLeft)),
+			position = UDim2.new(0.5, COLUMN_WIDTH / 2 + EDGE_MARGIN + STATS_HEIGHT / 2, 0, FLANK_Y),
+		})
+	end
 
 	-- Bottom-right, opposite the controls hint. The bills fly here.
 	children.Cash = React.createElement(ui.Panel, {

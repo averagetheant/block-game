@@ -97,6 +97,47 @@ function Registry.registerCategory(def: Category)
 	Registry.Changed:Fire()
 end
 
+-- Whether a setting is *shown*, as opposed to whether it exists. Deliberately
+-- kept off the registrations and outside the seal: the seal is about the two
+-- realms agreeing on what's registered (the server validates writes against
+-- that), and being shown is presentation, which only the client has an opinion
+-- about anyway. So client-only code may gate a row after load without any of the
+-- drift the seal exists to prevent.
+--
+-- A hidden row is not a locked one. The server still accepts a write to it, so
+-- whatever the setting gates has to be re-checked server-side regardless — see
+-- TowerGame's Double Turn toggle for the shape of that.
+-- Optional value type so clearing a gate is an ordinary assignment.
+local visibility: { [string]: (() -> boolean)? } = {}
+
+-- Gate `id` behind a predicate, or pass nil to show it unconditionally again.
+function Registry.setVisibility(id: string, predicate: (() -> boolean)?)
+	visibility[id] = predicate
+	Registry.Changed:Fire()
+end
+
+-- Ask the UI to re-read the registry. For a caller whose predicate's answer has
+-- changed — gamepass ownership landing a moment after join, an unlock — with no
+-- registration behind it to announce the change on its own.
+function Registry.invalidate()
+	Registry.Changed:Fire()
+end
+
+function Registry.isVisible(id: string): boolean
+	local predicate = visibility[id]
+	if predicate == nil then
+		return true
+	end
+	local ok, shown = pcall(predicate)
+	if not ok then
+		-- Showing the row is the safer failure: a predicate that threw is a bug
+		-- to notice, not a reason to silently take a setting away from a player.
+		warn(`[Settings] visibility predicate for "{id}" errored: {shown}`)
+		return true
+	end
+	return shown == true
+end
+
 function Registry.getSetting(id: string): Setting?
 	return settings[id]
 end
@@ -117,7 +158,9 @@ end
 -- Returns the registry as a list of { category, settings } sections, sorted
 -- by category order then title, and per section settings sorted by order
 -- then label. Settings whose category isn't registered are dropped (with a
--- warning) — they can't be displayed without a header.
+-- warning) — they can't be displayed without a header — and so are settings
+-- gated off by `setVisibility`. A category left with nothing in it is rendered
+-- as nothing by the UI, so hiding the last row of one hides its header too.
 function Registry.list(): { Section }
 	local catList: { Category } = {}
 	for _, c in categories do
@@ -137,6 +180,9 @@ function Registry.list(): { Section }
 	for _, def in settings do
 		if categories[def.category] == nil then
 			warn(`[Settings] setting "{def.id}" references unknown category "{def.category}"`)
+			continue
+		end
+		if not Registry.isVisible(def.id) then
 			continue
 		end
 		local bucket = grouped[def.category]

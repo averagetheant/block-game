@@ -21,6 +21,12 @@ Settings.FRAME_ID = Settings.Constants.FRAME_ID
 Settings.registerSetting = Settings.Registry.registerSetting
 Settings.registerCategory = Settings.Registry.registerCategory
 
+-- Presentation-only, and so *not* part of the sealed registration window below:
+-- a row can be gated (and the gate re-asked) from client-only code long after
+-- load. See Registry.setVisibility for why that can't drift the two realms.
+Settings.setVisibility = Settings.Registry.setVisibility
+Settings.invalidate = Settings.Registry.invalidate
+
 ------------------------------------------------------------------------------
 -- Auto-discovery
 ------------------------------------------------------------------------------

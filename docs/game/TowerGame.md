@@ -705,15 +705,16 @@ devices.
 | `Store.luau` | shared | Registers the coins currency, the skin packs and the Robux products into the Store (auto-discovered) |
 | `TowerService.server.luau` | server | Arena, turn queue, held piece, physics, height, storm — the whole authority |
 | `TowerStatsService.server.luau` | server | Profile reads/writes + the leaderstats mirror |
-| `TowerProductsService.server.luau` | server | What the Nuke / Next Checkpoint products actually do |
+| `TowerProductsService.server.luau` | server | What the Nuke / Next Checkpoint / Extend Storm products actually do, and the chat announcement each one sends |
 | `TowerProductsPresentation.client.luau` | client | The two Robux buttons in the rail's "actions" cluster |
+| `TowerAnnounceController.client.luau` | client | Renders those purchases as a system message in the general chat channel |
 | `TowerController.client.luau` | client | State store (`GetData` + `DataChanged`) + the wire |
 | `TowerAimController.client.luau` | client | The local preview and everything that makes aiming feel instant |
 | `TowerInputController.client.luau` | client | Keyboard + gamepad binds |
 | `TowerPointerController.client.luau` | client | Mouse aiming + click-to-drop (PC) |
 | `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude, the checkpoint pull-back, and the storm shake |
 | `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the clocks, picks the device |
-| `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls) |
+| `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls, Extend Storm, the urgency tick) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
 | `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
 | `StormFade.ui.luau` | shared | The storm's one-shot white-out, played on `PHASE.GAMEOVER` |
@@ -727,20 +728,42 @@ devices.
 
 ```
                  ( o ) (O) ( o )           turn strip — current player centered
-              [ 24.5 studs  best 60.0 ] (◕) height, with the turn clock beside it
+          (⚡) [ 24.5 studs  best 60.0 ] (◕) Extend Storm | height | turn clock
               ●────────●────────────○      progress: start, tower, next zone
                    3:42 until storm!
   Move — A / D…        Your turn — Bomb T-Shape       [LEFT][TURN][RIGHT][DROP]
   (fades after 60s)                            $ 1,250   (touch only)
 ```
 
-The **turn clock is a plain circle** (`RadialTimer`), sitting beside the height
-panel and only existing while someone is aiming — the panel tweens wider to fill
-the gap between turns. Two radial-fill treatments were tried first — a filling
-pie and a hollow ring, both built from `UIGradient` hacks to fake a radial sweep
+The **turn clock is a plain circle** (`RadialTimer`), only existing while
+someone is aiming. Two radial-fill treatments were tried first — a filling pie
+and a hollow ring, both built from `UIGradient` hacks to fake a radial sweep
 since Roblox has no native one — and neither read well in practice, so the dial
 is a solid circle with the seconds label on top; its colour still shifts red
 under `URGENT_SECONDS`.
+
+### Nothing that comes and goes may move what stays
+
+The dial and the Extend Storm button **flank** the stats row at `FLANK_Y`,
+positioned absolutely *outside* the column rather than laid out inside it.
+
+This is the fix for a real bug, not a style choice. The dial used to sit in a
+row beside the stats panel, so the panel had to give up width for it — which
+meant the height readout resized *and* slid sideways twice a turn, every turn.
+Worse, mid-tween the row was briefly wider than the column and centred itself,
+shoving the panel a further half-dial to the left. Now the panel is a fixed full
+width and the dial simply appears in a gap that was always there. Measured live:
+the panel's x and width each hold a single value across turn boundaries.
+
+The dial **pops in** on mount — a `UIScale` tweened 0 → 1 on `Back/Out`, so it
+reads as arriving rather than fading up. Its appearance is the cue that a turn
+started, which is worth animating.
+
+The last `URGENT_SECONDS` (5) of a turn **tick audibly** (`audio.playUI("tick")`).
+Keyed on the whole second rather than the raw countdown, and latched so a
+re-render inside the same second can't double it up; the latch clears whenever
+the countdown leaves the window, which re-arms it for the next turn without
+having to watch the turn itself.
 
 The **progress line** (`ProgressLine`) measures *this leg of the climb only* —
 from `zoneBaseHeight` (where the current zone started) to `targetHeight` — so a
@@ -797,6 +820,10 @@ either, and both are denominators for the HUD's clocks.
 The client's turn check in `TowerController` is a traffic optimization only;
 `TowerService` re-validates the holder on every intent.
 
+`Announce` is the one packet that isn't about the tower: server → all, two ids,
+sent when an action product's effect has actually applied. See
+[the chat announcement](#the-chat-announcement).
+
 ## Tuning
 
 Everything is in `Constants.luau`. The knobs worth reaching for first:
@@ -815,6 +842,9 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `CHECKPOINT_BLAST_*` | How hard the old tower is thrown when the new floor lands |
 | `BlockTypes.BASE_CHANCE` / `PER_CHECKPOINT` / `MAX_CHANCE` | How often a block is special. **Note the cap** — raising `BASE_CHANCE` alone does nothing past `MAX_CHANCE` |
 | `BOMB_BEEPS`, `BOMB_BEEP_ON/OFF`, `EXPLOSION_VOLUME` | The bomb's fuse and how loud the payoff is |
+| `NUKE_BLASTS`, `NUKE_BLASTS_ACROSS` | Rungs up the tower × blasts abreast at each rung. The first makes it climb, the second makes it cover the plane |
+| `NUKE_BLAST_JITTER`, `NUKE_BLAST_INTERVAL` | How far a blast wanders from its column, and the beat between rungs |
+| `NUKE_WRECK_SECONDS` | How long the wreck flies after the **last** blast before it's swept |
 | `BURN_SECONDS`, `BURN_SPREAD_RADIUS`, `BURN_SPREAD_DELAY` | How long a burning block lasts and how eagerly it passes it on |
 | `CLONE_RISE`, `CLONE_OFFSET_X` | Where a Clone's copy drops in from |
 | `BOUNCY_PHYSICS` | How much a Bouncy block bounces |
@@ -876,8 +906,8 @@ so every row of the table reads the same.
 ### Stormy: lightning
 
 Every `LIGHTNING_MIN_SECONDS` to `LIGHTNING_MAX_SECONDS`, the storm picks a
-**random spot** on the play plane at the tower's current height, stands a pulsing
-red column on it for `LIGHTNING_WARNING_SECONDS` (10), and *then* detonates.
+**random spot** on the play plane, stands a pulsing blue column on it for
+`LIGHTNING_WARNING_SECONDS` (10), and *then* detonates.
 
 The warning is the mechanic. An unannounced strike is a tax; an announced one is
 a decision — you can see where the bolt is going and choose whether to keep
@@ -887,8 +917,19 @@ warning can appear before anything is standing there.
 The gap is measured from the previous strike and the warning sits **inside** it,
 so raising `LIGHTNING_WARNING_SECONDS` doesn't quietly slow the storm down. The
 marker is cleared before the bolt lands, and again if the zone changes mid-warning
-— otherwise a red column would be left standing over a zone with no lightning in
-it.
+— otherwise a column would be left standing over a zone with no lightning in it.
+
+**The marker stands on the current floor, and the client decides where that is.**
+`WARN_ATTRIBUTE` carries only the X: the column is `WARN_HEIGHT` (400) studs tall
+and has to start at the floor the run is *currently* building from, which moves up
+every checkpoint. `TowerZoneController` stands it at `BASE_TOP_ATTRIBUTE +
+zoneBaseHeight` — the same pair the camera frames its shots from, so the marker is
+always inside the shot — and re-seats it on the same 0.5s poll the weather uses, so
+a checkpoint landing mid-warning takes the column up with it.
+
+Sending the arena's *base* instead (what this replaced) worked for the first stage
+and then quietly stopped: a few floors in, the base sits hundreds of studs below
+the play area, so the column was drawn correctly and framed entirely off-screen.
 
 The blast goes through the same `blastAt` the Bomb type uses, so a strike behaves
 the way players have already learned bombs behave and there's one blast to tune.
@@ -989,12 +1030,31 @@ thing that pays out, and `StoreService` is the only thing that debits.
 
 | Pack | Price | Effect |
 | ---- | ----- | ------ |
+| `skins.needoh` — Needoh Blocks | **not for sale** | Every block **is** the Needoh `BlockSkin` — glass, translucent, squish on every landing |
 | `skins.neon` — Neon Blocks | 100 coins | Every block part becomes `Enum.Material.Neon` |
 | `skins.red` … `skins.black` (10) | 60 coins | Every block you place is a **random shade** of that colour |
 
-A skin pack overrides the look of **the blocks its owner drops**. A *material*
-pack (Neon) also overrides whatever the current zone had dressed them in — a
-Retro zone can't dull a neon block. That override is the product.
+A skin pack overrides the look of **the blocks its owner drops**. A pack that
+owns the surface (Neon, Needoh) also overrides whatever the current zone had
+dressed them in — a Retro zone can't dull a neon block or stud a Needoh one.
+That override is the product; `SkinPacks.ownsSurface` is the one place that
+decides which packs get it.
+
+### Needoh pins the roll instead of overriding it
+
+`blockSkin` on a pack names a `BlockSkins.Skin.id`, and `TowerService.beginTurn`
+swaps the rolled skin for that one before the piece is built. It's a different
+lever from `material`: pinning carries the surface, the transparency **and both
+sounds**, so Needoh Blocks is the only pack a player can *hear*. The `block`
+cmdr command still wins over it — that's a debug pin and has to be able to show
+any skin on demand.
+
+Needoh is the daily run's grand prize (day 7 — see
+[DailyRewards](DailyRewards.md)) and **nothing else**. It registers with
+`forSale = false`, so the shop never cards it and the server refuses to sell it —
+a grand prize you could have bought on day one isn't one. Its `price`
+(`Constants.NEEDOH_SKIN_PRICE`, 250) is only what it *would* cost if it ever went
+on sale; see [Reward-only packs](Store.md#reward-only-packs).
 
 ### Colour packs roll a shade per block
 
@@ -1021,7 +1081,9 @@ another would only be telling players their favourite colour is worth less.
 
 A flat icon can't show what a skin sells — the colour packs differ from each
 other *only* by hue, and Neon only by material. So the shop and inventory tiles
-render `BlockPreview`: an actual T-block spinning in a `ViewportFrame`.
+render `BlockPreview`: an actual T-block spinning in a `ViewportFrame`. A pack
+that pins a skin draws as that skin, transparency included: Needoh's card is
+glass, or the tile would advertise a solid block.
 
 Store owns the card and knows nothing about blocks. TowerGame hands it a renderer
 through `Catalog.registerPackPreview(kind, render)`, from
@@ -1059,26 +1121,66 @@ the place or the purchase prompt throws.
 | 500 Coins | `3707809246` | currency | Store credits `coins` generically |
 | 1000 Coins | `3707809250` | currency | ” |
 | 10000 Coins | `3707809258` | currency | ” |
-| Nuke | `3707809217` | action | `TowerService.nuke()` |
+| Nuke | `3707809217` | action | `TowerService.nuke()` — the tower, not the round |
 | Next Checkpoint | `3707809233` | action | `TowerService.clearStage()` |
+| Extend Storm | `3708160736` | action | `TowerService.extendStorm(EXTEND_STORM_SECONDS)` |
 
-The three bundles appear as cards in the shop's Robux tab. The two actions never
-appear in the shop — `group = "action"` keeps them out — because their button is
-a rail entry, registered by `TowerProductsPresentation` into the "actions"
-cluster — Nuke on `assets.Icons.nuke`, Skip on `assets.Icons.arrowRightOutline`.
+The three bundles appear as cards in the shop's Robux tab. The actions never
+appear in the shop — `group = "action"` keeps them out — because each has its
+own button instead: Nuke and Skip are rail entries registered by
+`TowerProductsPresentation` into the "actions" cluster (`assets.Icons.nuke` and
+`assets.Icons.arrowRightOutline`), and Extend Storm is a button on the HUD
+itself, beside the clock it buys.
 
-`TowerService.nuke()` walks a **barrage** of `NUKE_BLASTS` (8) explosions up the
-tower, spaced `NUKE_BLAST_INTERVAL` apart so they read as a chain rather than a
-single frame in which everything vanishes. They're fired against the tower's own
-height, so the barrage covers what was actually built — it climbs a tall stack
-and stays low on a short one.
+### Extend Storm
 
-The round break then runs on a delay, concurrently: the barrage is the spectacle,
-the break is what actually resets the round, and neither waits on the other. It's
-the same round break the storm uses when its clock expires rather than a parallel
-teardown, so the wreck, the gamemode vote and the fresh round all behave the way
-players have already seen them behave — which does mean buying a Nuke also puts
-the next round to a vote.
+`TowerService.extendStorm(seconds)` **adds** to `stormEndsAt` rather than
+recomputing from now. That's what makes the purchase stack honestly: buying
+twice buys two minutes, and buying early is worth exactly what buying late is.
+Recomputing from now would quietly punish the second purchase and reward
+panic-buying at zero. Like the other two it returns false during a checkpoint or
+round break — both sequences set `stormEndsAt` themselves when they end, so time
+added inside one is time thrown away, and a false leaves the receipt for
+redelivery instead of eating it.
+
+### Nuke
+
+`TowerService.nuke()` destroys **the tower, not the round**. It cuts every
+standing block loose — out of `blocks`, out of `blockByModel`, and unanchored, so
+the settled architecture becomes physics again — and detonates it where it
+stands. Everything else carries on untouched: the checkpoint platforms stay, the
+storm clock keeps counting, the stage target, the zone and the voted gamemode are
+all exactly what they were, and the turn queue never stops. The holder even keeps
+the piece they're aiming; it's just reseated down to the floor it used to clear
+(`reseatHeldPiece(true)`), since the stack it was parked above is gone.
+
+What the room loses is the climb above the last checkpoint floor, which is what a
+nuke is supposed to cost them.
+
+Taking the tower out of `blocks` **before** the blasts is load-bearing twice
+over, and it's what `breakTower` and the checkpoint demolition already do: the
+plane clamp only holds live blocks, so the wreck scatters in 3D instead of
+sliding along the play plane; and the height poll stops measuring it, so a
+settled block flung skyward can't be read as a taller tower and clear the stage
+out of its own debris.
+
+The barrage is `NUKE_BLASTS` (8) rungs walked up the tower, `NUKE_BLASTS_ACROSS`
+(3) blasts abreast at each rung, spaced `NUKE_BLAST_INTERVAL` apart so they read
+as a chain rather than a single frame in which everything vanishes. The rungs are
+fired against the tower's own height, so the barrage covers what was actually
+built — it climbs a tall stack and stays low on a short one — and the columns are
+spread across `STEER_LIMIT_X` with `NUKE_BLAST_JITTER` of wander, so the whole
+play plane goes up rather than one column of it. Each blast throws the wreck
+rather than the (now empty) live list: `blastAt` takes an optional `targets`
+list, which is the one thing the nuke needs that a bomb doesn't.
+
+The wreck is swept `NUKE_WRECK_SECONDS` after the **last** blast rather than
+after the purchase, so a piece can't be cleaned up out of a blast that was about
+to throw it.
+
+This deliberately isn't the round break. Routing the purchase through it made a
+nuke worth less than it sounds: the room got a clean slate and a fresh gamemode
+vote a moment later, so the tower it destroyed was one nobody had to rebuild.
 
 `TowerService.clearStage()` runs the checkpoint at `state.targetHeight`, not
 wherever the tower actually stands — the same full sequence (cutscene, platform,
@@ -1092,6 +1194,42 @@ running**. That isn't
 a failure — Store leaves the receipt undelivered, Roblox re-delivers it, and the
 player gets what they paid for a moment later instead of losing it. Detonating
 the tower under a camera holding a wide shot of it would read as a bug.
+
+### The chat announcement
+
+All three action products announce themselves in chat — *"Someone bought
+Nuke!"* — in the general channel, to everyone in the server. These are the
+purchases the whole room feels (a tower gone, a stage skipped, a minute back on
+everyone's clock), so the room is told who did it.
+
+The announcement is **paired with the effect, not with the receipt**.
+`TowerProductsService` wraps each handler in `announced(...)`, which sends only
+after the handler returned true — so a purchase deferred for redelivery says
+nothing until the retry lands, and no announcement can ever describe something
+that didn't happen. Wrapping is the rule rather than three call sites remembering
+to be polite.
+
+The `Announce` packet carries **two ids and no text**:
+
+| | |
+| --- | --- |
+| `productId` | Named from the shared Store catalog on the client, so renaming a product renames the announcement |
+| `userId` | Resolved to a player on the client — a name resolved from a user id is one the buyer can't have made up |
+
+The wording lives in `TowerAnnounceController.client.luau`, because chat is a
+presentation and a sentence has no business on the wire. It writes through
+`TextChannels.RBXGeneral:DisplaySystemMessage` (`Constants.ANNOUNCE_CHANNEL`),
+colouring the buyer's name with `ANNOUNCE_NAME_COLOR`. Two things it refuses to
+do rather than guess: on a place still running the **legacy chat** there is no
+`TextChannels` and the announcement is simply skipped (the effect is already on
+screen — missing chat is not an error worth a stack trace), and a buyer who left
+between the purchase and the packet is dropped rather than announced with a hole
+where the name goes. Names are escaped for rich text before interpolation —
+display names can't contain markup *today*, and the escape is the difference
+between "can't today" and "can't".
+
+Nothing in the controller is nuke-specific beyond the packet, so a fourth action
+product would need no edit there.
 
 ## Gamepasses
 
@@ -1113,9 +1251,26 @@ earnings and are granted by `StoreService` at face value; they never come throug
 **Double Turn** doesn't touch the queue. The owner is rotated to the back when
 their first turn is handed out, exactly like anyone else, and the extra turns are
 held in `repeatTurnFor` / `repeatTurnsLeft`, which `nextPlayer` reads before the
-queue — so nobody else's place in the rotation moves. A player who leaves or
-flips on "Not playing" between the two loses the rest of the run rather than
-stalling the queue.
+queue — so nobody else's place in the rotation moves. A player who leaves,
+flips on "Not playing", or turns the perk off between the two loses the rest of
+the run rather than stalling the queue.
+
+**It can be put down.** A "Double Turn" toggle (`SETTING_DOUBLE_TURN`, on by
+default) appears in Settings › Gameplay **only for owners**, and `nextPlayer`
+reads it through `SettingsService.get` right beside the ownership check. Taking
+two pieces every rotation isn't always wanted in a room of four friends, and a
+perk you can't put down is a worse thing to have sold someone.
+
+The row is registered in the shared `Settings.luau` like every other setting —
+both realms have to agree the id exists or `SettingsService` rejects the write —
+and *shown* conditionally from `TowerSettingsPresentation.client.luau`, which
+calls `Settings.setVisibility` with a gamepass check and re-asks it on
+`StoreController.GamepassesChanged` (ownership lands a moment after join). The
+gate has to be client-side because ownership there is a `MarketplaceService`
+call. See [Settings.md](Settings.md) § "Showing a setting conditionally"; note
+that hiding a row is presentation, not permission — the server still validates
+and re-reads the value, which is why `nextPlayer` checks it rather than trusting
+the row to be absent.
 
 The HUD says so while it's pending: `state.repeatUserId` carries whoever goes
 again, and `TurnStrip` tags that chip **2x**. It's a tag rather than a second
@@ -1137,6 +1292,7 @@ Registered from `Commands.luau`; the enum arguments (`blockType`, `blockSkin`,
 | ------- | ---- | ---- |
 | `skipstage` (alias `skiplevel`) | — | `TowerService.clearStage()` — the dev-testing handle on a stage clear |
 | `skip` | — | The same call, under the name that reads as "replicate the Skip purchase" |
+| `extendstorm` (alias `extend`) | `[seconds]` | `TowerService.extendStorm(seconds)` — replicates the Extend Storm purchase. Defaults to `EXTEND_STORM_SECONDS`. The only way to exercise that product without spending Robux, since its whole effect is a number on a clock |
 | `block` | `[blocktype]` `[blockskin]` | Pins the **next** piece's type (default: Normal, i.e. no hazard) and/or skin (default: random) via `TowerService.forceNextBlock` — one-shot, consumed by the next `beginTurn` |
 | `zone` | `zoneName` | `TowerService.setZone(id)` — forces the tower straight into a zone, outside the usual "roll one on checkpoint clear" path |
 | `givecash` | `player` `amount` | `CashService.award(player, amount)` — the same path zone/interval awards pay through |
@@ -1281,8 +1437,8 @@ that and the next one. It is the only moment the whole game is stopped:
    the new round is spent on the poll — and `ROUND_BREAK_RESUME_SECONDS` later the
    queue starts again.
 
-`TowerService.nuke()` routes through the same function, so buying a Nuke also puts
-the next round to a vote.
+`TowerService.nuke()` does **not** route through this — a nuke takes the tower
+and leaves the round alone. See [Nuke](#nuke).
 
 The camera has its own tell that this is coming: `TowerCameraController` shakes
 from `STORM_SHAKE_LEAD_SECONDS` (30) out, ramping on a squared curve so the first

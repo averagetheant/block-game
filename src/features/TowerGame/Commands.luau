@@ -71,7 +71,37 @@ local function clearStage(): string
 	return "Stage cleared — checkpoint running."
 end
 
+-- The Extend Storm purchase, without the purchase. Same core intent the receipt
+-- handler calls, so it exercises the real thing rather than a parallel path —
+-- and it's the only way to check the product works without spending Robux,
+-- since the effect is a number on a clock nobody can see from outside.
+local function extendStorm(seconds: number): string
+	local ServerScriptService = game:GetService("ServerScriptService")
+	local TowerService = require(ServerScriptService.Features.TowerGame.TowerService)
+	if not TowerService.extendStorm(seconds) then
+		return "Can't extend right now — a checkpoint or round break is running."
+	end
+	return `Storm pushed back {seconds}s.`
+end
+
 return {
+	{
+		Name = "extendstorm",
+		Aliases = { "extend" },
+		Description = "Replicate the Extend Storm purchase: put seconds back on the stage clock.",
+		Group = "TowerGame",
+		Args = {
+			{
+				Type = "number",
+				Name = "seconds",
+				Description = "How long to push the storm back. Defaults to the product's own amount.",
+				Default = Constants.EXTEND_STORM_SECONDS,
+			},
+		},
+		Run = function(_context, seconds: number)
+			return extendStorm(seconds)
+		end,
+	},
 	{
 		Name = "skipstage",
 		Aliases = { "skiplevel" },
@@ -168,7 +198,9 @@ return {
 		Run = function(context, player: Player, amount: number)
 			local ServerScriptService = game:GetService("ServerScriptService")
 			local CashService = require(ServerScriptService.Features.TowerGame.CashService)
-			CashService.award(player, amount)
+			-- Tagged so a dev topping themselves up in a live place is visibly
+			-- separate from the earn curve on the economy dashboard.
+			CashService.award(player, amount, "Admin")
 			return `Gave {player.Name} {amount} cash.`
 		end,
 	},

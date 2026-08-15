@@ -55,6 +55,11 @@ local SettingsService = require(script.Parent.Parent.Settings.SettingsService)
 -- registered through Gamemode.luau) and decides when to ask.
 local GamemodeVoteService = require(script.Parent.Parent.GamemodeVote.GamemodeVoteService)
 
+-- Telemetry. Every call here is fire-and-forget and every one of them is a
+-- no-op when the feature is switched off, so none of the code below has to
+-- guard its reporting — see docs/game/Analytics.md.
+local AnalyticsService = require(script.Parent.Parent.Analytics.AnalyticsService)
+
 type Block = {
 	model: Model,
 	root: BasePart,
@@ -159,6 +164,16 @@ local forcedSkin: BlockSkins.Skin? = nil
 -- Who dropped the piece that's currently settling. Whoever that is gets paid for
 -- any height the tower gains, since they're the one who put it there.
 local lastDropper: Player? = nil
+-- Who dropped each block still in the world, for telemetry only. `lastDropper`
+-- can't answer this: a block settles a second or two after it lands, by which
+-- time the next player has usually been handed a piece and dropped it too.
+--
+-- Weak-keyed, so it holds nothing alive and needs no cleanup pass. A block's
+-- model is destroyed by a blast, a checkpoint demolition or the storm, and the
+-- entry goes with it on the next collection — the alternative is a table that
+-- has to be pruned from six different teardown paths, one of which will
+-- eventually be missed.
+local placerOf: { [Model]: Player } = setmetatable({}, { __mode = "k" }) :: any
 local nextShape: Shapes.Shape = Shapes.random()
 local lastBroadcast = 0
 
@@ -253,6 +268,129 @@ local function broadcast()
 	state.repeatUserId = if repeatTurnFor then repeatTurnFor.UserId else 0
 	lastBroadcast = os.clock()
 	Packets.State.sendToAll(state)
+end
+
+-- ------------------------------------------------------------------ telemetry --
+--
+-- The round and stage funnels measure something the room does together, not
+-- something a player does, so every step in them is reported for everyone
+-- present rather than for whoever happened to trigger it. A checkpoint cleared
+-- by one player's block is a checkpoint all of them reached.
+--
+-- These are gathered here rather than inlined so the reporting reads as one
+-- thing with one set of rules, and so the sequences below (which are already
+-- long) gain a line each instead of five.
+
+-- Which round-funnel steps exist. A step per checkpoint would be a hundred
+-- steps and a funnel Roblox won't render; these are the depths worth asking
+-- about, and `roundStepFor` maps a count onto the nearest one at or below it.
+local ROUND_MILESTONES = { 1, 2, 3, 5, 10 }
+
+local function roundStepFor(checkpoints: number): string?
+	local best: number? = nil
+	for _, milestone in ROUND_MILESTONES do
+		if checkpoints >= milestone then
+			best = milestone
+		end
+	end
+	return if best then `Checkpoint {best}` else nil
+end
+
+-- Everyone in the server, including spectators. Deliberately not `queue`: a
+-- player who has "Not playing" on is still watching the round happen, and
+-- dropping them would quietly make every round funnel a survey of active
+-- builders only.
+local function reportAll(fn: (Player) -> ())
+	for _, player in Players:GetPlayers() do
+		fn(player)
+	end
+end
+
+-- How far up the current stage the tower has been reported as getting. Reset
+-- whenever a stage begins; see `reportStageProgress` for why it's a high-water
+-- mark rather than a set.
+local STAGE_MARKS = {
+	{ at = 0.25, name = "25% Height" },
+	{ at = 0.5, name = "50% Height" },
+	{ at = 0.75, name = "75% Height" },
+}
+local stageMarksFired = 0
+
+-- A fresh round: new funnel sessions for both the round and its first stage,
+-- and the start of the progression path.
+local function reportRoundStarted()
+	stageMarksFired = 0
+	reportAll(function(player)
+		AnalyticsService.start(player, "round", "Round Started")
+		AnalyticsService.start(player, "stage", "Stage Started")
+		-- Closes the vote funnel opened before this round — the poll's payoff is
+		-- that a round actually followed it.
+		AnalyticsService.step(player, "vote", "Round Started")
+		AnalyticsService.progression(player, "start", 1, "Checkpoint 1")
+	end)
+end
+
+-- A stage cleared. The round funnel only moves on milestone checkpoints; the
+-- stage funnel closes and reopens on every one.
+local function reportStageCleared(checkpoints: number)
+	stageMarksFired = 0
+	local milestone = roundStepFor(checkpoints)
+	reportAll(function(player)
+		AnalyticsService.step(player, "stage", "Cleared")
+		if milestone then
+			AnalyticsService.step(player, "round", milestone)
+		end
+		AnalyticsService.progression(player, "complete", checkpoints, `Checkpoint {checkpoints}`)
+		AnalyticsService.onboarding(player, 4)
+		-- The next stage is a new attempt, so it gets its own session rather
+		-- than more steps on the one just finished.
+		AnalyticsService.start(player, "stage", "Stage Started")
+	end)
+end
+
+-- How far the tower has climbed toward the current target, reported once per
+-- mark passed. Called from the height poll, which runs five times a second, so
+-- the high-water mark is checked here rather than leaning on the funnel's own
+-- dedupe — that would work, but it would mean a `reportAll` over the whole
+-- server on every poll to discover there was nothing to say.
+--
+-- Marks only ever fire upward. A tower that reaches 50% and is then gutted by a
+-- bomb back to 20% has still reached 50% this stage, and re-firing the mark on
+-- the way back up would count the same stage twice.
+local function reportStageProgress(height: number)
+	if stageMarksFired >= #STAGE_MARKS then
+		return
+	end
+
+	local floor = state.zoneBaseHeight
+	local span = state.targetHeight - floor
+	if span <= 0 then
+		return
+	end
+	local fraction = (height - floor) / span
+
+	for index = stageMarksFired + 1, #STAGE_MARKS do
+		local mark = STAGE_MARKS[index]
+		if fraction < mark.at then
+			break
+		end
+		stageMarksFired = index
+		reportAll(function(player)
+			AnalyticsService.step(player, "stage", mark.name)
+		end)
+	end
+end
+
+-- The storm took the tower. The round funnel simply stops where it got to —
+-- that unfinished session is the drop-off the funnel exists to show — so the
+-- only thing logged is the progression failure, at the depth they died on.
+local function reportRoundLost(checkpoints: number)
+	stageMarksFired = 0
+	reportAll(function(player)
+		AnalyticsService.progression(player, "fail", checkpoints + 1, `Checkpoint {checkpoints + 1}`)
+		AnalyticsService.endSession(player, "round")
+		AnalyticsService.endSession(player, "stage")
+	end)
 end
 
 -- ---------------------------------------------------------------- the arena --
@@ -636,11 +774,11 @@ local function applyZoneLook(
 	end
 
 	local zone = Zones.get(state.zoneId)
-	-- A *material* pack keeps its surface through every zone, so Retro only gets
-	-- to stud the blocks whose placer wasn't wearing one. A colour pack sets no
-	-- material, so its blocks still stud over — it owns the hue, not the surface,
-	-- and the two overrides don't have to fight.
-	local retro = zone.kind == "retro" and (pack == nil or pack.material == nil)
+	-- A pack that owns the surface keeps it through every zone, so Retro only gets
+	-- to stud the blocks whose placer wasn't wearing one. A colour pack doesn't
+	-- own the surface, so its blocks still stud over — it owns the hue, and the
+	-- two overrides don't have to fight.
+	local retro = zone.kind == "retro" and not SkinPacks.ownsSurface(pack)
 
 	-- Snow wins over everything the *surface* controls: a slippery zone is the
 	-- whole point of it, so friction and elasticity are snow's whichever type the
@@ -726,6 +864,22 @@ function TowerService.applyPlacement(player: Player, x: number, turns: number)
 	piece.pivot = CFrame.new(clampedX, piece.pivot.Position.Y, Constants.PLANE_Z)
 		* CFrame.Angles(0, 0, -quarter * math.pi / 2)
 	piece.model:PivotTo(piece.pivot)
+
+	-- This runs at AIM_INTERVAL (30Hz) for whoever is holding, so both steps are
+	-- gated on the piece having actually moved rather than on a packet having
+	-- arrived — the client streams a position whether or not the player touched
+	-- anything, and a "Steered" fired on arrival would report every turn as
+	-- steered and measure nothing.
+	--
+	-- Pieces spawn centred and unrotated (see spawnPivot), so displacement from
+	-- zero is the test. A stud of slop keeps a resting thumb on a gamepad stick
+	-- from counting as intent.
+	if math.abs(clampedX) > 1 then
+		AnalyticsService.step(player, "turn", "Steered")
+	end
+	if quarter ~= 0 then
+		AnalyticsService.step(player, "turn", "Rotated")
+	end
 end
 
 -- -------------------------------------------------------------- the landing --
@@ -785,10 +939,23 @@ local function glueBlock(block: Block)
 	Sfx.playAt("Glue", block.root)
 end
 
--- Every explosion in the game goes through here — the Bomb type and the Stormy
--- zone's lightning both — so a strike behaves the way players have already
--- learned bombs behave, and there is one blast to tune rather than two.
-local function blastAt(origin: Vector3, radius: number, pressure: number, impulse: number, exclude: Block?)
+-- Every explosion in the game goes through here — the Bomb type, the Stormy
+-- zone's lightning and the Nuke product all — so a strike behaves the way
+-- players have already learned bombs behave, and there is one blast to tune
+-- rather than three.
+--
+-- `targets` is which blocks the impulse looks at, defaulting to the live tower.
+-- The nuke passes its own list because it takes the tower out of `blocks`
+-- before it starts detonating: the wreck is no longer the tower, but it's still
+-- exactly what the blasts are supposed to be throwing.
+local function blastAt(
+	origin: Vector3,
+	radius: number,
+	pressure: number,
+	impulse: number,
+	exclude: Block?,
+	targets: { Block }?
+)
 	local explosion = Instance.new("Explosion")
 	explosion.Position = origin
 	explosion.BlastRadius = radius
@@ -801,7 +968,7 @@ local function blastAt(origin: Vector3, radius: number, pressure: number, impuls
 	-- BlastPressure alone barely shifts a welded assembly, so throw everything in
 	-- radius by hand. Falls off with distance, so the blast has a shape rather
 	-- than flinging the whole tower equally.
-	for _, other in blocks do
+	for _, other in targets or blocks do
 		local root = other.root
 		if root.Parent == nil or other == exclude then
 			continue
@@ -850,9 +1017,12 @@ local function chooseStrike()
 	-- the warning, and the strike should hit what's actually there.
 	pendingStrikeX = (math.random() * 2 - 1) * Constants.STEER_LIMIT_X
 	strikeDueAt = os.clock() + Constants.LIGHTNING_WARNING_SECONDS
-	-- The marker is a full column, so the warning only needs the X and the floor
-	-- to stand on; the client stretches it up from there.
-	arena:SetAttribute(Constants.WARN_ATTRIBUTE, Vector3.new(pendingStrikeX, baseTopY, Constants.PLANE_Z))
+	-- Only the X goes out. The marker is a full column and the client stands it
+	-- on the floor the run is currently building from — an altitude that moves
+	-- every checkpoint, and one the client already tracks for its camera. Sending
+	-- the arena's base instead left the column hundreds of studs *below* the play
+	-- area a few stages in, which is a warning nobody can see.
+	arena:SetAttribute(Constants.WARN_ATTRIBUTE, pendingStrikeX)
 end
 
 -- The top of whatever stands in `x`'s column, or the base if nothing does. This
@@ -1192,7 +1362,15 @@ function TowerService.release()
 	-- own confirmation cue locally (Drop2, played client-side).
 	Sfx.playAt("Drop", piece.root)
 	lastDropper = piece.player
+	placerOf[piece.model] = piece.player
 	TowerStatsService.recordBlockPlaced(piece.player)
+
+	AnalyticsService.step(piece.player, "turn", "Dropped")
+	-- Only the first placement of the round advances the round funnel; `step`
+	-- dedupes the rest against the session, so this is called on every drop and
+	-- counted once.
+	AnalyticsService.step(piece.player, "round", "First Piece Placed")
+	AnalyticsService.onboarding(piece.player, 3)
 
 	state.phase = PHASE.SETTLING
 	state.holderUserId = 0
@@ -1210,7 +1388,8 @@ local function beginTurn(player: Player)
 	-- Rolled per piece. Skin is pure flavour; type is the hazard, and it gets
 	-- likelier the more floors the run has cleared. Either can be pinned for
 	-- exactly this one piece by the "block" cmdr command.
-	local skin = if skinForced then forcedSkin :: BlockSkins.Skin else BlockSkins.random()
+	local commanded = skinForced
+	local skin = if commanded then forcedSkin :: BlockSkins.Skin else BlockSkins.random()
 	local blockType = if blockTypeForced
 		then forcedBlockType
 		else BlockTypes.roll(state.checkpoints, stage.blockTypeScale, stage.blockTypeChance)
@@ -1221,6 +1400,14 @@ local function beginTurn(player: Player)
 	-- it per-frame would let a block change look under the room when its placer
 	-- swapped packs after dropping it.
 	local pack = SkinPacks.get(StoreService.equipped(player, SkinPacks.KIND))
+
+	-- A pack that pins a skin (Needoh) replaces the roll rather than tinting it:
+	-- the surface, the transparency and both sounds come from that one skin, so
+	-- every block its owner drops squishes. The "block" command still wins —
+	-- it's a debug pin and has to be able to show any skin on demand.
+	if not commanded then
+		skin = SkinPacks.blockSkinFor(pack) or skin
+	end
 
 	local model: Model?, root: BasePart?, color: Color3? = nil, nil, nil
 
@@ -1282,6 +1469,17 @@ local function beginTurn(player: Player)
 	state.blockTypeId = if blockType then blockType.id else 0
 	state.nextShapeId = nextShape.id
 	broadcast()
+
+	-- A fresh turn funnel session per piece, tagged with what they were handed:
+	-- the drop-off between "Piece Received" and "Dropped" is a timeout, and
+	-- knowing which block type was sitting there when it happened is the
+	-- difference between "turns are too short" and "nobody knows what a Crate
+	-- does". Both fields are low-cardinality, which is what custom fields want.
+	AnalyticsService.start(player, "turn", "Piece Received", {
+		if blockType then blockType.name else "Plain",
+		if pack then pack.id else "None",
+	})
+	AnalyticsService.onboarding(player, 2)
 end
 
 -- ---------------------------------------------------------------- the plane --
@@ -1730,6 +1928,7 @@ local function runCheckpoint(height: number)
 		state.zoneSky = math.random(1, 255)
 		applyZoneToTower()
 		CashService.awardZone()
+		reportStageCleared(state.checkpoints)
 
 		-- Note what does *not* happen here: the gamemode is not re-voted. The vote
 		-- belongs to the round break (`runRoundBreak`), so the modifier the players
@@ -1769,6 +1968,30 @@ function TowerService.clearStage(): boolean
 	return true
 end
 
+-- Push the storm back by `seconds`, giving the room more of the current stage.
+--
+-- Added to `stormEndsAt` rather than recomputed from now, which is what makes
+-- the purchase stack honestly: buying twice buys two minutes, and buying early
+-- is worth exactly as much as buying late. Recomputing from now would quietly
+-- punish the second purchase and reward panic-buying at zero.
+--
+-- Refused during a checkpoint or a round break, like the other two products.
+-- Both sequences set `stormEndsAt` themselves when they end, so time added
+-- inside one is time thrown away — and Store leaves the receipt undelivered on
+-- a false, so the player gets their minute a moment later instead of losing it.
+function TowerService.extendStorm(seconds: number): boolean
+	if checkpointActive or intermission then
+		return false
+	end
+	if seconds <= 0 then
+		return false
+	end
+
+	state.stormEndsAt += seconds
+	broadcast()
+	return true
+end
+
 -- Pin the very next piece's type and/or skin, overriding the usual roll. Used
 -- by the "block" cmdr command. `blockType = nil` forces a plain piece (the
 -- command's "normal" default); `skin = nil` leaves the skin to roll normally.
@@ -1804,6 +2027,8 @@ local function runRoundBreak()
 	-- The holder loses the piece rather than being left aiming at a tower that's
 	-- being blown apart under them.
 	cancelHeldPiece()
+	-- Before resetRun, which zeroes the checkpoint count this reports on.
+	reportRoundLost(state.checkpoints)
 	resetRun()
 	state.phase = PHASE.GAMEOVER
 	broadcast()
@@ -1823,15 +2048,53 @@ local function runRoundBreak()
 		state.phase = PHASE.SETTLING
 		broadcast()
 
+		-- Here rather than in `resetRun`: the round the players are in starts
+		-- when the rules are known and the clock is running, not when the last
+		-- one's wreckage was cleared. Counting from resetRun would put the whole
+		-- vote inside the round funnel's first step.
+		reportRoundStarted()
+
 		task.wait(Constants.ROUND_BREAK_RESUME_SECONDS)
 		intermission = false
 	end)
 end
 
--- Blow the tower apart on demand: exactly what the storm does when its clock
--- runs out, without the clock. Routed through the same round break rather than a
--- parallel teardown, so the wreck, the vote and the fresh round all behave the
--- way players have already seen them behave.
+-- Everything standing, cut loose in one go: out of the live list and unanchored,
+-- so it stops being architecture and starts being physics. Returns the wreck,
+-- because the barrage still has to throw it and the cleanup still has to sweep
+-- it after `blocks` has stopped naming it.
+--
+-- Taking it out of `blocks` up front is what the storm and a checkpoint
+-- demolition both do, and for the same two reasons: the plane clamp only holds
+-- live blocks, so the wreck is free to scatter in 3D instead of sliding along
+-- the play plane; and the height poll stops measuring it, so a settled block
+-- flung skyward can't be read as a taller tower and clear the stage out of its
+-- own debris.
+local function tearTowerLoose(): { Block }
+	local debris = blocks
+	blocks = {}
+	table.clear(blockByModel)
+
+	for _, block in debris do
+		if block.root.Parent == nil then
+			continue
+		end
+		unanchorModel(block.model)
+	end
+
+	return debris
+end
+
+-- Blow the tower apart on demand — and *only* the tower. The run itself carries
+-- on: the checkpoints stand, the storm clock keeps counting, the zone and the
+-- voted gamemode are untouched, and the queue never stops. What the players lose
+-- is everything they'd stacked above the last floor, which is what a nuke is
+-- supposed to cost them.
+--
+-- Deliberately not the round break. That's the storm's outcome — wreck, white
+-- fade, vote, fresh run — and routing a purchase through it made a nuke worth
+-- less than it sounds: it handed the room a clean slate and a new gamemode a
+-- moment later, so the tower it destroyed was one nobody had to rebuild.
 --
 -- Returns false while a checkpoint or a round break is running — those sequences
 -- own the world for their duration, and detonating the tower under a camera
@@ -1842,34 +2105,73 @@ function TowerService.nuke(): boolean
 		return false
 	end
 
-	-- A nuke should look like one. Before the round break tears the tower down,
-	-- walk a barrage of blasts up it — spaced in time so they read as a chain
-	-- rather than a single frame in which everything vanishes.
+	-- Measured before the tower comes out of the list, because `state.height` is
+	-- about to fall back to the last checkpoint floor and the barrage is aimed at
+	-- what was standing a moment ago.
+	local top = state.height
+	local debris = tearTowerLoose()
+
+	-- A nuke should look like one: blasts walked up the tower, several abreast at
+	-- each rung so the whole play plane goes up rather than one column of it, and
+	-- spaced in time so they read as a chain rather than a single frame in which
+	-- everything vanishes.
 	--
 	-- Fired against the tower's own height so the barrage covers what was
 	-- actually built: on a tall stack it climbs, on a short one it stays low.
-	local top = state.height
 	task.spawn(function()
-		for index = 1, Constants.NUKE_BLASTS do
-			local fraction = index / Constants.NUKE_BLASTS
-			blastAt(
-				Vector3.new(
-					(math.random() * 2 - 1) * Constants.STEER_LIMIT_X,
-					baseTopY + top * fraction,
-					Constants.PLANE_Z
-				),
-				Constants.NUKE_RADIUS,
-				Constants.NUKE_PRESSURE,
-				Constants.NUKE_IMPULSE
-			)
+		for rung = 1, Constants.NUKE_BLASTS do
+			local fraction = rung / Constants.NUKE_BLASTS
+			for column = 1, Constants.NUKE_BLASTS_ACROSS do
+				-- Spread across the steering limit rather than rolled at random:
+				-- a random X can put every blast of a rung in the same place, and
+				-- "everywhere" is the whole point of this one. The jitter is what
+				-- keeps the grid from being visible as a grid.
+				local spread = (column - 0.5) / Constants.NUKE_BLASTS_ACROSS * 2 - 1
+				local jitter = (math.random() * 2 - 1) * Constants.NUKE_BLAST_JITTER
+				blastAt(
+					Vector3.new(
+						math.clamp(spread + jitter, -1, 1) * Constants.STEER_LIMIT_X,
+						baseTopY + top * fraction,
+						Constants.PLANE_Z
+					),
+					Constants.NUKE_RADIUS,
+					Constants.NUKE_PRESSURE,
+					Constants.NUKE_IMPULSE,
+					nil,
+					-- The wreck, not `blocks` — which is empty by now, and would
+					-- otherwise mean a nuke that detonates over nothing.
+					debris
+				)
+			end
 			task.wait(Constants.NUKE_BLAST_INTERVAL)
 		end
 	end)
 
 	Sfx.playAtPosition("Explosion", Vector3.new(0, baseTopY + top / 2, Constants.PLANE_Z), Constants.EXPLOSION_VOLUME)
-	-- The break runs concurrently: the barrage is the spectacle, the break is
-	-- what actually resets the round, and neither waits on the other.
-	task.delay(Constants.NUKE_BLASTS * Constants.NUKE_BLAST_INTERVAL, runRoundBreak)
+
+	-- Outlives the barrage by design (see NUKE_WRECK_SECONDS): a piece cleaned up
+	-- mid-chain would vanish out of a blast that was about to throw it.
+	task.delay(
+		Constants.NUKE_BLASTS * Constants.NUKE_BLAST_INTERVAL + Constants.NUKE_WRECK_SECONDS,
+		function()
+			for _, block in debris do
+				block.model:Destroy()
+			end
+		end
+	)
+
+	-- The holder keeps their piece — the turn didn't end, only the tower did —
+	-- but it was parked clear of a stack that no longer exists, so bring it back
+	-- down rather than leaving it (and the camera following it) hanging in the
+	-- air for the rest of the turn.
+	reseatHeldPiece(true)
+	-- Don't make the clients wait a poll to find out the tower is gone. The
+	-- height is recomputed here rather than left for the poll, because a
+	-- broadcast carrying the old height beside a block count of zero is a state
+	-- that never existed. `restingTopY` reads the checkpoint floors now that
+	-- `blocks` is empty, which is exactly what the poll is about to conclude.
+	state.height = restingTopY() - baseTopY
+	broadcast()
 	return true
 end
 
@@ -2047,6 +2349,16 @@ local SETTLE_RESOLVED: { [string]: boolean } = {
 local function onSettled(block: Block)
 	if not block.settledOnce then
 		block.settledOnce = true
+
+		-- Closes the turn funnel for whoever dropped this. A turn that reaches
+		-- "Dropped" and never reaches here is a piece that missed the tower
+		-- entirely and fell past it, which is the difference between a player
+		-- who is losing and a player who isn't playing.
+		local placer = placerOf[block.model]
+		if placer then
+			AnalyticsService.step(placer, "turn", "Settled On Tower")
+		end
+
 		-- The squishy skins get a second beat as they come to rest — the release
 		-- half of the ASMR kit's press/release pair.
 		if block.settleSound then
@@ -2199,9 +2511,14 @@ local function updateHeight()
 
 		local climber = lastDropper
 		if climber and climber.Parent == Players then
-			CashService.award(climber, math.floor(gained * Constants.CASH_PER_STUD))
+			CashService.award(climber, math.floor(gained * Constants.CASH_PER_STUD), "Height")
 		end
 	end
+
+	-- Before updateStorm, which is what clears the stage: a tower that goes
+	-- straight past 75% to the target should report passing 75% on the way,
+	-- rather than having the checkpoint reset the marks out from under it.
+	reportStageProgress(height)
 
 	if updateStorm(height) then
 		changed = true
@@ -2237,9 +2554,15 @@ local function takeRepeatTurn(): Player?
 		repeatTurnFor = nil
 	end
 
-	-- They left or opted out between the two: the rest of the run goes with them
-	-- rather than stalling the queue on a player who isn't taking pieces.
-	if again.Parent ~= Players or isSpectating(again) then
+	-- They left, opted out, or put the perk down between the two: the extra turn
+	-- goes with them rather than stalling the queue on a player who isn't taking
+	-- pieces. Re-read rather than remembered so the Settings toggle lands on the
+	-- turn after it's flipped, not the rotation after.
+	if
+		again.Parent ~= Players
+		or isSpectating(again)
+		or SettingsService.get(again, Constants.SETTING_DOUBLE_TURN) == false
+	then
 		repeatTurnFor = nil
 		return nil
 	end
@@ -2266,10 +2589,18 @@ local function nextPlayer(): Player?
 		-- put them straight back in.
 		table.insert(queue, player)
 		if not isSpectating(player) then
-			-- The Double Turn gamepass. Not gated on there being anyone else in
-			-- the server: alone, the queue is this player either way, so the
-			-- pass simply doesn't show.
-			if StoreService.ownsGamepass(player, Constants.GAMEPASSES.DOUBLE_TURN) then
+			-- The Double Turn gamepass, and the owner's own switch on it: the
+			-- perk can be put down from Settings, and that row only exists for
+			-- owners in the first place. Checked here rather than trusted from
+			-- the client for the same reason spectating is — a toggle only the
+			-- client honoured wouldn't be a rule.
+			--
+			-- Not gated on there being anyone else in the server: alone, the
+			-- queue is this player either way, so the pass simply doesn't show.
+			if
+				StoreService.ownsGamepass(player, Constants.GAMEPASSES.DOUBLE_TURN)
+				and SettingsService.get(player, Constants.SETTING_DOUBLE_TURN) ~= false
+			then
 				repeatTurnFor = player
 				repeatTurnsLeft = Constants.DOUBLE_TURN_TURNS - 1
 			end
@@ -2340,6 +2671,14 @@ local function addPlayer(player: Player)
 	if streamingFocus then
 		player.ReplicationFocus = streamingFocus
 	end
+	-- Open this player's round and stage funnels at the step the room is
+	-- actually on. Rounds outlive joins — most players arrive mid-run, and the
+	-- server's very first round has no `runRoundBreak` behind it to announce
+	-- itself — so without this their funnels would begin at whatever step
+	-- happened next and every row would be missing its first step.
+	AnalyticsService.start(player, "round", "Round Started")
+	AnalyticsService.start(player, "stage", "Stage Started")
+
 	-- The joiner's controller isn't listening yet; the 1s heartbeat in
 	-- updateHeight is what actually gets them their first state.
 	broadcast()

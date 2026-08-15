@@ -28,6 +28,7 @@ Features and skins are also **distributable packages** — one folder, one
 | --- | ------- |
 | [TowerGame.md](TowerGame.md) | Turn-based co-op block stacker (the game) |
 | [GamemodeVote.md](GamemodeVote.md) | Between-stages gamemode poll + the `Gamemode.luau` registration convention |
+| [FavouritePrompt.md](FavouritePrompt.md) | One-time "favourite this experience?" ask, fired at a player's first vote |
 | [Store.md](Store.md) | Shop + inventory, currencies, Robux products + the `Store.luau` discovery convention |
 | [Reactions.md](Reactions.md) | Bottom emoji bar broadcast to the whole server |
 | [Cursors.md](Cursors.md) | Live per-player pointers on the play plane |

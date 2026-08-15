@@ -201,6 +201,11 @@ TowerGame → GamemodeVote, one way, in two places:
   in the round break. Removing GamemodeVote without removing that call breaks
   TowerGame, the same way removing PlayerData would break Notes.
 
+FavouritePrompt → GamemodeVote is the other one: its controller watches this
+feature's client store for a ballot opening, because that's the beat it wants to
+ask a first-time player to favourite the game on. Also one-way, also invisible
+from here — see [FavouritePrompt.md](FavouritePrompt.md).
+
 GamemodeVote names TowerGame nowhere. It does name **Store**, in two places, and
 both are about the 2x Votes gamepass:
 

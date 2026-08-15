@@ -22,7 +22,7 @@ local CASH_ICON = Constants.CASH_IMAGE
 -- ever goes away this resolves to nil and the day simply isn't registered,
 -- which the window draws as "???" — a visible hole beats a grand prize the
 -- server silently refuses.
-local GRAND_PACK_ID = "skins.neon"
+local GRAND_PACK_ID = "skins.needoh"
 
 local function findPack(packId: string)
 	for _, pack in SkinPacks.List do

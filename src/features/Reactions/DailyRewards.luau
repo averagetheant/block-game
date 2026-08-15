@@ -24,8 +24,8 @@ return function(DailyRewards)
 	DailyRewards.registerDay({
 		day = 4,
 		kind = "pack",
-		payload = { packId = Catalog.HYPE_PACK_ID },
-		name = "Hype Pack",
+		payload = { packId = Catalog.HEARTS_PACK_ID },
+		name = "Hearts Pack",
 		icon = assets.Icons.friends,
 	})
 end

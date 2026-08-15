@@ -26,6 +26,9 @@ export type Props = {
 	-- card shows one so the tile is stable to look at.
 	color: Color3,
 	material: Enum.Material?,
+	-- A skin that isn't solid (Needoh's glass) reads as the wrong material
+	-- entirely when the card draws it opaque, so the tile carries it too.
+	transparency: number?,
 	size: UDim2?,
 	position: UDim2?,
 	anchorPoint: Vector2?,
@@ -53,6 +56,7 @@ return function(props: Props)
 	local viewportRef = React.useRef(nil :: ViewportFrame?)
 	local color = props.color
 	local material = props.material or Enum.Material.SmoothPlastic
+	local transparency = props.transparency or 0
 
 	React.useEffect(function()
 		local viewport = viewportRef.current
@@ -68,6 +72,7 @@ return function(props: Props)
 			part.CFrame = CFrame.new(cell * CELL)
 			part.Color = color
 			part.Material = material
+			part.Transparency = transparency
 			part.Anchored = true
 			part.CanCollide = false
 			part.TopSurface = Enum.SurfaceType.Smooth
@@ -105,7 +110,7 @@ return function(props: Props)
 			model:Destroy()
 			camera:Destroy()
 		end
-	end, { color, material } :: { any })
+	end, { color, material, transparency } :: { any })
 
 	return React.createElement("ViewportFrame", {
 		ref = viewportRef,

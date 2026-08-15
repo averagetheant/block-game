@@ -17,10 +17,18 @@ local Cycle = require(ReplicatedStorage.Features.DailyRewards.Cycle)
 -- Client-realm siblings.
 local DailyRewardsController = require(script.Parent.DailyRewardsController)
 local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
+local AnalyticsController = require(script.Parent.Parent.Analytics.AnalyticsController)
 
 return function()
 	local saved = Boil.useReplica(PlayerDataController, Constants.PROFILE_KEY)
 	local now, setNow = React.useState(os.time())
+
+	-- Step 2 of the daily funnel. A `step` rather than a `start`: the session is
+	-- the *run*, opened server-side and keyed by the run's start date, so
+	-- opening a new one here would split one seven-day journey into two rows.
+	React.useEffect(function()
+		AnalyticsController.step("daily", "Window Opened")
+	end, {})
 
 	React.useEffect(function()
 		local running = true

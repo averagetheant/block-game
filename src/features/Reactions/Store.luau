@@ -23,11 +23,21 @@ return function(Store)
 		inventory = false,
 	})
 
-	-- Every pack is the same shape, so they're declared as data rather than as
-	-- four near-identical registerPack calls. The cards draw their *contents*
-	-- (see ReactionsPresentation), so the icon here is only a fallback for a
-	-- client that somehow has no preview registered.
-	local packs = {
+	-- Every pack is the same shape, so they're declared as data rather than five
+	-- near-identical registerPack calls. The cards draw their *contents* (see
+	-- ReactionsPresentation), so the icon here is only a fallback for a client
+	-- that somehow has no preview registered.
+	type PackDef = {
+		id: string,
+		name: string,
+		description: string,
+		price: number,
+		variant: string,
+		-- Only Hearts sets it, and only to false.
+		forSale: boolean?,
+	}
+
+	local packs: { PackDef } = {
 		{
 			id = Catalog.PACK_ID,
 			name = "Emoji Pack",
@@ -56,6 +66,18 @@ return function(Store)
 			price = 150,
 			variant = "green",
 		},
+		{
+			id = Catalog.HEARTS_PACK_ID,
+			name = "Hearts Pack",
+			description = "Four hearts, four colours. Pick one and mean it.",
+			price = 100,
+			-- The one multicoloured pack gets the one multicoloured gem.
+			variant = "rainbow",
+			-- Day 4 of the daily run hands this over, and that's the only way to
+			-- it. Registered all the same — the grant needs a real pack to mark
+			-- owned, and the Inventory needs one to draw.
+			forSale = false,
+		},
 	}
 
 	for index, pack in packs do
@@ -69,6 +91,9 @@ return function(Store)
 			currency = "coins",
 			variant = pack.variant,
 			order = index,
+			-- nil on every pack but Hearts, which is a daily-run reward and has
+			-- no card in the shop.
+			forSale = pack.forSale,
 		})
 	end
 

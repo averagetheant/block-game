@@ -21,13 +21,23 @@ if Constants.Presentations.actions then
 			return nil
 		end
 
+		-- A pack that pins a BlockSkin (Needoh) is drawn as that skin: its
+		-- material, its transparency and the display colour the skin carries for
+		-- exactly this — being rendered outside the game, where there's no roll.
+		local pinned = SkinPacks.blockSkinFor(skin)
+
 		-- One fixed shade per card rather than a fresh roll: in game every block
 		-- rolls its own, but a tile that re-coloured itself on each re-render
-		-- would look broken. `colorFor` returns nil for a material pack (Neon),
-		-- which then shows in white so the *material* is what reads.
+		-- would look broken. `colorFor` returns nil for a pack that isn't about
+		-- hue (Neon), which then shows in white so the *material* is what reads.
+		local color = SkinPacks.colorFor(skin)
+			or (if pinned then pinned.color else nil)
+			or Color3.fromRGB(236, 240, 252)
+
 		return React.createElement(BlockPreview, {
-			color = SkinPacks.colorFor(skin) or Color3.fromRGB(236, 240, 252),
-			material = skin.material,
+			color = color,
+			material = skin.material or (if pinned then pinned.material else nil),
+			transparency = if pinned then pinned.transparency else nil,
 		})
 	end)
 end

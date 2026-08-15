@@ -289,20 +289,40 @@ local function drawBolt(at: Vector3)
 	game:GetService("Debris"):AddItem(bolt, Constants.LIGHTNING_BOLT_SECONDS + 0.1)
 end
 
--- The red column standing on the spot the next bolt will hit. Pulses so it reads
+-- The blue column standing on the spot the next bolt will hit. Pulses so it reads
 -- as a countdown rather than as scenery, and is removed the moment the server
 -- clears the attribute — which it does immediately before the strike lands.
 local warning: BasePart? = nil
+-- The X the server picked, kept so the column can be re-seated as the floor
+-- under it moves without asking the server again.
+local warningX: number? = nil
+
+-- The altitude the column stands on: the floor the run is currently building
+-- from, which is the checkpoint platform it last cleared. Standing it on the
+-- arena's base instead is what made the warning vanish a few stages in — the
+-- base ends up hundreds of studs below the play area, and a 400-stud column
+-- down there is entirely out of frame.
+--
+-- `zoneBaseHeight` is the same number the camera frames its shots from, so the
+-- marker is guaranteed to sit inside the shot rather than near it.
+local function floorY(): number
+	local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
+	local baseTop = if arena then arena:GetAttribute(Constants.BASE_TOP_ATTRIBUTE) else nil
+	return (if typeof(baseTop) == "number" then baseTop else 0)
+		+ math.max(TowerController.GetData().zoneBaseHeight, 0)
+end
 
 local function clearWarning()
 	if warning then
 		warning:Destroy()
 		warning = nil
 	end
+	warningX = nil
 end
 
-local function showWarning(at: Vector3)
+local function showWarning(x: number)
 	clearWarning()
+	warningX = x
 
 	local part = Instance.new("Part")
 	part.Name = "TowerLightningWarning"
@@ -315,13 +335,25 @@ local function showWarning(at: Vector3)
 	part.Color = Constants.WARN_COLOR
 	part.Transparency = Constants.WARN_TRANSPARENCY
 	part.Size = Vector3.new(Constants.WARN_WIDTH, Constants.WARN_HEIGHT, Constants.WARN_WIDTH)
-	-- The server sends the *base* of the column, so the marker stands on the
-	-- bottom plate and runs all the way up through everything built in it —
-	-- which is what makes it read as "this whole line is about to be hit"
-	-- rather than as a mark floating at one height.
-	part.Position = at + Vector3.new(0, Constants.WARN_HEIGHT / 2, 0)
+	-- Stood on the floor rather than centred on a point, so the marker runs all
+	-- the way up through everything built in that column — which is what makes it
+	-- read as "this whole line is about to be hit" rather than as a mark floating
+	-- at one height.
+	part.Position = Vector3.new(x, floorY() + Constants.WARN_HEIGHT / 2, Constants.PLANE_Z)
 	part.Parent = workspace
 	warning = part
+end
+
+-- The floor only moves when a checkpoint lands, which can happen while a warning
+-- is already standing. Polled with the weather rather than driven per frame:
+-- without it the column spends the rest of its ten seconds under the new floor.
+local function followFloor()
+	local part = warning
+	local x = warningX
+	if part == nil or x == nil then
+		return
+	end
+	part.Position = Vector3.new(x, floorY() + Constants.WARN_HEIGHT / 2, Constants.PLANE_Z)
 end
 
 function TowerZoneController.Start()
@@ -351,9 +383,9 @@ function TowerZoneController.Start()
 		-- nil is the server saying "no bolt pending", which happens both when one
 		-- lands and when the zone changes out from under a warning.
 		arena:GetAttributeChangedSignal(Constants.WARN_ATTRIBUTE):Connect(function()
-			local at = arena:GetAttribute(Constants.WARN_ATTRIBUTE)
-			if typeof(at) == "Vector3" then
-				showWarning(at)
+			local x = arena:GetAttribute(Constants.WARN_ATTRIBUTE)
+			if typeof(x) == "number" then
+				showWarning(x)
 			else
 				clearWarning()
 			end
@@ -362,7 +394,7 @@ function TowerZoneController.Start()
 		-- A player who joins mid-warning gets it too; attributes are already set
 		-- by the time they replicate in, so there's no change event to wait for.
 		local existing = arena:GetAttribute(Constants.WARN_ATTRIBUTE)
-		if typeof(existing) == "Vector3" then
+		if typeof(existing) == "number" then
 			showWarning(existing)
 		end
 
@@ -382,6 +414,7 @@ function TowerZoneController.Start()
 		while true do
 			task.wait(0.5)
 			followTower()
+			followFloor()
 			-- Blocks arrive constantly, so a zone-change sweep alone would leave
 			-- everything placed *during* the night unlit.
 			if appliedZoneId ~= nil and Zones.get(appliedZoneId).kind == "night" then

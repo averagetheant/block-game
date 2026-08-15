@@ -3,10 +3,15 @@
 -- and one equippable pack in the inventory — Store.luau reads this list, and so
 -- does TowerService, so the price and the material can't drift apart.
 --
--- A skin pack overrides the *material* of the blocks its owner drops, and it
--- overrides whatever the current zone would have dressed them in. That's the
--- whole product: Retro turns the tower into grey studded bricks, and the neon
--- blocks in it stay neon.
+-- A skin pack overrides the look of the blocks its owner drops, and it overrides
+-- whatever the current zone would have dressed them in. That's the whole
+-- product: Retro turns the tower into grey studded bricks, and the neon blocks
+-- in it stay neon.
+--
+-- There are three ways a pack can do that, and a pack picks one: `material`
+-- swaps the surface (Neon), `hue` tints the block (the ten colours), and
+-- `blockSkin` pins the rolled BlockSkin outright (Needoh) — surface, sounds and
+-- all, which is the only one of the three a player can *hear*.
 --
 -- It's a server override on the block, not a local one on the viewer. The pack
 -- is read once when the turn begins and carried on the piece for life, so a
@@ -28,6 +33,11 @@ export type SkinPack = {
 	-- rolled BlockSkin's material alone, which is what the colour packs want —
 	-- they're about hue, not surface.
 	material: Enum.Material?,
+	-- Pins the BlockSkin every block rolls, by `BlockSkins.Skin.id`. Where
+	-- `material` overrides one property of whatever rolled, this replaces the
+	-- roll outright — surface, transparency *and* sounds — so a Needoh pack is
+	-- a tower that squishes on every landing, not one that merely looks glassy.
+	blockSkin: number?,
 	-- Base hue for a colour pack, in HSV. Each block rolls its own *shade* of it
 	-- (see `SkinPacks.colorFor`), so a tower built in one pack is a run of
 	-- related colours rather than a wall of one flat value.
@@ -39,11 +49,21 @@ export type SkinPack = {
 	saturationJitter: number?,
 	value: number?,
 	valueJitter: number?,
+	-- Passed through to the Store card. False keeps the pack out of the shop
+	-- entirely — it exists to be granted (see DailyRewards.luau) and `price` is
+	-- only what it *would* cost if it ever went on sale.
+	forSale: boolean?,
 }
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local assets = require(ReplicatedStorage.Shared.Boil).assets
+local BlockSkins = require(script.Parent.BlockSkins)
 local Constants = require(script.Parent.Constants)
+
+-- The BlockSkin the Needoh pack pins. Named rather than written as `2` at the
+-- point of use so the pack and the skin can't drift apart silently — if the
+-- skin is ever renumbered this stops resolving in one obvious place.
+local NEEDOH_SKIN_ID = 2
 
 local SkinPacks = {}
 
@@ -73,6 +93,20 @@ local COLORS = {
 
 SkinPacks.List = {
 	{
+		id = "skins.needoh",
+		name = "Needoh Blocks",
+		description = "Every block is a Needoh — glassy, squishy, and it squeaks on every landing.",
+		icon = assets.Icons.wheel,
+		price = Constants.NEEDOH_SKIN_PRICE,
+		currency = Constants.CURRENCY_ID,
+		variant = "red",
+		order = 1,
+		blockSkin = NEEDOH_SKIN_ID,
+		-- Earned, never bought: it's the last day of the daily run, and a grand
+		-- prize you could have bought on day one isn't one.
+		forSale = false,
+	},
+	{
 		id = "skins.neon",
 		name = "Neon Blocks",
 		description = "Every block glows. Overrides zone materials — a Retro zone can't dull it.",
@@ -80,10 +114,14 @@ SkinPacks.List = {
 		price = 100,
 		currency = Constants.CURRENCY_ID,
 		variant = "blue",
-		order = 1,
+		order = 2,
 		material = Enum.Material.Neon,
 	},
 } :: { SkinPack }
+
+-- The packs written out above. Counted rather than hardcoded so the colours
+-- keep sorting after them however many get added.
+local NAMED_PACKS = #SkinPacks.List
 
 for index, color in COLORS do
 	table.insert(SkinPacks.List, {
@@ -94,8 +132,8 @@ for index, color in COLORS do
 		price = Constants.COLOR_SKIN_PRICE,
 		currency = Constants.CURRENCY_ID,
 		variant = color.variant,
-		-- After Neon (1), in the order they're listed above.
-		order = index + 1,
+		-- After the named packs, in the order they're listed above.
+		order = index + NAMED_PACKS,
 		hue = color.hue,
 		saturation = color.saturation,
 		saturationJitter = color.saturationJitter,
@@ -114,6 +152,26 @@ function SkinPacks.get(id: string?): SkinPack?
 		return nil
 	end
 	return byId[id]
+end
+
+-- The BlockSkin this pack pins, if it pins one. nil means "whatever the block
+-- rolled", which is every pack but Needoh.
+function SkinPacks.blockSkinFor(pack: SkinPack?): BlockSkins.Skin?
+	if pack == nil or pack.blockSkin == nil then
+		return nil
+	end
+	return BlockSkins.get(pack.blockSkin)
+end
+
+-- Whether this pack decides what the block's surface is. True for a material
+-- pack (Neon) and for one that pins a skin (Needoh) — both of them are selling
+-- a surface, so a Retro zone doesn't get to stud it over. False for the colour
+-- packs, which own the hue and leave the surface to the zone.
+function SkinPacks.ownsSurface(pack: SkinPack?): boolean
+	if pack == nil then
+		return false
+	end
+	return pack.material ~= nil or pack.blockSkin ~= nil
 end
 
 -- A block's colour under this pack, rolled fresh per block.

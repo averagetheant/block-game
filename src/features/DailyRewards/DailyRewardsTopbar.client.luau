@@ -10,17 +10,39 @@
 -- opens the frame, and closing the window with its X (or opening some other
 -- frame) deselects the icon. Without the second half the topbar would keep
 -- showing a highlighted button over a window that isn't there.
+--
+-- It also carries the notice — the badge that says today's reward is waiting.
+-- The whole point of a daily run is coming back for it, and a run that only
+-- announces itself once you've already opened the window announces itself to
+-- the players who needed telling least.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local React = require(ReplicatedStorage.Packages.React)
 local Icon = require(ReplicatedStorage.Packages.TopbarPlus)
+local Signal = require(ReplicatedStorage.Packages.Signal)
+local Boil = require(ReplicatedStorage.Shared.Boil)
 local UIShell = require(ReplicatedStorage.Features.UIShell)
 local Constants = require(ReplicatedStorage.Features.DailyRewards.Constants)
+local Cycle = require(ReplicatedStorage.Features.DailyRewards.Cycle)
+
+-- Client-realm sibling.
+local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
+
+-- One notice, replaced rather than stacked: "there is a reward waiting" is a
+-- yes/no, and a badge counting to 3 would be claiming three rewards are.
+local NOTICE_ID = "DailyRewards.claimable"
 
 return function()
 	local frames = UIShell.useFrame()
 	local openFrameId = frames.openFrameId
+
+	-- The same arithmetic the window draws itself with, run here because the
+	-- button has to know before the window is ever opened.
+	local saved = Boil.useReplica(PlayerDataController, Constants.PROFILE_KEY)
+	local now, setNow = React.useState(os.time())
+	local state = Cycle.resolve(saved, now)
+	local claimable = state.canClaim
 
 	local iconRef = React.useRef(nil :: any)
 	-- The icon's callbacks are bound once, but `frames` is a fresh table every
@@ -29,6 +51,28 @@ return function()
 	-- would churn the icon's connections for no reason.
 	local framesRef = React.useRef(frames)
 	framesRef.current = frames
+
+	-- The signal handed to TopbarPlus to clear the notice, which we never fire —
+	-- see the notice effect below. One per mount, so it can't outlive its icon.
+	local clearNotice = React.useMemo(function()
+		return Signal.new()
+	end, {})
+
+	-- Nothing writes to the profile at UTC midnight, so the day rolling over is
+	-- the one way `canClaim` flips with no replica diff to announce it. One timer
+	-- aimed at the boundary rather than a poll: the window's own tick only runs
+	-- while it's open, and this button is mounted for the whole session.
+	React.useEffect(function()
+		local active = true
+		task.delay(state.secondsUntilReset + 1, function()
+			if active then
+				setNow(os.time())
+			end
+		end)
+		return function()
+			active = false
+		end
+	end, { state.secondsUntilReset } :: { any })
 
 	React.useEffect(function()
 		local icon = Icon.new()
@@ -90,6 +134,29 @@ return function()
 		end
 		return nil
 	end, { openFrameId } :: { any })
+
+	-- Claimable → the notice badge, cleared the moment the claim lands (the
+	-- replica diff re-renders this and `canClaim` is false).
+	--
+	-- TopbarPlus clears a notice on its own `deselected` event unless it's given
+	-- another one, and that default is wrong here: opening the window and closing
+	-- it again without claiming would take the badge away while the reward is
+	-- still sitting there. Passing a signal we never fire leaves `clearNotices`
+	-- below as the only thing that can retire the badge, so it goes when the
+	-- reward does and not before.
+	React.useEffect(function()
+		local icon = iconRef.current
+		if icon == nil then
+			return nil
+		end
+		-- Cleared first either way, so a re-run can't stack a second badge on a
+		-- state that's still "one reward waiting".
+		icon:clearNotices()
+		if claimable then
+			icon:notify(clearNotice, NOTICE_ID)
+		end
+		return nil
+	end, { claimable, clearNotice } :: { any })
 
 	return nil
 end

@@ -70,12 +70,14 @@ Rules:
 | 1 | 100 Coins | `currency` | `TowerGame/DailyRewards.luau` |
 | 2 | 150 Coins | `currency` | TowerGame |
 | 3 | 250 Coins | `currency` | TowerGame |
-| 4 | Hype Pack | `pack` | `Reactions/DailyRewards.luau` |
+| 4 | Hearts Pack | `pack` | `Reactions/DailyRewards.luau` |
 | 5 | 500 Coins | `currency` | TowerGame |
 | 6 | 750 Coins | `currency` | TowerGame |
-| 7 | Neon Blocks | `pack` | TowerGame (grand prize) |
+| 7 | Needoh Blocks | `pack` | TowerGame (grand prize) |
 
 The two kinds are registered by `Store/DailyRewards.luau`, because Store owns crediting a balance (`StoreService.credit`) and marking a pack owned (`StoreService.grantPack`). Store doesn't own the coins — TowerGame does — which is why Store registers the kinds and TowerGame schedules the days.
+
+**Both packs in the run are exclusive to it.** `reactions.hearts` and `skins.needoh` register with `forSale = false`: no shop card, and the server refuses to sell them ([Reward-only packs](Store.md#reward-only-packs)). They're still ordinary registered packs, which is what lets `grantPack` hand them over and the Inventory draw them once earned. A reward you could have bought on day one isn't a reason to come back on day seven.
 
 ## Studio assets it expects
 
@@ -103,6 +105,17 @@ The icon and the frame are kept in step both ways: clicking the icon opens the f
 
 - `"AutoDeselect"` — TopbarPlus deselects our icon when *another* topbar icon is selected. That icon's handler is already opening its own frame, and React state updates aren't synchronous, so an unguarded `close()` would land afterwards and shut the frame the player just opened.
 - the sync effect itself — `select()` / `deselect()` re-fire these events, and without the guard the effect and the handlers would drive each other in a circle.
+
+### The claimable notice
+
+The topbar button wears a TopbarPlus **notice** whenever a reward is waiting — a run nobody is reminded about is a run only the players who needed reminding least come back to. The button resolves `Cycle.resolve` itself rather than waiting on the window: it's mounted for the whole session, and the window is the thing being advertised.
+
+Two details do the work:
+
+- **A clear signal we never fire.** `icon:notify()` left to itself clears the notice on the icon's own `deselected` event, so opening the window and closing it again *without claiming* would drop the badge while the reward was still sitting there. Passing a signal nothing fires leaves `icon:clearNotices()` as the only thing that can retire it, and that runs when `canClaim` goes false — which is the replica diff from the claim landing.
+- **One timer aimed at UTC midnight.** Nothing writes to the profile at the day boundary, so `canClaim` flips there with no diff to announce it. The button schedules a single `task.delay(state.secondsUntilReset + 1)` rather than polling; the resulting re-render reschedules the next one. (The window's own one-second tick only runs while it's open.)
+
+The notice effect clears before it notifies, so a re-run can't stack a second badge on a state that's still one waiting reward.
 
 ## Constants worth knowing
 

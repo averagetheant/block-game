@@ -2,6 +2,7 @@
 -- handed over, or a streak is written. The client says which day it thinks is
 -- open; everything about whether it can have it happens here.
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local ServerScriptService = game:GetService("ServerScriptService")
 
@@ -17,6 +18,9 @@ local Cycle = require(ReplicatedStorage.Features.DailyRewards.Cycle)
 local Packets = require(ReplicatedStorage.Features.DailyRewards.Packets)
 local Registry = require(ReplicatedStorage.Features.DailyRewards.Registry)
 local PlayerDataService = require(ServerScriptService.Features.PlayerData.PlayerDataService)
+-- Telemetry. The daily funnel is the one that spans days rather than minutes;
+-- see this feature's Analytics.luau for the shape and why.
+local AnalyticsService = require(ServerScriptService.Features.Analytics.AnalyticsService)
 
 local DailyRewardsService = {}
 
@@ -36,6 +40,22 @@ end
 -- Where the run currently stands for this player, or nil if their profile
 -- hasn't loaded. Public so another feature can ask "can they claim?" without
 -- reimplementing the arithmetic.
+-- The analytics funnel session id for the run `day` belongs to.
+--
+-- One session per *run*, not per visit: a seven-day journey has to carry one id
+-- across seven joins, or every day reads on the dashboard as a fresh player
+-- claiming day 1 and the funnel shows no drop-off at all. Roblox groups a funnel
+-- by this string, so every step of a run — from any server, on any day — lands
+-- in one row as long as they agree on it.
+--
+-- The run started (day - 1) days ago, so that UTC date paired with the user id
+-- is both stable across sessions and unique to this run of this player's cycle.
+-- A broken streak restarts at day 1 and therefore gets a new key, which is
+-- exactly right: it's a new run.
+local function runKey(player: Player, day: number, now: number): string
+	return `{player.UserId}-{os.date("!%Y%m%d", now - (day - 1) * 86400)}`
+end
+
 function DailyRewardsService.state(player: Player): Cycle.State?
 	local saved = slice(player)
 	if saved == nil then
@@ -102,6 +122,14 @@ function DailyRewardsService.claim(player: Player, expectedDay: number?): (boole
 	PlayerDataService.SetValue(player, { KEY, "Streak" }, state.nextDay)
 	PlayerDataService.SetValue(player, { KEY, "LastClaim" }, now)
 
+	local claimed = state.nextDay
+	AnalyticsService.startSession(player, "daily", runKey(player, claimed, now))
+	AnalyticsService.step(
+		player,
+		"daily",
+		if claimed >= Constants.CYCLE_DAYS then "Grand Prize Claimed" else `Day {claimed} Claimed`
+	)
+
 	return true, `Claimed day {state.nextDay}: {day.name}.`
 end
 
@@ -116,9 +144,38 @@ function DailyRewardsService.Start()
 		DailyRewardsService.claim(player, day)
 	end)
 
-	-- No PlayerAdded hook on purpose. The obvious one — reset a broken streak
-	-- at join — would be a profile write on every login for something
-	-- `Cycle.resolve` already derives from LastClaim on both realms.
+	-- Open the daily funnel for whoever joins with a reward waiting. This is the
+	-- funnel's denominator: without it the only players in it are the ones who
+	-- claimed, and a funnel where everyone converts measures nothing.
+	--
+	-- Not a profile write — the note below still holds. It reads the state
+	-- `Cycle.resolve` already derives and reports it.
+	local function openFunnel(player: Player)
+		-- The profile lands a moment after the player does.
+		for _ = 1, 30 do
+			local state = DailyRewardsService.state(player)
+			if state ~= nil then
+				if state.canClaim then
+					local now = os.time()
+					AnalyticsService.startSession(player, "daily", runKey(player, state.nextDay, now))
+					AnalyticsService.step(player, "daily", "Reward Available")
+				end
+				return
+			end
+			task.wait(1)
+		end
+	end
+
+	for _, player in Players:GetPlayers() do
+		task.spawn(openFunnel, player)
+	end
+	Players.PlayerAdded:Connect(function(player)
+		task.spawn(openFunnel, player)
+	end)
+
+	-- No streak-repair PlayerAdded hook on purpose. The obvious one — reset a
+	-- broken streak at join — would be a profile write on every login for
+	-- something `Cycle.resolve` already derives from LastClaim on both realms.
 end
 
 return DailyRewardsService

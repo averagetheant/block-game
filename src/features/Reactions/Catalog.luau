@@ -33,6 +33,7 @@ Catalog.PACK_ID = "reactions.emoji"
 Catalog.HYPE_PACK_ID = "reactions.hype"
 Catalog.SALT_PACK_ID = "reactions.salt"
 Catalog.BRAINROT_PACK_ID = "reactions.brainrot"
+Catalog.HEARTS_PACK_ID = "reactions.hearts"
 
 -- Placeholder art for the one image reaction. Swap for your own upload — the
 -- point of shipping one is that the image path is exercised, not the picture.
@@ -98,6 +99,17 @@ Catalog.List = {
 		pack = Catalog.BRAINROT_PACK_ID,
 		order = 20,
 	},
+
+	-- Hearts: one reaction in four colours, which is the point — it's the only
+	-- pack whose contents read as a set at a glance, so it's what the daily run
+	-- hands over. Every glyph here is a single emoji codepoint, deliberately: the
+	-- red heart is U+2764, which needs a U+FE0F variation selector to render in
+	-- colour and falls back to a flat text glyph without one, so the set is built
+	-- from the four hearts that don't have that problem.
+	{ id = "heartPink", name = "Pink Heart", kind = "text", text = "💗", pack = Catalog.HEARTS_PACK_ID, order = 21 },
+	{ id = "heartBlue", name = "Blue Heart", kind = "text", text = "💙", pack = Catalog.HEARTS_PACK_ID, order = 22 },
+	{ id = "heartGreen", name = "Green Heart", kind = "text", text = "💚", pack = Catalog.HEARTS_PACK_ID, order = 23 },
+	{ id = "heartYellow", name = "Yellow Heart", kind = "text", text = "💛", pack = Catalog.HEARTS_PACK_ID, order = 24 },
 } :: { Reaction }
 
 -- Every reaction belonging to a pack, in display order. The card preview uses

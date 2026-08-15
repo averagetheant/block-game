@@ -50,6 +50,9 @@ return function(Store)
 			currency = pack.currency,
 			variant = pack.variant,
 			order = pack.order,
+			-- Needoh Blocks is the daily run's grand prize and nothing else, so
+			-- it's registered (grantable, ownable, equippable) but never carded.
+			forSale = pack.forSale,
 		})
 	end
 
@@ -100,12 +103,13 @@ return function(Store)
 		return
 	end
 
-	-- The two rail buttons. Registered as "action" products so they never show
-	-- up as shop cards — their button is the sidebar entry.
+	-- The action buttons. Registered as "action" products so they never show up
+	-- as shop cards — their button is the sidebar entry, or in Extend Storm's
+	-- case the one on the HUD beside the clock it buys.
 	Store.registerProduct({
 		id = PRODUCTS.NUKE,
 		name = "Nuke",
-		description = "Throw the whole tower off the plane and start the run over.",
+		description = "Blow the standing tower off the plane. The run keeps going — the climb doesn't.",
 		icon = CASH_ICON,
 		group = "action",
 		order = 1,
@@ -117,5 +121,14 @@ return function(Store)
 		icon = CASH_ICON,
 		group = "action",
 		order = 2,
+	})
+
+	Store.registerProduct({
+		id = PRODUCTS.EXTEND_STORM,
+		name = "Extend Storm",
+		description = `Put {Constants.EXTEND_STORM_SECONDS} seconds back on the stage clock, for the whole room.`,
+		icon = CASH_ICON,
+		group = "action",
+		order = 3,
 	})
 end

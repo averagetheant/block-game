@@ -17,6 +17,10 @@ local audio = require(ReplicatedStorage.Shared.Boil).audio
 local Constants = require(ReplicatedStorage.Features.GamemodeVote.Constants)
 local Packets = require(ReplicatedStorage.Features.GamemodeVote.Packets)
 
+-- Client-realm sibling. Reports the one step of the vote funnel the server
+-- can't see: that the ballot actually reached this player's screen.
+local AnalyticsController = require(script.Parent.Parent.Analytics.AnalyticsController)
+
 export type Voter = {
 	userId: number,
 	optionId: string,
@@ -129,9 +133,23 @@ local function playStamps(next: State)
 end
 
 function GamemodeVoteController.Start()
+	-- Whether a ballot is currently on this client's screen. The server opens
+	-- the funnel for everyone in the server; this step is the narrower claim
+	-- that the poll actually reached them — a player mid-load or mid-teleport
+	-- is in the denominator but never sees the panels, and the gap between the
+	-- two steps is exactly that population.
+	local showing = false
+
 	Packets.State.listen(function(next)
 		data = next
 		playStamps(next)
+
+		local hasBallot = #next.options > 0
+		if hasBallot and not showing then
+			AnalyticsController.step("vote", "Ballot Shown")
+		end
+		showing = hasBallot
+
 		GamemodeVoteController.DataChanged:Fire(data)
 	end)
 end

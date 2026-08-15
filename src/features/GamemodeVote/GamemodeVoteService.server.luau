@@ -20,6 +20,9 @@ local Registry = require(ReplicatedStorage.Features.GamemodeVote.Registry)
 -- Ownership is asked here rather than sent by the client for the obvious reason:
 -- a weight the client claimed would be a tally the client wrote.
 local StoreService = require(ServerScriptService.Features.Store.StoreService)
+-- Telemetry. The vote funnel doubles as the game's participation gauge — see
+-- this feature's Analytics.luau.
+local AnalyticsService = require(ServerScriptService.Features.Analytics.AnalyticsService)
 
 local GamemodeVoteService = {}
 
@@ -89,6 +92,12 @@ function GamemodeVoteService.castVote(player: Player, optionId: string)
 	if typeof(optionId) ~= "string" or not isOption(optionId) then
 		return
 	end
+
+	-- Reported before the un-vote branch below: taking a vote back is still a
+	-- player who engaged with the ballot, and the step is "they participated".
+	-- `step` dedupes within the poll's session, so switching picks four times
+	-- counts once.
+	AnalyticsService.step(player, "vote", "Vote Cast", { optionId })
 
 	-- Voting for what you already picked takes it back, so the screen needs no
 	-- separate un-vote affordance.
@@ -197,6 +206,13 @@ function GamemodeVoteService.startVote(): string?
 	endsAt = workspace:GetServerTimeNow() + Constants.VOTE_SECONDS
 	broadcast()
 
+	-- A fresh session per poll, opened for everyone present. This is the
+	-- funnel's denominator and it has to include the players who never press
+	-- anything — they're the entire reason the funnel is worth having.
+	for _, player in Players:GetPlayers() do
+		AnalyticsService.start(player, "vote", "Vote Opened")
+	end
+
 	task.wait(Constants.VOTE_SECONDS)
 
 	-- The result window: the poll is closed and the winner is on screen, but the
@@ -204,6 +220,11 @@ function GamemodeVoteService.startVote(): string?
 	-- showing it instead of tearing the screen down the instant the clock hits 0.
 	winnerId = pickWinner()
 	broadcast()
+
+	for _, player in Players:GetPlayers() do
+		AnalyticsService.step(player, "vote", "Result Shown", { winnerId })
+	end
+
 	task.wait(Constants.RESULT_SECONDS)
 
 	local result = winnerId

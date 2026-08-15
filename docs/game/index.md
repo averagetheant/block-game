@@ -38,5 +38,6 @@ Features and skins are also **distributable packages** — one folder, one
 | [PickupFX.md](PickupFX.md) | Client-side pickup animation system |
 | [Sidebar.md](Sidebar.md) | The left rail + the `Sidebar.luau` registration convention |
 | [DailyRewards.md](DailyRewards.md) | Seven-day login run + the `DailyRewards.luau` registration convention |
+| [Analytics.md](Analytics.md) | Funnels, economy + progression events, and the `Analytics.luau` registration convention |
 | [UIShell.md](UIShell.md) | Global frame open/close system |
 | [UIShowcase.md](UIShowcase.md) | Demo HUD / entry surface |

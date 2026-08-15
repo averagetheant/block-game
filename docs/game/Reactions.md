@@ -1,8 +1,18 @@
 # Reactions
 
-A white bar along the bottom of the screen holding four reactions. Closed by
-default — an arrow tab slides it up. Clicking a reaction sends it to **everyone
-in the server**: it appears just above the bar, rises, and fades out.
+A white vertical column down the right edge of the screen, vertically centred,
+holding four reactions. An arrow tab on its left edge slides it in and out.
+Clicking a reaction sends it to **everyone in the server**: it appears at the
+bottom of the screen and rises past the bar, fading out on the way.
+
+**It starts open for keyboard players and closed for everyone else.** On a PC
+the column costs a strip of screen edge nobody is otherwise using, so showing it
+saves a click; on a phone that strip is scarce and the buttons sit where the
+thumb already rests, so touch keeps the pull-in tab. `ReactionsView` makes the
+call once at mount off `UserInputService.KeyboardEnabled` — keyboard wins when a
+machine reports several inputs, the same way TowerGame's control hint picks its
+starting device. `ReactionBar` itself just takes an `initialOpen` prop; the tab
+owns the state from then on.
 
 Which four are in the bar is per-player and persisted. Reactions beyond the free
 four come from a Store pack, and the Inventory's Reactions tab is where you swap
@@ -43,6 +53,14 @@ alike.
 | `laugh` 😂, `cry` 😭, `angry` 😠, `question` ❓ | text | free (the default bar) |
 | `fire` 🔥, `skull` 💀, `clap` 👏 | text | `reactions.emoji` |
 | `rocket` | image | `reactions.emoji` |
+| `party` 🎉, `star` ⭐, `muscle` 💪, `hundred` 💯 | text | `reactions.hype` |
+| `facepalm` 🤦, `clown` 🤡, `sleep` 😴, `eyes` 👀 | text | `reactions.salt` |
+| `tungTung`, `liriliLarila`, `trippiTroppi`, `tralalero` | image | `reactions.brainrot` |
+| `heartPink` 💗, `heartBlue` 💙, `heartGreen` 💚, `heartYellow` 💛 | text | `reactions.hearts` |
+
+Every glyph is a **single emoji codepoint**. The red heart (U+2764) is the
+reason the hearts pack is pink/blue/green/yellow: it needs a U+FE0F variation
+selector to render in colour and falls back to a flat text glyph without one.
 
 `Catalog.DEFAULT_SLOTS` is what a fresh profile's bar holds, in order.
 
@@ -53,7 +71,14 @@ alike.
 - the **`reaction` kind** with `inventory = false`, because equipping a reaction
   means putting it in a bar slot rather than selecting one pack — this feature
   ships its own Inventory tab instead (`ReactionInventoryPresentation`);
-- the **Emoji Pack** (`reactions.emoji`), 100 coins.
+- the packs themselves: **Emoji** (`reactions.emoji`, 100), **Hype**
+  (`reactions.hype`, 100), **Salt** (`reactions.salt`, 100) and **Brainrot**
+  (`reactions.brainrot`, 150) coins;
+- **Hearts** (`reactions.hearts`) with `forSale = false` — day 4 of the [daily
+  run](DailyRewards.md) hands it over and that's the only way to it, so it has no
+  shop card and the server refuses to sell it (see [Reward-only
+  packs](Store.md#reward-only-packs)). It takes the `rainbow` gem variant, being
+  the one multicoloured pack.
 
 Coins are TowerGame's currency. If TowerGame were uninstalled the pack would
 simply never be affordable — a shop that can't be bought from, rather than one
@@ -115,6 +140,25 @@ ReactionsController.Played                     -- Signal(reactionId, userId)
 Even your own reaction is drawn from the server's `Play` broadcast rather than
 applied locally, so what you see is exactly what everyone else sees.
 
+## Orientation
+
+The bar stacks **vertically** and hides **horizontally**, and those two have to
+be different axes. A column that slid out downward would travel through its own
+buttons, and its tab would have to sit on top of the slot nearest the corner
+instead of clear of the bar — so the tab lives on the left edge and the column
+slides right.
+
+Three things follow from that and have to stay in step:
+
+- `ReactionBar.ui.luau` anchors at `(0, 0.5)` — left edge, vertically centred —
+  so only x moves and the column stays centred however many slots it holds.
+- `ReactionsView` passes `direction = "right"` to `HideWhenFrameOpen`. Hiding it
+  downward would send a right-edge column diagonally off the corner.
+- `FLOAT_START_X` puts the floats beside the column rather than at screen
+  centre, and `FLOAT_SPREAD` is tight enough that the fan still fits on screen
+  from there. They launch from the *bottom* (`FLOAT_START_Y`) and rise past the
+  bar rather than out of it — the bar is centred, the reactions are not.
+
 ## Why the bar isn't gem-styled
 
 `ReactionBar.ui.luau` uses raw Frames rather than `ui.Panel` / `ui.Button`. The
@@ -142,12 +186,14 @@ mood.
 | --- | --- | --- |
 | `SLOT_COUNT` | `4` | Reactions in the bar. Safe to change — Reconcile fills, the bar clamps. |
 | `SEND_COOLDOWN` | `0.2` | Minimum seconds between one player's reactions. |
-| `BUTTON_SIZE` / `BAR_PADDING` / `BAR_CORNER` | `40` / `7` / `12` | Bar geometry. |
+| `BUTTON_SIZE` / `BAR_PADDING` / `BAR_CORNER` | `52` / `7` / `12` | Bar geometry. `BUTTON_SIZE` is a thumb target, not a pointer one — the column sits where a phone's hand already is. |
+| `HANDLE_WIDTH` / `HANDLE_HEIGHT` | `18` / `48` | The arrow tab — tall and narrow, the mirror of what a bottom bar wants. |
 | `GLYPH_FIT` | `0.58` | Most of a container an emoji's text size may take. Emoji render taller than their nominal `TextSize`, so a glyph sized to its box gets clipped — every glyph size is derived against this. |
-| `SLIDE_TWEEN_INFO` | `0.28s Quad Out` | The open/close slide. |
+| `SLIDE_TWEEN_INFO` | `0.28s Quad Out` | The open/close slide (horizontal). |
 | `BAR_COLOR` / `BUTTON_COLOR` / `OUTLINE_COLOR` | white-ish | The bar's palette. |
 | `FLOAT_SECONDS` / `FLOAT_RISE` | `2.4` / `0.55` | How long a reaction lives and how far up it travels (scale). |
-| `FLOAT_SPREAD` / `FLOAT_DRIFT` | `0.18` / `0.06` | Horizontal start spread and sideways drift, rolled per reaction. |
+| `FLOAT_START_X` / `FLOAT_START_Y` | `0.9` / `0.88` | Where a float launches from, in screen scale — beside the column, near the bottom. |
+| `FLOAT_SPREAD` / `FLOAT_DRIFT` | `0.045` / `0.05` | Start spread and sideways drift, rolled per reaction. Tight because the fan has to fit between `FLOAT_START_X` and the right edge: `0.9 + 0.045 + 0.05 = 0.995`. |
 | `FLOAT_MAX` | `24` | Cap on simultaneous floats. |
 | `Presentations.bar` / `.inventory` | `true` | The bar + float layer, and the Inventory tab. |
 

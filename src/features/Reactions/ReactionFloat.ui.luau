@@ -1,6 +1,10 @@
 --!strict
 -- The layer reactions fly up. One CanvasGroup per live reaction, rising from
--- just above the bar and fading out on the way.
+-- the bottom-right beside the bar and fading out on the way.
+--
+-- The origin is a constant rather than screen centre because the bar moved to
+-- the right edge: floats have to leave from where the buttons are, and the fan
+-- has to stay inside the screen from there. See FLOAT_START_X / FLOAT_SPREAD.
 --
 -- React owns *which* floats exist; TweenService owns where each one is. That
 -- split matters: a float lives for a couple of seconds, so driving its position
@@ -119,7 +123,7 @@ return function(props: Props)
 
 			-- Rolled once per reaction so a burst fans out instead of stacking
 			-- into a single column.
-			local fromX = 0.5 + (math.random() * 2 - 1) * Constants.FLOAT_SPREAD
+			local fromX = Constants.FLOAT_START_X + (math.random() * 2 - 1) * Constants.FLOAT_SPREAD
 			local toX = fromX + (math.random() * 2 - 1) * Constants.FLOAT_DRIFT
 
 			setFloats(function(current: { Float }): { Float }

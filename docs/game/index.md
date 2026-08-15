@@ -31,6 +31,7 @@ Features and skins are also **distributable packages** — one folder, one
 | [FavouritePrompt.md](FavouritePrompt.md) | One-time "favourite this experience?" ask, fired at a player's first vote |
 | [Store.md](Store.md) | Shop + inventory, currencies, Robux products + the `Store.luau` discovery convention |
 | [Reactions.md](Reactions.md) | Bottom emoji bar broadcast to the whole server |
+| [VoiceChat.md](VoiceChat.md) | Server-wide voice + the bottom-left "who's talking" chips |
 | [Cursors.md](Cursors.md) | Live per-player pointers on the play plane |
 | [PlayerData.md](PlayerData.md) | Profile persistence + the `registerTemplate` discovery convention |
 | [Settings.md](Settings.md) | Settings registry, server validation, the `Settings.luau` discovery convention |

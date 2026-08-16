@@ -389,7 +389,7 @@ than as escalation.
 | **Glue** | Glues parts together. | Welds to everything it's resting against, on settle. |
 | **Clone** | Duplicates itself. | Drops a plain copy of itself in from `CLONE_RISE` above, on settle. |
 | **Bouncy** | Bounces! | Lands with `BOUNCY_PHYSICS` instead of the dead default. |
-| **Burning** | Burns blocks, careful! | Arrives alight; chars black over `BURN_SECONDS` (20) and disintegrates, spreading to whatever it touches. |
+| **Burning** | Burns blocks, careful! | Arrives alight; chars black over `BURN_SECONDS` (20) and disintegrates, spreading to whatever it touches — up to `BURN_MAX_SPREAD` (3) other blocks per fire. |
 | **Noob** | Places a Noob. | Replaces the tetromino with a Noob that walks and jumps until something lands on it. |
 | **Anvil** | Heavy! | Ten times the density (`ANVIL_PHYSICS`). Ploughs through what it lands on, immovable afterwards. |
 | **Ice** | Nothing sticks. | `ICE_PHYSICS` — friction taken out, high `frictionWeight` kept so the ice wins the contact and things slide *on* it. |
@@ -425,6 +425,23 @@ Details worth knowing:
   landed in with it. A lit block lerps from its own colour to black and fades out
   over the last `BURN_FADE_FRACTION` of its life. The hazard isn't the block, it's
   the hole it leaves.
+
+  **A fire takes at most `BURN_MAX_SPREAD` (3) other blocks.** The budget belongs
+  to the *fire* — every block lit from the same original shares one counter, held
+  by reference on `block.fire` — rather than to each block, because three
+  neighbours each would be a tower alight by the third hop. It's spent in
+  `spreadBurn`, one per newly-lit block, so a fire that spreads as a line and one
+  that spreads as a fan both cost three. The piece that arrived alight isn't
+  counted: it was always going to burn, and what the cap bounds is the damage done
+  to what was already built. Two Burning pieces are two fires with a budget each —
+  they're two hazards.
+
+  Uncapped, a Burning piece dropped into a well-packed tower ate as far as blocks
+  were touching, which on a good stack is all of them — so the tower the room had
+  built most carefully was the one it punished hardest. The check mirrors
+  `igniteBlock`'s own three refusals (already alight, custom rig, destroyed) so
+  the budget is never charged for an ignition that didn't happen; a fourth refusal
+  added there needs one here too.
 - **Noob** is the one type that **overrides the model** (`overridesModel` in the
   type table). Instead of tetromino cells the holder aims a Noob rig, and once it
   settles it stops being cargo: `NoobBlock.activate` walks it randomly along X
@@ -937,6 +954,7 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `NUKE_BLAST_JITTER`, `NUKE_BLAST_INTERVAL` | How far a blast wanders from its column, and the beat between rungs |
 | `NUKE_WRECK_SECONDS` | How long the wreck flies after the **last** blast before it's swept |
 | `BURN_SECONDS`, `BURN_SPREAD_RADIUS`, `BURN_SPREAD_DELAY` | How long a burning block lasts and how eagerly it passes it on |
+| `BURN_MAX_SPREAD` | Other blocks one fire may take, across the whole chain (3). Not per block |
 | `CLONE_RISE`, `CLONE_OFFSET_X` | Where a Clone's copy drops in from |
 | `BOUNCY_PHYSICS` | How much a Bouncy block bounces |
 | `ANVIL_PHYSICS`, `ICE_PHYSICS`, `FEATHER_PHYSICS` | The other three physics types. Density survives a Snowy zone; friction and elasticity don't |

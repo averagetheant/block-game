@@ -103,6 +103,16 @@ type Block = {
 	-- When this block caught fire, or nil if it hasn't. Burning is a state a
 	-- block can be given by a neighbour, not just something the Burning type has.
 	burnStartedAt: number?,
+	-- The fire this block belongs to, shared by every block in the same chain.
+	-- It's what carries the spread budget from the block that started it to the
+	-- ones it passes to, so the cap is on the fire rather than on each block.
+	fire: BurnFire?,
+}
+
+-- One fire: everything lit from the same original block. Held by reference so a
+-- spread anywhere in the chain spends from the one budget.
+type BurnFire = {
+	spreadsLeft: number,
 }
 
 type Held = {
@@ -1332,13 +1342,19 @@ end
 -- Catching fire is a *state*, not a type: the Burning block starts alight, and
 -- anything it's resting against catches from it, so the hazard spreads through
 -- the tower rather than staying with the piece that caused it.
-local function igniteBlock(block: Block)
+--
+-- `fire` is the chain this block is joining, passed along by `spreadBurn`. A
+-- block lit without one starts its own — that's the piece that arrived alight,
+-- and it's what hands the chain its budget. Two Burning pieces in the same tower
+-- are two fires with a budget each, which is right: they're two hazards.
+local function igniteBlock(block: Block, fire: BurnFire?)
 	-- A Noob would char and disintegrate like scenery, which reads as a bug
 	-- rather than a joke.
 	if block.burnStartedAt ~= nil or block.custom or block.root.Parent == nil then
 		return
 	end
 	block.burnStartedAt = os.clock()
+	block.fire = fire or { spreadsLeft = Constants.BURN_MAX_SPREAD }
 
 	local fire = Instance.new("Fire")
 	fire.Name = "Burning"
@@ -1464,7 +1480,18 @@ end
 -- Burning spreads by contact, checked from the poll rather than from Touched:
 -- a block already resting against its neighbour never fires Touched again, and
 -- resting against something is exactly the case that should catch.
+--
+-- The chain's budget is spent here and nowhere else, one block per ignition, so
+-- it doesn't matter whether the fire spreads as a line or a fan — three blocks
+-- is three blocks either way. A block that's already alight isn't charged for:
+-- `igniteBlock` refuses it, and paying for a neighbour a *different* arm of the
+-- same fire already took would end the fire early for no visible reason.
 local function spreadBurn(block: Block)
+	local fire = block.fire
+	if fire == nil or fire.spreadsLeft <= 0 then
+		return
+	end
+
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { block.model }
@@ -1472,10 +1499,24 @@ local function spreadBurn(block: Block)
 	for _, part in modelParts(block.model) do
 		local reach = part.Size + Vector3.one * Constants.BURN_SPREAD_RADIUS
 		for _, other in workspace:GetPartBoundsInBox(part.CFrame, reach, params) do
+			if fire.spreadsLeft <= 0 then
+				return
+			end
 			local model = other:FindFirstAncestorOfClass("Model")
 			local neighbour = if model then blockByModel[model] else nil
-			if neighbour then
-				igniteBlock(neighbour)
+			-- Checked before igniting rather than after, because `igniteBlock`
+			-- is silent about whether it did anything and an already-burning
+			-- neighbour must not cost the fire a block it never took. These are
+			-- the same three refusals it makes, which is the coupling to watch:
+			-- a new one there needs one here, or the budget pays for nothing.
+			if
+				neighbour ~= nil
+				and neighbour.burnStartedAt == nil
+				and not neighbour.custom
+				and neighbour.root.Parent ~= nil
+			then
+				fire.spreadsLeft -= 1
+				igniteBlock(neighbour, fire)
 			end
 		end
 	end

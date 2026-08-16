@@ -224,6 +224,18 @@ return {
 	-- Grace before a lit block can pass it on, so a burning piece doesn't ignite
 	-- the whole course it lands in on the same frame.
 	BURN_SPREAD_DELAY = 2.5,
+	-- How many *other* blocks one fire may take, in total across the whole chain
+	-- — not per block, or three neighbours each would be a tower on fire by the
+	-- third hop. The piece that arrived alight isn't counted: it was always going
+	-- to burn, and what this bounds is the damage it does to what was already
+	-- built.
+	--
+	-- Uncapped, a Burning piece dropped into a well-packed tower was a fire that
+	-- ate as far as blocks were touching, which on a good stack is all of them.
+	-- The hazard should be a hole, not a demolition — and the tower with the most
+	-- contacts is the one the room built most carefully, so the old behaviour
+	-- punished good play hardest.
+	BURN_MAX_SPREAD = 3,
 	-- Fraction of the burn spent visibly falling apart (fading out) at the end.
 	BURN_FADE_FRACTION = 0.25,
 	-- Noob blocks. Slow enough to watch, jumpy enough to be a menace to whoever

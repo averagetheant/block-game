@@ -246,7 +246,15 @@ return {
 	-- tower rather than gutting it.
 	LIGHTNING_RADIUS = 26,
 	LIGHTNING_PRESSURE = 700000,
-	LIGHTNING_IMPULSE = 85,
+	-- Halved from 85. The impulse is the strike's whole bite: `blastAt` throws
+	-- everything in radius by hand because BlastPressure barely moves a welded
+	-- assembly, so this number *is* how hard the tower is hit and halving it
+	-- halves the damage.
+	--
+	-- The radius is the other dial and a much blunter one — it sets reach, so
+	-- halving it would leave a fifth of the blocks touched, not half. Change this
+	-- one to tune how hard, that one to tune how wide.
+	LIGHTNING_IMPULSE = 43,
 	LIGHTNING_VOLUME = 1.4,
 	-- Seconds between strikes, rolled fresh in this band each time so the beats
 	-- can't be counted and waited out. Measured from the previous strike, so the

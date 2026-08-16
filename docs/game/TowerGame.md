@@ -1005,6 +1005,14 @@ It's deliberately smaller than a bomb (`LIGHTNING_RADIUS` 26 vs `EXPLOSION_RADIU
 46): a bomb is a piece the players were handed and can plan around, while this
 arrives unasked.
 
+**Two dials, and they aren't interchangeable.** `LIGHTNING_IMPULSE` (43) is how
+hard it hits — `blastAt` throws every block in range by hand, because
+`BlastPressure` barely moves a welded assembly, so that number is the strike's
+whole bite and scaling it scales the damage directly. `LIGHTNING_RADIUS` is how
+*wide* it reaches, and it's much blunter: it decides which blocks are touched at
+all and shapes the falloff, so halving it leaves roughly a fifth of them hit
+rather than half.
+
 The **Lightning Storm** gamemode (`alwaysLightning`) turns it on in every zone for
 a whole round. It keeps the ten-second warning, so it's round-long pressure rather
 than an unfair one.

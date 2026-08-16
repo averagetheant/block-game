@@ -20,6 +20,19 @@
 -- physics mode, so `clampToPlane` zeroes out-of-plane velocity every frame and
 -- nudges back any block that still drifts. Pieces then tip and topple in-plane
 -- like Tricky Towers instead of scattering into a 3D pile.
+--
+-- Two games live in here, and only the smaller half is shared. The classic game
+-- above is one tower, one queue, one storm. PVP (`PvpService`) is six towers on
+-- their own platforms with no turns at all — and it runs on this file's *block
+-- engine*: `dealPiece`, `dropPiece`, `applyPlacement`, `laneHeight`, `clearLane`
+-- and everything they reach, all of which take a lane rather than assuming the
+-- one at the origin. See the "block engine API" section near the bottom.
+--
+-- What made that split cheap is that a block's behaviour was never about the
+-- tower it was in. Bombs, fires, glue, ghosts and the plane clamp are all
+-- spatial, so six towers set far enough apart need no rules the one tower didn't
+-- already have. `laneX` is only ever read to *measure* — never to decide what a
+-- block does.
 
 local CollectionService = game:GetService("CollectionService")
 local PhysicsService = game:GetService("PhysicsService")
@@ -38,6 +51,7 @@ local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
 local SkinPacks = require(ReplicatedStorage.Features.TowerGame.SkinPacks)
+local BlockBody = require(ReplicatedStorage.Features.TowerGame.BlockBody)
 local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 -- Server-realm siblings (ServerScriptService.Features.TowerGame.*).
@@ -64,6 +78,18 @@ local AnalyticsService = require(script.Parent.Parent.Analytics.AnalyticsService
 type Block = {
 	model: Model,
 	root: BasePart,
+	-- Which lane this block belongs to, as the lane's centre X. 0 for the classic
+	-- game, which is one lane shared by the whole room; one of `PvpLanes.xOf`'s
+	-- seats during a PVP round.
+	--
+	-- It's only ever read to *measure* — "how tall is this lane" and "what may a
+	-- piece spawned here land on". Nothing about how a block behaves is filtered
+	-- by it, because nothing needs to be: every hazard in the game is already
+	-- spatial (a blast has a radius, a fire spreads by contact, glue welds what
+	-- it's touching), and lanes are set far enough apart that none of them can
+	-- reach the next one. That is the whole reason PVP could be built on this
+	-- block engine rather than beside it.
+	laneX: number,
 	-- Only settled blocks count toward the height, so a piece still falling
 	-- through the air can't spike the readout. Set by the poll, and taken back
 	-- off a block that gets knocked loose again.
@@ -133,6 +159,11 @@ type Held = {
 	-- can put each one back instead of blanket-setting true.
 	collision: { [BasePart]: boolean },
 	player: Player,
+	-- The lane this piece is being aimed over, and the floor it will eventually
+	-- come down on if it misses everything. Both are fixed for the piece's whole
+	-- turn: the holder owns X *within* the lane, never which lane they're in.
+	laneX: number,
+	floorY: number,
 }
 
 local TowerService = {}
@@ -141,6 +172,11 @@ local TowerService = {}
 TowerService.Priority = 20
 
 local PHASE = Constants.PHASE
+
+-- The classic game is one lane, and it's the one at the arena's origin. Named
+-- rather than written as a bare 0 wherever a lane is asked for, so the classic
+-- paths read as "the shared lane" instead of as an unexplained coordinate.
+local CLASSIC_LANE = 0
 
 local arena: Folder
 local base: BasePart
@@ -159,9 +195,52 @@ local blocks: { Block } = {}
 -- find what it's resting against; keep it in step with every add and remove.
 local blockByModel: { [Model]: Block } = {}
 -- Anchored checkpoint platforms, tracked separately from `blocks` because they
--- have no physics but still count toward the tower's top.
+-- have no physics but still count toward the tower's top. Classic only: a PVP
+-- lane has one platform, it never moves, and PvpService owns it — which is why
+-- `restingTopY` takes the floor it should measure from as an argument rather
+-- than assuming this list holds it.
 local platforms: { BasePart } = {}
-local held: Held? = nil
+-- Every piece anyone is aiming right now, keyed by its holder.
+--
+-- Classic deals one piece at a time, so this holds at most one entry; a PVP
+-- round gives every lane a piece of its own, so it holds one per player. Keying
+-- by player rather than keeping a single slot is what let the two modes share
+-- one held-piece lifecycle: `dealPiece`, `applyPlacement`, `reseatPiece` and
+-- `dropPiece` are the same code either way, and only *who asks* differs.
+local heldBy: { [Player]: Held } = {}
+-- Whose piece the classic turn loop is currently waiting on, or nil between
+-- turns. PVP never writes it — its lanes each run their own clock, and there is
+-- no such thing as "the" holder.
+local turnHolder: Player? = nil
+
+-- The piece the classic turn loop is waiting on, or nil when nobody is up.
+local function classicHeld(): Held?
+	local player = turnHolder
+	return if player ~= nil then heldBy[player] else nil
+end
+
+-- True while a PVP round has the board (see `runRoundBreak`). Everything the
+-- classic game runs on a clock — the turn queue, the storm, the height readout,
+-- the lightning — parks for the duration; everything that keeps *blocks* honest
+-- — settling, burning, the plane clamp, the despawn sweep — keeps running,
+-- because those belong to the blocks rather than to the mode.
+local pvpActive = false
+
+-- PvpService, required on first use rather than at the top of the file.
+--
+-- The dependency runs the other way for everything that matters: PVP borrows
+-- this file's block engine (`dealPiece`, `dropPiece`, `laneHeight`) and this file
+-- knows one thing about PVP — that a round can be handed to it. Naming it up
+-- there would be a require cycle; by the time a round break can run, both modules
+-- have long since loaded.
+local pvpService: any = nil
+local function pvp(): any
+	if pvpService == nil then
+		pvpService = require(script.Parent.PvpService)
+	end
+	return pvpService
+end
+
 -- Distance to the next checkpoint. Grows by STORM_GAP_GROWTH every time one is
 -- cleared, so each floor is a little further than the last.
 local stormGap = Constants.STORM_FIRST_TARGET
@@ -172,6 +251,10 @@ local blockTypeForced = false
 local forcedBlockType: BlockTypes.BlockType? = nil
 local skinForced = false
 local forcedSkin: BlockSkins.Skin? = nil
+-- Standing override for how often a piece is special, set by the "blockrate"
+-- cmdr command. Unlike the one-shot above this holds until it's cleared, and it
+-- outranks the stage's own number so it can't be undone by a checkpoint.
+local devBlockTypeChance: number? = nil
 -- Who dropped the piece that's currently settling. Whoever that is gets paid for
 -- any height the tower gains, since they're the one who put it there.
 local lastDropper: Player? = nil
@@ -247,7 +330,24 @@ local stage: Gamemodes.Modifier = Gamemodes.DEFAULT
 local function applyStage(modifier: Gamemodes.Modifier)
 	stage = modifier
 	state.turnSeconds = modifier.turnSeconds
-	state.stormSeconds = modifier.stormSeconds
+	-- `stormSeconds` isn't mirrored here: it grows with the stage count, so
+	-- `restartStormClock` owns it. Every applyStage call is followed by one.
+end
+
+-- Start the current stage's clock, and publish how long it runs.
+--
+-- The length grows with the floors already cleared, matching the gap growing
+-- under STORM_GAP_GROWTH — a stage that asks for a longer climb is given the
+-- turns to build it. The two numbers are set together because the HUD's storm
+-- bar is `stormEndsAt` drawn as a fraction of `stormSeconds`, and a bar whose
+-- ends disagree fills wrong for a whole stage.
+--
+-- Called on every path that starts a stage: a fresh run, a cleared checkpoint,
+-- and the round break once the vote is in. Not by `extendStorm`, which pushes
+-- the deadline out without lengthening the stage it belongs to.
+local function restartStormClock()
+	state.stormSeconds = stage.stormSeconds + state.checkpoints * Constants.STORM_TIME_GROWTH
+	state.stormEndsAt = workspace:GetServerTimeNow() + state.stormSeconds
 end
 
 -- The Stormy zone's lightning. `nextStrikeAt` is when the next bolt is due;
@@ -270,6 +370,12 @@ local function isSpectating(player: Player): boolean
 	end
 	return SettingsService.get(player, Constants.SETTING_NOT_PLAYING) == true
 end
+
+-- Exported because PVP has to answer the same question about the same setting,
+-- and two readings of "is this player sitting out" that could disagree is two
+-- bugs waiting — including the solo carve-out above, which is easy to forget and
+-- soft-locks whoever forgets it.
+TowerService.isSpectating = isSpectating
 
 -- Book-keeping at the end of a turn: did they touch the piece, and if they
 -- haven't for IDLE_TURNS_BEFORE_AFK turns running, take them out of the
@@ -587,17 +693,59 @@ local function randomColor(): Color3
 	return Color3.fromHSV(math.random(), 0.68, 0.98)
 end
 
--- Every BasePart of a model, descendants included. Pieces built here are flat
--- (cells are direct children), but a Noob rig hangs a Handle inside every
--- accessory, and an anchored hat on an unanchored rig floats where it was.
-local function modelParts(model: Model): { BasePart }
+local function collectParts(model: Model, body: boolean): { BasePart }
 	local found = {}
 	for _, descendant in model:GetDescendants() do
-		if descendant:IsA("BasePart") then
-			table.insert(found, descendant)
+		if not descendant:IsA("BasePart") then
+			continue
 		end
+		if not body and BlockBody.isBody(descendant) then
+			continue
+		end
+		table.insert(found, descendant)
 	end
 	return found
+end
+
+-- Every BasePart the *simulation* owns, descendants included. Pieces built here
+-- are flat (cells are direct children), but a Noob rig hangs a Handle inside
+-- every accessory, and an anchored hat on an unanchored rig floats where it was.
+--
+-- The rounded body a block is *seen* as is deliberately **not** here (see
+-- BlockBody). It's a coat over the cubes, and it is the wrong answer to every
+-- question this list is asked: it carries no mass, it answers no raycast, and the
+-- squash grows it a stud past the cells underneath — which would report height
+-- the tower hadn't been built to and feed it straight into the next piece's spawn
+-- clearance.
+--
+-- Excluding it here rather than at the call sites makes the safe answer the
+-- default: a loop added later gets the simulation's parts without having to know
+-- bodies exist, and the few passes that paint a block ask for it.
+local function modelParts(model: Model): { BasePart }
+	return collectParts(model, false)
+end
+
+-- ...and every BasePart including the body. For the passes that decide how a
+-- block *looks* — colour, transparency — and for anchoring, where the coat has to
+-- be let go at the same moment as the cells under it. Never for physical
+-- properties: the body has none worth setting, and writing them to it is how a
+-- massless render part quietly starts weighing something.
+local function allParts(model: Model): { BasePart }
+	return collectParts(model, true)
+end
+
+-- The parts a player can actually *see*: the body on a dressed block, the cells
+-- on one without a body (a Noob rig, or any block at all when the Studio asset is
+-- missing). Anything that writes transparency has to go through here — a pass
+-- that fades "every part" would fade the hidden cubes up from invisible to
+-- whatever it wanted, and a ghost or a burning block would show its own skeleton
+-- through the shell that's supposed to be the block.
+local function shownParts(model: Model): { BasePart }
+	local body = BlockBody.of(model)
+	if body then
+		return { body }
+	end
+	return collectParts(model, false)
 end
 
 -- Highest world-Y a part reaches, accounting for rotation: project each half
@@ -694,28 +842,44 @@ local function buildPiece(
 	-- blocks rather than merging into one flat mass.
 	local color = SkinPacks.colorFor(pack) or randomColor()
 
+	-- A colour pack sets no material, so the rolled skin's own surface (and its
+	-- sounds) survive underneath the tint.
+	local material = if pack and pack.material then pack.material else skin.material
+	local transparency = skin.transparency or 0
+
+	-- The cells are the *collision*, and they stay square: a rounded collision
+	-- shape would settle into its neighbours' corners and a flat course would stop
+	-- being flat. What the player sees is the rounded body hung over them below.
+	-- When that body is there the cubes are invisible, and when the asset is
+	-- missing they're the block, exactly as they were before bodies existed.
+	local dressed = BlockBody.available(shape)
+
 	local root: BasePart? = nil
 	for index, cell in shape.cells do
-		local part = Instance.new("Part")
-		part.Name = `Cell{index}`
-		part.Size = Vector3.new(Constants.BLOCK_SIZE, Constants.BLOCK_SIZE, Constants.BLOCK_DEPTH)
-		part.Color = color
-		-- A colour pack sets no material, so the rolled skin's own surface (and
-		-- its sounds) survive underneath the tint.
-		part.Material = if pack and pack.material then pack.material else skin.material
-		part.Transparency = skin.transparency or 0
-		part.TopSurface = Enum.SurfaceType.Smooth
-		part.BottomSurface = Enum.SurfaceType.Smooth
-		part.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
-		part.Anchored = true
-		part.CFrame = CFrame.new(cell.X * Constants.BLOCK_SIZE, cell.Y * Constants.BLOCK_SIZE, Constants.PLANE_Z)
-		part.Parent = model
+		local cube = Instance.new("Part")
+		cube.Name = `Cell{index}`
+		cube.Size = Vector3.new(Constants.BLOCK_SIZE, Constants.BLOCK_SIZE, Constants.BLOCK_DEPTH)
+		cube.Color = color
+		cube.Material = material
+		cube.Transparency = if dressed then 1 else transparency
+		cube.TopSurface = Enum.SurfaceType.Smooth
+		cube.BottomSurface = Enum.SurfaceType.Smooth
+		cube.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
+		cube.Anchored = true
+		cube.CFrame =
+			CFrame.new(cell.X * Constants.BLOCK_SIZE, cell.Y * Constants.BLOCK_SIZE, Constants.PLANE_Z)
+		cube.Parent = model
 		if root == nil then
-			root = part
+			root = cube
 		end
 	end
 
 	local rootPart = root :: BasePart
+	-- Stamped at build time, not just at `registerBlock`: a piece is parented into
+	-- the arena as the *held* piece and only registers when it's released, so a
+	-- client reading the skin off a freshly-parented model would find nothing and
+	-- fall back to a default for the block's whole fall.
+	model:SetAttribute(Constants.SKIN_ATTRIBUTE, skin.id)
 	-- Weld the cells into one rigid body up front. Welds are inert while the
 	-- parts are anchored, so the piece becomes a single assembly the instant
 	-- `release` unanchors it.
@@ -727,6 +891,14 @@ local function buildPiece(
 		weld.Part0 = rootPart
 		weld.Part1 = part
 		weld.Parent = rootPart
+	end
+
+	-- After the weld loop, deliberately. The body is a BasePart child like a cell,
+	-- so welding it here too would pin it rigidly — and the squash moves it, by
+	-- shifting the C0 of its own Weld. Two welds on one part means the stiffer one
+	-- wins and the block flattens through the floor it landed on instead of onto it.
+	if dressed then
+		BlockBody.attach(model, rootPart, shape, color, material, transparency)
 	end
 
 	-- A special block has to be readable at a glance, and it can't repaint the
@@ -766,10 +938,16 @@ end
 -- else a moment later, and taking it for the tower's top would fire the next
 -- spawn into orbit. `slowSince` is the test: it's set the instant an assembly
 -- goes quiet, so it reads "resting" a good half second before `settled` does.
-local function restingTopY(): number
-	local top = baseTopY
+--
+-- Measured per lane. The classic game is one lane (`laneX` 0) shared by
+-- everyone; a PVP round is one lane per player, and a piece has to clear its own
+-- tower rather than the tallest tower on the board. `floorY` is what the lane
+-- stands on — the arena base in classic, the lane's own platform in PVP — so
+-- this needs no opinion about which of those it's looking at.
+local function restingTopY(laneX: number, floorY: number): number
+	local top = floorY
 	for _, block in blocks do
-		if block.root.Parent == nil then
+		if block.laneX ~= laneX or block.root.Parent == nil then
 			continue
 		end
 		if not (block.custom or block.settled or block.slowSince ~= nil) then
@@ -779,8 +957,13 @@ local function restingTopY(): number
 			top = math.max(top, partTopY(part))
 		end
 	end
-	for _, platform in platforms do
-		top = math.max(top, partTopY(platform))
+	-- Checkpoint platforms belong to the classic game, which is lane 0. A PVP
+	-- lane's floor arrives as `floorY` instead, so this loop is skipped rather
+	-- than handing every lane the altitude of a checkpoint standing at x = 0.
+	if laneX == CLASSIC_LANE then
+		for _, platform in platforms do
+			top = math.max(top, partTopY(platform))
+		end
 	end
 	return top
 end
@@ -795,13 +978,16 @@ local function pieceHalfHeight(model: Model): number
 end
 
 -- Pivot altitude that leaves SPAWN_CLEARANCE of clear air under the piece.
-local function clearPivotY(halfHeight: number): number
-	return restingTopY() + halfHeight + Constants.SPAWN_CLEARANCE
+local function clearPivotY(laneX: number, floorY: number, halfHeight: number): number
+	return restingTopY(laneX, floorY) + halfHeight + Constants.SPAWN_CLEARANCE
 end
 
--- Where a fresh piece appears: clear of whatever has been built so far.
-local function spawnPivot(halfHeight: number): CFrame
-	return CFrame.new(0, clearPivotY(halfHeight), Constants.PLANE_Z)
+-- Where a fresh piece appears: over its own lane, clear of whatever has been
+-- built in it. Pieces always spawn on the lane's centre line — the holder owns X
+-- from there, and starting them anywhere else would make "centred" mean
+-- something different for every player.
+local function spawnPivot(laneX: number, floorY: number, halfHeight: number): CFrame
+	return CFrame.new(laneX, clearPivotY(laneX, floorY, halfHeight), Constants.PLANE_Z)
 end
 
 -- Put the held piece back at its clearance, so "the piece is above the tower"
@@ -817,13 +1003,8 @@ end
 --
 -- Returns whether it moved, so the caller knows the state is worth broadcasting.
 -- Only Y is touched; X and the holder's quarter turns are theirs.
-local function reseatHeldPiece(down: boolean): boolean
-	local piece = held
-	if piece == nil then
-		return false
-	end
-
-	local wanted = clearPivotY(piece.halfHeight)
+local function reseatPiece(piece: Held, down: boolean): boolean
+	local wanted = clearPivotY(piece.laneX, piece.floorY, piece.halfHeight)
 	local shift = wanted - piece.pivot.Position.Y
 	if math.abs(shift) < Constants.HEIGHT_EPSILON then
 		return false
@@ -834,7 +1015,25 @@ local function reseatHeldPiece(down: boolean): boolean
 
 	piece.pivot = piece.pivot + Vector3.new(0, shift, 0)
 	piece.model:PivotTo(piece.pivot)
-	state.pieceTop = wanted + piece.halfHeight - baseTopY
+	return true
+end
+
+-- How high the top of a piece sits above the floor it was dealt over. The number
+-- the camera frames against, in the same terms as the lane's height.
+local function pieceTopOf(piece: Held): number
+	return piece.pivot.Position.Y + piece.halfHeight - piece.floorY
+end
+
+TowerService.pieceTopOf = pieceTopOf
+
+-- The classic wrapper: reseat the one piece the turn loop is watching, and keep
+-- the broadcast number in step with it.
+local function reseatHeldPiece(down: boolean): boolean
+	local piece = classicHeld()
+	if piece == nil or not reseatPiece(piece, down) then
+		return false
+	end
+	state.pieceTop = pieceTopOf(piece)
 	return true
 end
 
@@ -924,7 +1123,20 @@ local function applyZoneLook(
 		)
 		else base
 
-	for _, part in modelParts(model) do
+	-- The surface is the *look*, so the body wears the zone like everything else.
+	--
+	-- Retro is the one zone that can't be worn, and it's handled by taking the coat
+	-- off: studs are a property of a flat face and render as nothing on a rounded
+	-- one, so a Retro tower of bodies would just be a tower that had quietly
+	-- stopped studding. Hiding the body puts the square cells back on screen —
+	-- which is exactly what a 1962 brick should look like, and costs nothing,
+	-- because the cells were never removed, only made invisible.
+	local body = BlockBody.of(model)
+	if body then
+		body.Transparency = if retro then 1 else transparency
+	end
+
+	for _, part in allParts(model) do
 		if retro then
 			part.Material = Enum.Material.Plastic
 			setSurfaces(part, Enum.SurfaceType.Studs)
@@ -932,7 +1144,15 @@ local function applyZoneLook(
 			part.Material = if pack and pack.material then pack.material else skin.material
 			setSurfaces(part, Enum.SurfaceType.Smooth)
 		end
+	end
+
+	-- The cells come back with the body, and go back to being invisible under it.
+	-- Written after the loop above, which has no opinion about transparency.
+	for _, part in modelParts(model) do
 		part.CustomPhysicalProperties = physics
+		if body then
+			part.Transparency = if retro then transparency else 1
+		end
 	end
 end
 
@@ -946,8 +1166,8 @@ local function applyZoneToTower()
 	for _, block in blocks do
 		applyZoneLook(block.model, block.skin, block.blockType, block.pack)
 	end
-	local piece = held
-	if piece then
+	-- Every piece in the air, which is one in classic and one per lane in PVP.
+	for _, piece in heldBy do
 		applyZoneLook(piece.model, piece.skin, piece.blockType, piece.pack)
 	end
 end
@@ -973,9 +1193,14 @@ end
 -- these two numbers, both clamped here, so "the client owns the feel" never
 -- becomes "the client owns the game".
 
+-- `x` is measured from the holder's own lane centre, not from the world origin.
+-- In classic those are the same point; in PVP they are up to three hundred studs
+-- apart, and lane-relative is the only version of the number a client can be
+-- trusted with — the clamp below is then the same clamp in both modes, and a
+-- player cannot aim into somebody else's lane by sending a bigger number.
 function TowerService.applyPlacement(player: Player, x: number, turns: number)
-	local piece = held
-	if piece == nil or piece.player ~= player or state.phase ~= PHASE.AIMING then
+	local piece = heldBy[player]
+	if piece == nil then
 		return
 	end
 	-- NaN survives math.clamp and would poison the pivot, so reject it here.
@@ -986,7 +1211,7 @@ function TowerService.applyPlacement(player: Player, x: number, turns: number)
 	local clampedX = math.clamp(x, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X)
 	local quarter = math.floor(turns) % 4
 
-	piece.pivot = CFrame.new(clampedX, piece.pivot.Position.Y, Constants.PLANE_Z)
+	piece.pivot = CFrame.new(piece.laneX + clampedX, piece.pivot.Position.Y, Constants.PLANE_Z)
 		* CFrame.Angles(0, 0, -quarter * math.pi / 2)
 	piece.model:PivotTo(piece.pivot)
 
@@ -1061,8 +1286,12 @@ local function glueBlock(block: Block)
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { block.model }
 
+	-- Cells only. The body is a child BasePart like they are, but it spans the
+	-- whole piece — gluing *it* to the neighbourhood would weld a four-cell box
+	-- plus GLUE_RADIUS to everything inside it, which on a packed tower is most of
+	-- the tower, from a block that touched one corner.
 	for _, part in block.model:GetChildren() do
-		if not part:IsA("BasePart") then
+		if not part:IsA("BasePart") or BlockBody.isBody(part) then
 			continue
 		end
 		local reach = part.Size + Vector3.one * Constants.GLUE_RADIUS
@@ -1168,8 +1397,13 @@ end
 -- that can be threaded into a gap it doesn't fit through: aim well and it's the
 -- best block in the game, aim badly and you've put a wedge in your own tower.
 local function startGhost(block: Block)
+	-- Only what's on screen: fading "every part" would bring the hidden cells up to
+	-- GHOST_TRANSPARENCY and show four cubes floating inside the block. The
+	-- per-part save is what keeps the restore honest — a block carries its skin's
+	-- own transparency (Needoh is translucent) and a blanket restore to 0 would
+	-- repaint a skin someone bought.
 	local saved: { [BasePart]: number } = {}
-	for _, part in modelParts(block.model) do
+	for _, part in shownParts(block.model) do
 		saved[part] = part.Transparency
 		part.Transparency = Constants.GHOST_TRANSPARENCY
 	end
@@ -1181,7 +1415,7 @@ local function startGhost(block: Block)
 			return
 		end
 		setCollisionGroup(block.model, Constants.BLOCK_COLLISION_GROUP)
-		for _, part in modelParts(block.model) do
+		for _, part in shownParts(block.model) do
 			local was = saved[part]
 			if was ~= nil then
 				part.Transparency = was
@@ -1284,6 +1518,23 @@ end
 local function updateLightning()
 	-- Normally the Stormy zone's hazard; the Lightning Storm gamemode turns it
 	-- on everywhere for the whole round.
+	--
+	-- Off entirely during a PVP match. The whole mechanism is single-lane by
+	-- construction — one warning column, standing on one floor, announced by one
+	-- attribute on the arena — and there is no honest way to point that at six
+	-- towers at once. Striking only the middle lane would be worse than not
+	-- striking at all. See "Not built yet" in docs/game/TowerGamePvp.md.
+	if pvpActive then
+		if pendingStrikeX ~= nil then
+			pendingStrikeX = nil
+			local folder = workspace:FindFirstChild(Constants.ARENA_NAME)
+			if folder then
+				folder:SetAttribute(Constants.WARN_ATTRIBUTE, nil)
+			end
+		end
+		return
+	end
+
 	if Zones.get(state.zoneId).kind ~= "stormy" and not stage.alwaysLightning then
 		-- Leaving the zone mid-warning must take the marker with it, or a red
 		-- column is left standing over a zone that has no lightning in it.
@@ -1319,7 +1570,11 @@ local function updateLightning()
 end
 
 local function paint(block: Block, color: Color3)
-	for _, part in modelParts(block.model) do
+	-- The body included — it's the only part of a dressed block anyone can see, so
+	-- a bomb flashing the cells red would flash nothing at all. The hidden cells
+	-- are painted too, so a block that loses its body to a Retro zone mid-fuse is
+	-- already the right colour underneath.
+	for _, part in allParts(block.model) do
 		part.Color = color
 	end
 end
@@ -1418,11 +1673,13 @@ local function registerBlock(
 	blockType: BlockTypes.BlockType?,
 	baseColor: Color3,
 	custom: boolean,
-	pack: SkinPacks.SkinPack?
+	pack: SkinPacks.SkinPack?,
+	laneX: number
 ): Block
 	local block: Block = {
 		model = model,
 		root = root,
+		laneX = laneX,
 		settled = false,
 		slowSince = nil,
 		settledOnce = false,
@@ -1444,6 +1701,10 @@ local function registerBlock(
 	}
 	table.insert(blocks, block)
 	blockByModel[model] = block
+	-- Again here, because this is the one funnel *every* block goes through and a
+	-- Noob rig arrives as a ready-made model that never saw `buildPiece`. Same
+	-- value either way, so the double write is idempotent.
+	model:SetAttribute(Constants.SKIN_ATTRIBUTE, skin.id)
 	-- Everything in the tower shares one group, so a Ghost has a single thing to
 	-- ignore. Ghosts are moved out of it by `startGhost` and back into it when
 	-- they solidify.
@@ -1487,7 +1748,9 @@ local function spawnCloneOf(block: Block)
 	for _, part in modelParts(model) do
 		part.Anchored = false
 	end
-	registerBlock(model, root, shape, block.skin, nil, color, false, block.pack)
+	-- The copy belongs to whatever lane its original does. A Clone that landed in
+	-- the wrong lane's books would be measured as somebody else's height.
+	registerBlock(model, root, shape, block.skin, nil, color, false, block.pack, block.laneX)
 end
 
 -- Burning spreads by contact, checked from the poll rather than from Touched:
@@ -1555,7 +1818,7 @@ local function tickBurn(block: Block, now: number): boolean
 	local fadeFrom = 1 - Constants.BURN_FADE_FRACTION
 	local fade = if progress > fadeFrom then (progress - fadeFrom) / Constants.BURN_FADE_FRACTION else 0
 	local transparency = math.max(block.skin.transparency or 0, fade)
-	for _, part in modelParts(block.model) do
+	for _, part in shownParts(block.model) do
 		part.Color = charred
 		part.Transparency = transparency
 	end
@@ -1566,14 +1829,21 @@ local function tickBurn(block: Block, now: number): boolean
 	return false
 end
 
--- Hand the piece to physics. Called by the holder, and by the turn loop when the
--- clock runs out or the holder leaves — hence no player check here.
-function TowerService.release()
-	local piece = held
+-- Hand one player's piece to physics.
+--
+-- The shared half of a drop: everything that is true of a block entering the
+-- world whichever mode dealt it. Called by the holder's own Release, by the
+-- classic turn loop when the clock runs out or the holder leaves, and by each
+-- PVP lane's own clock — hence no ownership check, the caller has already
+-- decided this piece is being let go.
+--
+-- Returns the block it became, or nil if that player wasn't holding one.
+function TowerService.dropPiece(player: Player): Block?
+	local piece = heldBy[player]
 	if piece == nil then
-		return
+		return nil
 	end
-	held = nil
+	heldBy[player] = nil
 
 	-- Stop advertising this piece as held. The holder's client finds "its" piece
 	-- by this attribute, so leaving it set means every later turn re-finds this
@@ -1584,7 +1854,10 @@ function TowerService.release()
 	-- Solid before it's loose, so the first frame of physics already has the piece
 	-- colliding with the tower rather than a frame of it falling through.
 	restoreCollision(piece.model, piece.collision)
-	for _, part in modelParts(piece.model) do
+	-- The body goes loose on the same frame as the cells under it: it's welded to
+	-- the root cell, and a welded part left anchored anchors the assembly it's
+	-- welded to — the piece would hang in the air exactly where it was dropped.
+	for _, part in allParts(piece.model) do
 		part.Anchored = false
 	end
 
@@ -1596,7 +1869,8 @@ function TowerService.release()
 		piece.blockType,
 		piece.baseColor,
 		piece.custom,
-		piece.pack
+		piece.pack,
+		piece.laneX
 	)
 
 	-- Starts the moment it's let go, not when it lands — phasing is the fall.
@@ -1607,16 +1881,30 @@ function TowerService.release()
 	-- Everyone hears the drop from where it happened. The holder also gets their
 	-- own confirmation cue locally (Drop2, played client-side).
 	Sfx.playAt("Drop", piece.root)
-	lastDropper = piece.player
 	placerOf[piece.model] = piece.player
 	TowerStatsService.recordBlockPlaced(piece.player)
 
-	AnalyticsService.step(piece.player, "turn", "Dropped")
+	return dropped
+end
+
+-- The classic turn ends. `dropPiece` does the block half; this is the half that
+-- only means anything with a turn queue behind it — who gets paid for the height
+-- it gains, the turn funnel, and the state the HUD draws between turns.
+function TowerService.release()
+	local player = turnHolder
+	if player == nil or TowerService.dropPiece(player) == nil then
+		return
+	end
+	turnHolder = nil
+
+	lastDropper = player
+
+	AnalyticsService.step(player, "turn", "Dropped")
 	-- Only the first placement of the round advances the round funnel; `step`
 	-- dedupes the rest against the session, so this is called on every drop and
 	-- counted once.
-	AnalyticsService.step(piece.player, "round", "First Piece Placed")
-	AnalyticsService.onboarding(piece.player, 3)
+	AnalyticsService.step(player, "round", "First Piece Placed")
+	AnalyticsService.onboarding(player, 3)
 
 	state.phase = PHASE.SETTLING
 	state.holderUserId = 0
@@ -1627,7 +1915,18 @@ function TowerService.release()
 	broadcast()
 end
 
-local function beginTurn(player: Player)
+-- Build a piece and hand it to `player` to aim over lane `laneX`, which stands on
+-- `floorY`.
+--
+-- The shared half of starting a turn: roll the shape, the skin and the hazard,
+-- build the model, dress it for the zone, park it clear of whatever is already
+-- standing in that lane, and mark it as theirs. Everything a *turn* means — the
+-- clock, the queue, the funnel, the HUD state — belongs to the caller, because
+-- the two modes disagree about all of it.
+--
+-- Returns the piece, so a caller that runs its own clock has something to read
+-- the spawn altitude off without going back through the table.
+function TowerService.dealPiece(player: Player, laneX: number, floorY: number): Held
 	local shape: Shapes.Shape? = nextShape
 	nextShape = Shapes.random()
 
@@ -1638,7 +1937,11 @@ local function beginTurn(player: Player)
 	local skin = if commanded then forcedSkin :: BlockSkins.Skin else BlockSkins.random()
 	local blockType = if blockTypeForced
 		then forcedBlockType
-		else BlockTypes.roll(state.checkpoints, stage.blockTypeScale, stage.blockTypeChance)
+		else BlockTypes.roll(
+			state.checkpoints,
+			stage.blockTypeScale,
+			devBlockTypeChance or stage.blockTypeChance
+		)
 	skinForced = false
 	blockTypeForced = false
 
@@ -1682,16 +1985,18 @@ local function beginTurn(player: Player)
 	local piece = model :: Model
 	applyZoneLook(piece, skin, blockType, pack)
 	local halfHeight = pieceHalfHeight(piece)
-	local pivot = spawnPivot(halfHeight)
+	local pivot = spawnPivot(laneX, floorY, halfHeight)
 	piece:PivotTo(pivot)
 	-- Nothing the holder is still aiming may touch the tower.
 	local collision = suspendCollision(piece)
 	-- Tells the holder's client "this one is yours" so it can hide the real piece
-	-- and drive a local preview instead.
+	-- and drive a local preview instead. In PVP every lane has one of these up at
+	-- once, and each client still finds exactly its own — the attribute has always
+	-- been keyed by user id, so nothing about that lookup had to change.
 	piece:SetAttribute(Constants.HELD_ATTRIBUTE, player.UserId)
 	piece.Parent = arena
 
-	held = {
+	local dealt: Held = {
 		model = piece,
 		root = root :: BasePart,
 		shape = shape,
@@ -1704,10 +2009,22 @@ local function beginTurn(player: Player)
 		halfHeight = halfHeight,
 		collision = collision,
 		player = player,
+		laneX = laneX,
+		floorY = floorY,
 	}
+	heldBy[player] = dealt
+	return dealt
+end
 
+local function beginTurn(player: Player)
+	local dealt = TowerService.dealPiece(player, CLASSIC_LANE, baseTopY)
+	local shape = dealt.shape
+	local blockType = dealt.blockType
+	local pack = dealt.pack
+
+	turnHolder = player
 	state.phase = PHASE.AIMING
-	state.pieceTop = pivot.Position.Y + halfHeight - baseTopY
+	state.pieceTop = pieceTopOf(dealt)
 	state.holderUserId = player.UserId
 
 	-- The turn opens short and is extended to the full clock by the first steer
@@ -1907,7 +2224,7 @@ end
 -- against the tower, not against the storm. An assembly is only loose once every
 -- part of it is, so this is all of them rather than the root.
 local function unanchorModel(model: Model)
-	for _, part in modelParts(model) do
+	for _, part in allParts(model) do
 		if part.Anchored then
 			part.Anchored = false
 		end
@@ -2100,7 +2417,9 @@ local function resetRun()
 	-- break overwrites this with whatever the players then vote for — this is the
 	-- baseline for the paths that reset without a vote (server start).
 	applyStage(Gamemodes.DEFAULT)
-	state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
+	-- After the checkpoint count is zeroed above, so the clock comes back to the
+	-- first stage's length rather than keeping the last run's growth.
+	restartStormClock()
 	-- maxHeight deliberately survives: it's the server's best-ever record, not
 	-- part of the run, and TowerStatsService has already banked it per player.
 end
@@ -2129,11 +2448,13 @@ local intermission = false
 -- camera that's looking somewhere else. Their client sees the turn end and tears
 -- its preview down on its own.
 local function cancelHeldPiece()
-	local piece = held
-	if piece == nil then
+	local player = turnHolder
+	local piece = if player ~= nil then heldBy[player] else nil
+	if player == nil or piece == nil then
 		return
 	end
-	held = nil
+	heldBy[player] = nil
+	turnHolder = nil
 	piece.model:Destroy()
 	state.holderUserId = 0
 	state.turnEndsAt = 0
@@ -2201,7 +2522,9 @@ local function runCheckpoint(height: number)
 		-- starts from.
 		state.zoneBaseHeight = height
 		state.targetHeight = height + stormGap
-		state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
+		-- And a little more time to climb it: `state.checkpoints` went up above,
+		-- so this stage's clock is one STORM_TIME_GROWTH longer than the last.
+		restartStormClock()
 		state.phase = PHASE.SETTLING
 		broadcast()
 
@@ -2261,6 +2584,22 @@ function TowerService.forceNextBlock(blockType: BlockTypes.BlockType?, skin: Blo
 	forcedSkin = skin
 end
 
+-- Hold the odds a piece is special at a flat number, for as long as it's set.
+-- Used by the "blockrate" cmdr command; nil hands the roll back to the curve.
+--
+-- This exists because the curve is a function of `checkpoints`, which resets to
+-- zero every time a play test restarts — so at BASE_CHANCE a dev session sees
+-- one special piece in thirty-three, and testing anything about them means
+-- clearing stages first. It rides the same `override` argument Roulette uses, so
+-- it bypasses the cap as well as the curve and the number asked for is the
+-- number that happens.
+--
+-- Deliberately *not* persisted and not exposed to players: it's a console knob,
+-- and a fresh server comes up on the real curve.
+function TowerService.setBlockTypeChance(chance: number?)
+	devBlockTypeChance = chance
+end
+
 -- ---------------------------------------------------------- the round break --
 --
 -- The storm taking the tower ends the round. What follows is the one moment the
@@ -2275,6 +2614,25 @@ end
 --
 -- The modifier is applied *here* and nowhere else, which is what makes a voted
 -- mode last a whole round: `runCheckpoint` deliberately doesn't touch it.
+
+-- A mode to play next instead of asking. Set by the `gamemode` cmdr command and
+-- consumed by the first `nextMode` after it, so it forces exactly one round —
+-- otherwise a dev pin would quietly become the server's permanent ballot.
+local forcedMode: string? = nil
+
+-- What the next round plays as: the pin if one is set, otherwise the poll.
+--
+-- **Yields** in the second case, for the length of the vote. An unregistered or
+-- skipped vote comes back nil, and `modifierFor` turns that into the Classic
+-- numbers — the same round winning the Classic panel would have produced.
+local function nextMode(): string?
+	local pinned = forcedMode
+	if pinned ~= nil then
+		forcedMode = nil
+		return pinned
+	end
+	return GamemodeVoteService.startVote()
+end
 
 local function runRoundBreak()
 	if intermission then
@@ -2295,14 +2653,35 @@ local function runRoundBreak()
 		-- Let the wreck read as a consequence before a UI opens over it.
 		task.wait(Constants.ROUND_BREAK_WRECK_SECONDS)
 
-		-- Yields for the length of the poll. An unregistered or skipped vote comes
-		-- back nil, and `modifierFor` turns that into the Classic numbers — the
-		-- same round winning the Classic panel would have produced.
-		applyStage(Gamemodes.modifierFor(GamemodeVoteService.startVote()))
+		applyStage(Gamemodes.modifierFor(nextMode()))
+
+		-- PVP isn't a set of numbers for the round that follows — it *is* the
+		-- round. The board goes to PvpService for the length of a match and comes
+		-- back empty, and then the players vote again rather than being dropped
+		-- into a classic run nobody picked. Voting PVP twice running plays two
+		-- matches, which is the honest reading of the ballot.
+		--
+		-- The loop is what makes it a peer of the other modes rather than an
+		-- interlude: everything outside it (the wreck, the reset, the fresh clock,
+		-- the round funnel) happens once, for whichever mode the players finally
+		-- settled on.
+		while stage.pvp do
+			pvpActive = true
+			local ok, err = pcall(pvp().runMatch)
+			pvpActive = false
+			-- A match that throws must not take the server's rounds with it. The
+			-- board is left to `runMatch`'s own cleanup; what matters here is that
+			-- control reaches the vote again rather than the round break dying
+			-- inside a `while` with the game parked behind it.
+			if not ok then
+				warn(`[TowerGame] PVP match ended in error: {err}`)
+			end
+			applyStage(Gamemodes.modifierFor(nextMode()))
+		end
 
 		-- The new round's clock starts once the rules are known, so the players
 		-- don't lose any of it to the vote they were made to sit through.
-		state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
+		restartStormClock()
 		state.phase = PHASE.SETTLING
 		broadcast()
 
@@ -2328,6 +2707,25 @@ end
 -- the play plane; and the height poll stops measuring it, so a settled block
 -- flung skyward can't be read as a taller tower and clear the stage out of its
 -- own debris.
+-- End the round now and play `modeId` next, skipping the vote.
+--
+-- The dev handle on everything that only happens between rounds. It exists
+-- because PVP is otherwise a full storm clock away — five minutes of classic
+-- play, and then a poll that four other people get a say in — which is a very
+-- long way to go to look at a lane. It routes through the real round break, so
+-- what it produces is the round the vote would have produced.
+--
+-- Refuses mid-checkpoint and mid-break for the same reason the action products
+-- do: those sequences set the state this would be writing over.
+function TowerService.forceRound(modeId: string): boolean
+	if checkpointActive or intermission then
+		return false
+	end
+	forcedMode = modeId
+	runRoundBreak()
+	return true
+end
+
 local function tearTowerLoose(): { Block }
 	local debris = blocks
 	blocks = {}
@@ -2428,7 +2826,7 @@ function TowerService.nuke(): boolean
 	-- broadcast carrying the old height beside a block count of zero is a state
 	-- that never existed. `restingTopY` reads the checkpoint floors now that
 	-- `blocks` is empty, which is exactly what the poll is about to conclude.
-	state.height = restingTopY() - baseTopY
+	state.height = restingTopY(CLASSIC_LANE, baseTopY) - baseTopY
 	broadcast()
 	return true
 end
@@ -2443,9 +2841,10 @@ local function updateStorm(height: number): boolean
 	-- round's rules are known, so no part of the round is spent on the poll.
 
 	-- Nobody playing: hold the clock rather than letting it expire against an
-	-- empty server.
+	-- empty server. `state.stormSeconds` rather than the gamemode's, so a stage
+	-- reached deep into a run is held at its own grown length.
 	if #queue == 0 then
-		state.stormEndsAt = now + stage.stormSeconds
+		state.stormEndsAt = now + state.stormSeconds
 		return false
 	end
 
@@ -2705,20 +3104,19 @@ local function updateStreamingFocus()
 	part.Position = Vector3.new(0, (floor + top) / 2, Constants.PLANE_Z)
 end
 
-local function updateHeight()
-	-- The checkpoint cutscene and the round break each own the world while they
-	-- run. Measuring a tower that's mid-demolition would spike the readout off
-	-- flying debris and could clear the next stage from the wreckage of the last.
-	if checkpointActive or intermission then
-		if os.clock() - lastBroadcast > 1 then
-			broadcast()
-		end
-		return
-	end
-
-	local top = baseTopY
-	local now = os.clock()
-
+-- Everything the blocks themselves need doing every poll, whichever mode is
+-- running: sweep the destroyed and the fallen, char what's burning, and decide
+-- what has come to rest.
+--
+-- Split out of the height measurement below because those two used to be one
+-- loop and only one of them belongs to the classic game. A PVP round has no
+-- shared tower to measure and no storm to measure it against, but its blocks
+-- still have to settle, still catch fire and still fall off the side — so this
+-- half keeps running for the whole match while the half below is parked.
+--
+-- `floorY` is what "fallen off" is measured against. Every lane stands at the
+-- same altitude, so one number covers the board.
+local function sweepBlocks(now: number, floorY: number)
 	for index = #blocks, 1, -1 do
 		local block = blocks[index]
 		if block.root.Parent == nil then
@@ -2726,7 +3124,7 @@ local function updateHeight()
 			continue
 		end
 		-- Knocked off the platform: stop paying for its physics.
-		if block.root.Position.Y < baseTopY - Constants.DESPAWN_BELOW then
+		if block.root.Position.Y < floorY - Constants.DESPAWN_BELOW then
 			removeBlockAt(index).model:Destroy()
 			continue
 		end
@@ -2737,12 +3135,28 @@ local function updateHeight()
 		end
 
 		updateSettle(block, now)
+	end
+end
+
+-- The scoring number for one lane: the top of everything settled in it, as studs
+-- above the floor it stands on.
+--
+-- Deliberately narrower than `restingTopY`, which answers "what could a piece
+-- land on". This one counts only blocks that have held still for
+-- SETTLE_CONFIRM_SECONDS and skips Noobs entirely, because a walking block would
+-- make the readout bob. Both exclusions are right for a score and wrong for
+-- clearance, which is why the two measurements stayed separate.
+local function measureLane(laneX: number, floorY: number): number
+	local top = floorY
+	for _, block in blocks do
+		if block.laneX ~= laneX or block.root.Parent == nil then
+			continue
+		end
 		-- A Noob walks and jumps; it's a hazard standing on the tower, not part
 		-- of it, and letting it into the measurement would make the height bob.
 		if not block.settled or block.custom then
 			continue
 		end
-
 		for _, part in modelParts(block.model) do
 			local partTop = partTopY(part)
 			if partTop > top then
@@ -2752,14 +3166,44 @@ local function updateHeight()
 	end
 
 	-- Checkpoint platforms are part of the tower even though they aren't blocks.
-	for _, platform in platforms do
-		local platformTop = partTopY(platform)
-		if platformTop > top then
-			top = platformTop
+	-- They only exist in the classic lane; see `restingTopY`.
+	if laneX == CLASSIC_LANE then
+		for _, platform in platforms do
+			local platformTop = partTopY(platform)
+			if platformTop > top then
+				top = platformTop
+			end
 		end
 	end
+	return top - floorY
+end
 
-	local height = top - baseTopY
+local function updateHeight()
+	local now = os.clock()
+
+	-- A PVP round runs *inside* the classic round break, so `intermission` is up
+	-- for the whole of it and the branch below would park the block sweep along
+	-- with everything else. The sweep has to keep running: those blocks are the
+	-- match. Everything past this point is the classic game's — one shared tower,
+	-- a storm clock, a stage to clear — and none of it exists during a match.
+	if pvpActive then
+		sweepBlocks(now, baseTopY)
+		return
+	end
+
+	-- The checkpoint cutscene and the round break each own the world while they
+	-- run. Measuring a tower that's mid-demolition would spike the readout off
+	-- flying debris and could clear the next stage from the wreckage of the last.
+	if checkpointActive or intermission then
+		if os.clock() - lastBroadcast > 1 then
+			broadcast()
+		end
+		return
+	end
+
+	sweepBlocks(now, baseTopY)
+
+	local height = measureLane(CLASSIC_LANE, baseTopY)
 	local changed = math.abs(height - state.height) > Constants.HEIGHT_EPSILON or #blocks ~= state.blockCount
 	state.height = height
 	if height > state.maxHeight then
@@ -2890,6 +3334,8 @@ local function runTurns()
 	while true do
 		-- Nobody gets a piece while the checkpoint cutscene is playing, or while
 		-- the round break is between the storm and the next round's first turn.
+		-- A PVP match runs inside that break, so this covers it too — its lanes
+		-- deal their own pieces and the queue has nothing to say about them.
 		while checkpointActive or intermission do
 			task.wait(0.1)
 		end
@@ -2908,14 +3354,18 @@ local function runTurns()
 		-- The clock is re-read each pass rather than captured, because the first
 		-- touch extends it (see `aim`) — a captured deadline would end the turn
 		-- of the player who just woke up.
-		while held ~= nil and workspace:GetServerTimeNow() < state.turnEndsAt and player.Parent == Players do
+		while
+			classicHeld() ~= nil
+			and workspace:GetServerTimeNow() < state.turnEndsAt
+			and player.Parent == Players
+		do
 			task.wait(0.1)
 		end
-		-- Read before the drop below, because that's what clears it: `held` still
-		-- being here means the clock beat the player to it, while it going nil is
-		-- them having released the piece themselves.
-		local autoDropped = held ~= nil
-		if held ~= nil then
+		-- Read before the drop below, because that's what clears it: the piece
+		-- still being here means the clock beat the player to it, while it going
+		-- nil is them having released it themselves.
+		local autoDropped = classicHeld() ~= nil
+		if autoDropped then
 			TowerService.release()
 		end
 
@@ -2923,6 +3373,97 @@ local function runTurns()
 
 		task.wait(Constants.SETTLE_SECONDS)
 	end
+end
+
+-- ------------------------------------------------------- the block engine API --
+--
+-- What PVP borrows. Everything here already existed for the classic game and was
+-- only ever missing a lane to be told about — which is why the mode could be
+-- built on this engine instead of beside it, and why there is exactly one
+-- implementation of a bomb, a fire, a settle and the play plane in the codebase.
+--
+-- `dealPiece`, `dropPiece` and `applyPlacement` are further up, next to the
+-- classic wrappers that call them.
+
+-- The piece this player is aiming, or nil.
+function TowerService.heldOf(player: Player): Held?
+	return heldBy[player]
+end
+
+-- Lift this player's piece if their lane has grown under it. Returns whether it
+-- moved, so a caller polling every lane knows whether the state is worth sending.
+function TowerService.reseatFor(player: Player, down: boolean?): boolean
+	local piece = heldBy[player]
+	if piece == nil then
+		return false
+	end
+	return reseatPiece(piece, down == true)
+end
+
+-- Take back a piece somebody is still aiming, without dropping it.
+--
+-- The distinction matters at the end of a match: a piece released when the clock
+-- stops is a block that keeps climbing while the standings are being read, so the
+-- last moment of a round would decide it. Their client sees the piece go and
+-- tears its own preview down, exactly as it does when a checkpoint takes one.
+function TowerService.cancelPiece(player: Player)
+	local piece = heldBy[player]
+	if piece == nil then
+		return
+	end
+	heldBy[player] = nil
+	piece.model:Destroy()
+end
+
+-- The scoring height of one lane, in studs above the floor it stands on.
+function TowerService.laneHeight(laneX: number, floorY: number): number
+	return measureLane(laneX, floorY)
+end
+
+-- How many blocks are standing in one lane. Walks the list rather than keeping a
+-- per-lane counter: blocks leave through six different paths (burnt out, fallen
+-- off, blasted, destroyed with their model) and a counter maintained across all
+-- of them is a counter that eventually drifts.
+function TowerService.laneBlockCount(laneX: number): number
+	local count = 0
+	for _, block in blocks do
+		if block.laneX == laneX and block.root.Parent ~= nil then
+			count += 1
+		end
+	end
+	return count
+end
+
+-- Take one lane off the board: the piece anyone is aiming over it, and every
+-- block standing in it. Used when a match ends and when a lane is retired.
+--
+-- Destroys rather than blasts. The wreck is the classic storm's language, and it
+-- would need somewhere to fall that isn't through five other lanes' towers.
+function TowerService.clearLane(laneX: number)
+	for player, piece in heldBy do
+		if piece.laneX ~= laneX then
+			continue
+		end
+		heldBy[player] = nil
+		piece.model:Destroy()
+	end
+	for index = #blocks, 1, -1 do
+		if blocks[index].laneX == laneX then
+			removeBlockAt(index).model:Destroy()
+		end
+	end
+end
+
+-- Put the world into a zone from outside the classic checkpoint path, without
+-- touching the classic state the HUD reads.
+--
+-- `setZone` above is the cmdr command's door and broadcasts the classic packet;
+-- during a PVP match that packet is stale by definition, so the match sends the
+-- zone on its own wire and calls this to make it true in the world.
+function TowerService.applyZone(zoneId: number, sky: number)
+	state.zoneId = zoneId
+	state.zoneSky = sky
+	applyZoneToTower()
 end
 
 -- ----------------------------------------------------------------- lifecycle --
@@ -3000,20 +3541,27 @@ function TowerService.Start()
 	-- Zones own gravity (Space drops it to a sixth), so the run starts from the
 	-- default rather than from whatever the place file was saved with.
 	workspace.Gravity = Zones.gravityOf(state.zoneId)
-	state.stormEndsAt = workspace:GetServerTimeNow() + stage.stormSeconds
+	restartStormClock()
 
 	Packets.Place.listen(function(payload, player)
 		TowerService.applyPlacement(player, payload.x, payload.turns)
 	end)
 	Packets.Release.listen(function(payload, player)
-		local piece = held
-		if piece == nil or piece.player ~= player then
+		if heldBy[player] == nil then
 			return
 		end
 		-- The drop carries its own placement so the piece falls exactly where the
 		-- holder saw it, even if their last Place packet is still in flight.
 		TowerService.applyPlacement(player, payload.x, payload.turns)
-		TowerService.release()
+		-- Which drop this is depends on who's running the board. The classic
+		-- `release` closes a turn as well as dropping a block, and a PVP lane has
+		-- no turn to close — its own loop notices the piece went and deals the
+		-- next one.
+		if pvpActive then
+			TowerService.dropPiece(player)
+		else
+			TowerService.release()
+		end
 	end)
 
 	for _, player in Players:GetPlayers() do

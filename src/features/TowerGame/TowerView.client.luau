@@ -18,12 +18,14 @@ local BlockLabel = require(ReplicatedStorage.Features.TowerGame.BlockLabel)
 local BlockTypes = require(ReplicatedStorage.Features.TowerGame.BlockTypes)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local ControlsHint = require(ReplicatedStorage.Features.TowerGame.ControlsHint)
+local PvpConstants = require(ReplicatedStorage.Features.TowerGame.PvpConstants)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
 local TowerHUD = require(ReplicatedStorage.Features.TowerGame.TowerHUD)
 local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 -- Client-realm siblings (StarterPlayerScripts.Features.*).
 local PlayerDataController = require(script.Parent.Parent.PlayerData.PlayerDataController)
+local PvpController = require(script.Parent.PvpController)
 local TowerAimController = require(script.Parent.TowerAimController)
 local TowerCameraController = require(script.Parent.TowerCameraController)
 local TowerController = require(script.Parent.TowerController)
@@ -138,8 +140,19 @@ return function()
 	local overview, setOverview = React.useState(TowerCameraController.isOverview)
 
 	local profile = Boil.useReplica(PlayerDataController, Constants.PROFILE_KEY)
+	-- Subscribed to, not just read: this HUD has to come down the frame a match
+	-- starts and go back up the frame it ends, and neither is a change to the
+	-- classic state packet — which the server stops sending for the duration.
+	local pvp = Boil.useReplica(PvpController)
 
 	if state == nil then
+		return nil
+	end
+
+	-- A PVP round owns the board, and everything this HUD draws — the turn strip,
+	-- the storm clock, the target — is about a game that isn't being played. The
+	-- PVP HUD is its own root presentation (see PvpPresentation) and takes over.
+	if pvp ~= nil and pvp.phase ~= PvpConstants.PHASE.OFF then
 		return nil
 	end
 

@@ -17,6 +17,10 @@ local Signal = require(ReplicatedStorage.Packages.Signal)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 
+-- Client-realm sibling. Required for the two mode-routing answers below only —
+-- the classic store itself knows nothing about PVP.
+local PvpController = require(script.Parent.PvpController)
+
 export type State = {
 	phase: number,
 	holderUserId: number,
@@ -78,6 +82,40 @@ function TowerController.isMyTurn(): boolean
 	return data.holderUserId ~= 0 and data.holderUserId == Players.LocalPlayer.UserId
 end
 
+-- Whether this player has a piece in the air, in whichever mode is running.
+--
+-- The aiming and input controllers gate on this rather than on `isMyTurn`,
+-- because "my turn" is a statement about a queue and PVP has none — everybody is
+-- holding a piece at once. In the classic game the two are the same answer.
+function TowerController.isAiming(): boolean
+	if PvpController.isActive() then
+		return PvpController.isHolding()
+	end
+	return TowerController.isMyTurn()
+end
+
+-- The world X that a placement's `x` is measured from: this player's own lane
+-- centre. 0 for the classic game, which is one lane at the arena's origin.
+--
+-- Every number the client sends the server is relative to this, which is what
+-- makes the server's clamp the same clamp in both modes — and what stops a
+-- client aiming into somebody else's lane by sending a bigger number.
+function TowerController.laneOriginX(): number
+	return PvpController.laneOriginX()
+end
+
+-- Seconds left before the piece this player is aiming drops itself.
+function TowerController.pieceSecondsLeft(): number
+	if not PvpController.isActive() then
+		return TowerController.secondsLeft()
+	end
+	local lane = PvpController.myLane()
+	if lane == nil or not lane.holding or lane.pieceEndsAt <= 0 then
+		return 0
+	end
+	return math.max(0, lane.pieceEndsAt - workspace:GetServerTimeNow())
+end
+
 -- Seconds left on the current turn. `turnEndsAt` is a server-time stamp, so this
 -- stays honest without the server ticking a countdown at us.
 function TowerController.secondsLeft(): number
@@ -98,7 +136,7 @@ end
 -- Report where the holder has the piece. TowerAimController owns the numbers and
 -- the cadence; this is just the wire. The server clamps whatever arrives.
 function TowerController.place(x: number, turns: number)
-	if not TowerController.isMyTurn() then
+	if not TowerController.isAiming() then
 		return
 	end
 	Packets.Place.send({ x = x, turns = turns })
@@ -108,7 +146,7 @@ end
 -- the piece land where the holder saw it rather than where the last stream
 -- update happened to reach.
 function TowerController.release(x: number, turns: number)
-	if not TowerController.isMyTurn() then
+	if not TowerController.isAiming() then
 		return
 	end
 	Packets.Release.send({ x = x, turns = turns })

@@ -49,20 +49,27 @@ time it jumped.
 
 The pressure mechanic, running independently of whose turn it is.
 
-- Each stage names a `targetHeight` and a `STORM_SECONDS` (300) clock. The first
-  checkpoint is `STORM_FIRST_TARGET` (40 studs) up, and every cleared stage puts
-  the next one `STORM_GAP_GROWTH` (8) studs further than the last gap — 40, 48,
-  56, and so on.
+- Each stage names a `targetHeight` and a clock. The first checkpoint is
+  `STORM_FIRST_TARGET` (40 studs) up on a `STORM_SECONDS` (300) clock, and every
+  cleared stage puts the next one `STORM_GAP_GROWTH` (5) studs further than the
+  last gap — 40, 45, 50 — on a clock `STORM_TIME_GROWTH` (5) seconds longer —
+  300, 305, 310.
+
+  **The two grow together on purpose.** A gap that stretches against a fixed
+  clock makes every stage strictly harder than the last, so a run ends wherever
+  that curve happens to cross the room's throughput; extending the clock
+  alongside it means a later stage asks for a *longer climb* rather than a
+  faster one.
 
   **Read the target against the turn budget, not on its own.** A stage is one
-  shared allowance of about eighteen turns (`STORM_SECONDS` / (`TURN_SECONDS` +
+  shared allowance of about eighteen turns (the stage clock / (`TURN_SECONDS` +
   `SETTLE_SECONDS`)) however many players are in the room, and a flat piece adds
   `BLOCK_SIZE` (4) studs. The first target used to be 60 — fifteen of those
   eighteen turns spent gaining full height, a three-turn margin for every piece
   that slid off and every player who wasn't looking — and the onboarding funnel
   lost three quarters of its players at the first checkpoint. 40 is ten clean
-  placements. The growth was raised alongside it so only the early stages get
-  easier: the curve passes the old one by the fifth checkpoint.
+  placements. The growth is the same 5 the old targets used, so the curve runs
+  parallel to the one it replaced, 20 studs below it the whole way up.
 - **Cleared** — the tower reaches the target and the [checkpoint cutscene](#the-checkpoint-cutscene)
   runs. Afterwards the floor count is up and the next target is set to *the height
   they actually reached* plus the new gap; overshooting doesn't make the next stage
@@ -252,6 +259,14 @@ modes and it's what asks:
 | Blitz Builder | Half the turn clock. The storm clock is left alone, so shorter turns buy the players *more* attempts, not fewer. |
 | Roulette | **70%** of pieces are special — a flat `blockTypeChance` that bypasses the curve *and* `MAX_CHANCE`. |
 | Lightning Storm | Lightning strikes in **every** zone, not just Stormy. |
+| PVP | **Replaces the round.** Six lanes, no turns, tallest tower before the clock — see [TowerGamePvp.md](TowerGamePvp.md). |
+
+**PVP is the one mode that isn't a set of numbers.** Its modifier carries
+`pvp = true`, and `runRoundBreak` reads that as "hand the board to `PvpService`
+and wait", then puts the ballot back up rather than starting a classic run
+nobody picked. Everything else in this document describes the classic round; the
+PVP round shares this file's *block engine* (pieces, physics, hazards, the play
+plane) and none of its turn queue, storm or checkpoints.
 
 **Classic is always on the ballot** — it carries `pinned = true`, so GamemodeVote
 keeps it and rolls the remaining slots from the twists. A ballot of nothing but
@@ -275,8 +290,11 @@ the vote has the board to itself and needs no state of its own to get it.
 **Both clocks ride in the `State` packet.** The HUD draws them as fractions — the
 turn ring against the turn length, the storm bar against the stage length — so a
 client reading them off `Constants` would draw the wrong shape for every voted
-stage. `applyStage` is the one place that writes `stage` and mirrors those two
-numbers into `state`.
+stage. `applyStage` is the one place that writes `stage`, and it mirrors
+`turnSeconds` into `state`; `stormSeconds` is left to `restartStormClock`, since
+the stage length isn't the gamemode's number alone — it's that plus
+`STORM_TIME_GROWTH` per floor already cleared. Both clocks are therefore always
+written before the broadcast that follows.
 
 ## The held piece
 
@@ -384,6 +402,53 @@ Nothing here is authoritative. `TowerService.applyPlacement` clamps X to
 ±`STEER_LIMIT_X` and turns to `% 4` on every message, so "the client owns the
 feel" never becomes "the client owns the game".
 
+## What a block is made of
+
+A piece is **four welded 4×4×4 cubes wearing one rounded shell**, and the split
+between those two things is the thing to hold on to.
+
+The cubes are the game: they collide, they carry the mass, and every measurement
+in `TowerService` lands on them. They are square on purpose — a rounded collision
+shape settles into its neighbours' corners, and a flat course would stop being
+flat. They are also **invisible**.
+
+What you see is the **body** (`BlockBody.luau`): a single CSG union of the whole
+tetromino with its corners rounded, one per shape, cloned out of
+`ReplicatedStorage.Assets.BlockBodies` and welded over the cubes. The rounding
+runs *through* the joints between cells — a cell with a neighbour drops its
+rounding on that side and the edge cylinders are stretched across — so a piece
+reads as one moulded shape rather than four blocks bolted together. Rounded only
+at the shape's true outside corners.
+
+The body is `CanCollide` false, `CanQuery` false and `Massless`. That is what
+makes it safe to **resize**, which is how the squash works
+(`TowerSquashController`): a damped spring off each impact writes the body's
+`Size`, and shifts its weld's `C0` so the compression happens *onto* the surface
+it hit rather than about its own centre. Doing any of that to a cell would change
+its mass (breaking the Anvil and Feather densities), change its collision, and
+corrupt `partTopY` → `restingTopY` → `SPAWN_CLEARANCE`, which is how a piece ends
+up spawning inside the tower.
+
+Three consequences worth knowing:
+
+- **`modelParts` excludes the body; `allParts` includes it.** The body is a
+  BasePart descendant like any cell, and it is the wrong answer to every question
+  the simulation asks — no mass, no raycast, and a stud wider than the cubes
+  whenever the squash has hold of it. Excluding it in the helper rather than at
+  the call sites makes the safe answer the default. A third helper, `shownParts`,
+  is what anything writing *transparency* must use: fading "every part" would fade
+  the hidden cubes up from invisible and a ghost would show its own skeleton.
+- **The Retro zone takes the coat off.** Studs are a property of a flat face and
+  render as nothing on a rounded one, so Retro hides the body and puts the square
+  cells back on screen — which is what a 1962 brick should look like, and costs
+  nothing, because the cells were only ever invisible, never removed.
+- **A missing asset degrades to the old game.** No `BlockBodies` folder means the
+  cubes stay visible and the game looks exactly as it did before bodies existed.
+
+Skins still own **material and colour**, so a Concrete block is a rounded concrete
+block and Needoh is rounded glass. The shape is the house style; the surface is
+still the thing being sold.
+
 ## Blocks: skins and types
 
 Every piece rolls two independent things at spawn.
@@ -397,11 +462,39 @@ makes. They come from the ASMR kit in the place, so the asset ids there
 are ones that kit actually ships; don't invent new ones without checking they
 resolve, or a skin goes silent.
 
-| Skin | Look | Lands like |
-| ---- | ---- | ---------- |
-| Classic | Concrete, grey | a dry knock |
-| Needoh | Glass, pink | squish, plus a release beat as it settles |
-| Butter | SmoothPlastic, yellow | softer squish, same settle beat |
+| Skin | Look | Lands like | `squish` | weight |
+| ---- | ---- | ---------- | -------- | ------ |
+| Classic | Concrete, grey | a dry knock | 0.15 | 4 |
+| Needoh | Glass, pink | squish, plus a release beat as it settles | 1.0 | 3 |
+| Butter | SmoothPlastic, yellow | softer squish, same settle beat | 0.75 | 3 |
+| Wood | WoodPlanks, brown | a hard thunk | 0.12 | 1 |
+| Grass | Grass, green | a muted thud, with a settle beat | 0.45 | 1 |
+| Concrete | Concrete, grey | the same knock pitched down heavier | 0.06 | 1 |
+
+The last three are a deliberate **rare tier** — one weight each against the stock
+three's 3-4, so each turns up about a third as often as Butter and all three
+together are under a quarter of pieces. They hold the ends of the squish scale
+(0.06 and 0.45) rather than its middle, and a tower built mostly out of the
+extremes stops reading as a range.
+
+Wood, Grass and Concrete carry **placeholder sounds** — ids that resolve because
+they're already in `Assets.Sounds` (`Stamp`, `Drop2`, `NormalBlockCollision`),
+picked so a new skin is never silent, but not auditioned against the ASMR kit.
+Swapping them is a one-line edit each.
+
+Note that **Concrete and Classic share a material.** Classic *is* the concrete
+block; the new one is heavier and duller and exists to sit at the bottom of the
+squish scale. If the pair reads as one skin in play, the fix is to re-material
+Classic (Plastic, say) rather than to add a third grey.
+
+`squish` is how far the skin deforms on impact, 0 = rigid, 1 = full jelly. It's
+read by `TowerJellyController` — **temporary dev scaffolding**, one client-side
+file that squashes a `SpecialMesh` on every block with a damped spring. Delete
+that file and `squish` becomes an unread number; nothing else consumes it. The
+skin id reaches the client on the `SKIN_ATTRIBUTE` the server stamps in both
+`buildPiece` and `registerBlock` — both, because a piece is parented into the
+arena as the *held* piece and doesn't reach `registerBlock` until it's released,
+so stamping only there left the client reading a default for the whole fall.
 
 Id 4 is **retired**: it was "Glow", a Neon skin that rolled for free. Neon is a
 purchase now (see [Skin packs](#skin-packs)), and a stock skin that already
@@ -693,7 +786,7 @@ the tower has to stay empty.
 | Base platform | 48 × 4 × 8 centred at **(0, 40, 0)** — top surface **y = 42** | `PLATFORM_SIZE`, `BASE_POSITION` |
 | Build column | `x −24 … +24` (pieces steer to ±22 and overhang) | `STEER_LIMIT_X` |
 | First checkpoint floor | **y 82 – 86** (40 studs above the base top) | `STORM_FIRST_TARGET` |
-| Later checkpoints | +48, +56, +64 … above the last one; everything below each new floor is demolished | `STORM_GAP_GROWTH` |
+| Later checkpoints | +45, +50, +55 … above the last one; everything below each new floor is demolished | `STORM_GAP_GROWTH` |
 | Camera, desktop | (0, ≈66, **+78**), FOV 60 vertical | `CAMERA_DISTANCE` |
 | Camera, phone | (0, ≈57, **+94**) | `CAMERA_DISTANCE_TOUCH` |
 | Camera, max pullback | up to **z +420** on overview / checkpoint shots | `CAMERA_MAX_DISTANCE` |
@@ -711,6 +804,7 @@ All under `ReplicatedStorage.Assets` (Rojo does **not** sync these).
 | Asset | What it is | Missing means |
 | ----- | ---------- | ------------- |
 | `Assets.Noob` | A `Model` with a `Humanoid` and a `HumanoidRootPart` — a classic Noob rig | The Noob type silently rolls an ordinary block instead |
+| `Assets.BlockBodies` | Seven CSG unions named `I` `O` `T` `S` `Z` `J` `L` — the rounded shell each shape is seen as. **Don't hand-build these**: paste `tools/build-block-bodies.luau` into the command bar in Edit mode, which also stamps the `CellOffset` and `BaseSize` attributes the runtime reads | Blocks render as the plain visible cubes they used to be — the game before it had bodies |
 
 > **The rig must be named exactly `Noob`.** Roblox's Rig Builder inserts one
 > called `Dummy`, and `NoobBlock.template()` looks the name up directly — a rig
@@ -754,7 +848,7 @@ part serves everyone because everyone is looking at the same tower.
 
 Centring on the live span is what makes this safe indefinitely rather than just
 buying more headroom. Every checkpoint demolishes the floors below it, so what
-exists at any moment is *one stage's climb* (`stormGap`, 60 studs and growing by
+exists at any moment is *one stage's climb* (`stormGap`, 40 studs and growing by
 5) — a few hundred studs at most, comfortably inside the radius no matter how
 high the run's absolute altitude has got. Pieces spawn above the top and debris
 flies past it; both are well within the sphere at that distance.
@@ -846,6 +940,8 @@ devices.
 | `BlockTypes.luau` | shared | The twelve block types, their descriptions, the odds curve, and the Mystery pool |
 | `BlockLabel.luau` | shared | The world-space name plate, and `titleFor` — the one place a piece is named |
 | `NoobBlock.luau` | shared | The Noob rig: build, wander, squash. Server-only in practice |
+| `BlockBody.luau` | shared | The rounded shell: the template lookup, welding one over a piece's cubes, and the guard that keeps it out of the simulation |
+| `TowerSquashController.client.luau` | client | Squash and stretch — a damped spring off each impact, written to the body's `Size` and weld `C0` and to nothing else |
 | `Zones.luau` | shared | The seven zones, their skies, and their gravity |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `Gamemodes.luau` | shared | The three votable modes and the stage numbers each one sets |
@@ -992,8 +1088,9 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `GAMEPAD_STEER_DEADZONE` | Below this the left stick reads as centred and the D-pad / bumpers take over (0.2) |
 | `SPAWN_CLEARANCE` | Clear air under a fresh piece, measured from its lowest possible point — see [The held piece](#the-held-piece) |
-| `STORM_SECONDS` | The stage clock (300) |
-| `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 40 studs, each next gap 8 further. Tune them against the ~18-turn stage budget, not on their own — see [The storm](#the-storm) |
+| `STORM_SECONDS` | The first stage's clock (300) |
+| `STORM_TIME_GROWTH` | Seconds added to the stage clock per checkpoint cleared (5) |
+| `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 40 studs, each next gap 5 further. Tune them against the ~18-turn stage budget, not on their own — see [The storm](#the-storm) |
 | `STORM_BLAST_*` | How hard the storm throws the tower, and how long the debris flies |
 | `CHECKPOINT_*_SECONDS` | The four beats of the checkpoint cutscene. Total pause is their sum plus `PLATFORM_GROW_SECONDS` |
 | `CHECKPOINT_BLAST_*` | How hard the old tower is thrown when the new floor lands |
@@ -1580,7 +1677,7 @@ the wreck scatters instead of sliding sideways. The debris is left flying for
 deadline.
 
 Then `resetRun` puts everything back to the start: checkpoints destroyed, floor
-count zeroed, gap back to 60, fresh clock.
+count zeroed, gap back to 40, and the clock back to its un-grown 300.
 
 One thing deliberately survives: **`maxHeight`**. It's the server's best-ever
 record rather than part of the run, and `TowerStatsService` has already banked it

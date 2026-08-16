@@ -23,8 +23,11 @@ local BlockLabel = require(ReplicatedStorage.Features.TowerGame.BlockLabel)
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 
--- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
+-- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
 local TowerController = require(script.Parent.TowerController)
+-- Subscribed to alongside the classic store: in PVP the piece being handed out
+-- is announced on the match packet, not the turn packet.
+local PvpController = require(script.Parent.PvpController)
 -- The landing-preview toggle. Read at build time, so flipping it takes effect on
 -- the next turn rather than mid-aim.
 local SettingsController = require(script.Parent.Parent.Settings.SettingsController)
@@ -55,9 +58,21 @@ local baseY = 0
 local lastSentAt = 0
 local lastSentX = math.huge
 local lastSentTurns = -1
+-- World X of the lane this turn is being played in, captured at setup.
+--
+-- `aimX` is measured from *here*, not from the world origin, and so is every
+-- number that goes over the wire — which is what makes the server's clamp mean
+-- "inside your own lane" rather than "inside the middle of the arena". In the
+-- classic game it's 0 and every line below reduces to what it was.
+--
+-- Captured once per turn rather than read per frame: a lane can't change under a
+-- piece, and reading it live would let a mid-turn state packet slide the piece
+-- sideways.
+local laneX = 0
 
 local function pieceCFrame(): CFrame
-	return CFrame.new(aimX, baseY, Constants.PLANE_Z) * CFrame.Angles(0, 0, -aimTurns * math.pi / 2)
+	return CFrame.new(laneX + aimX, baseY, Constants.PLANE_Z)
+		* CFrame.Angles(0, 0, -aimTurns * math.pi / 2)
 end
 
 -- Hide/show the authoritative piece for this client only.
@@ -249,7 +264,8 @@ local function setup()
 	end
 
 	serverPiece = piece
-	aimX = piece:GetPivot().Position.X
+	laneX = TowerController.laneOriginX()
+	aimX = piece:GetPivot().Position.X - laneX
 	aimTurns = 0
 	baseY = piece:GetPivot().Position.Y
 
@@ -295,14 +311,17 @@ function TowerAimController.setSteer(dir: number)
 	steerDir = if dir ~= dir then 0 else math.clamp(dir, -1, 1)
 end
 
--- Absolute placement from the mouse.
+-- Absolute placement from the mouse. `x` is a *world* X — the pointer controller
+-- casts onto the play plane and has no idea which lane the player is in — so it's
+-- brought back to the lane before it's clamped. Point at somebody else's tower
+-- and your own piece stops at the edge of your lane, which is the honest answer.
 function TowerAimController.pointAt(x: number)
 	if not active or x ~= x then
 		return
 	end
 	-- Pointing wins over holding; otherwise the two fight every frame.
 	steerDir = 0
-	aimX = math.clamp(x, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X)
+	aimX = math.clamp(x - laneX, -Constants.STEER_LIMIT_X, Constants.STEER_LIMIT_X)
 end
 
 function TowerAimController.rotate()
@@ -374,16 +393,19 @@ local function step(deltaTime: number)
 end
 
 function TowerAimController.Start()
-	local wasMyTurn = false
+	local wasAiming = false
 
-	TowerController.DataChanged:Connect(function()
-		local isMyTurn = TowerController.isMyTurn()
-		if isMyTurn == wasMyTurn then
+	-- Fires on either mode's state packet. `isAiming` is the mode-agnostic answer
+	-- — my turn in classic, my lane's piece in PVP — so this one handler covers
+	-- both and neither store has to know the other exists.
+	local function onStateChanged()
+		local isAiming = TowerController.isAiming()
+		if isAiming == wasAiming then
 			return
 		end
-		wasMyTurn = isMyTurn
+		wasAiming = isAiming
 
-		if not isMyTurn then
+		if not isAiming then
 			teardown()
 			return
 		end
@@ -395,8 +417,14 @@ function TowerAimController.Start()
 		aimX = 0
 		aimTurns = 0
 		steerDir = 0
+		-- Set before `setup` yields on the piece replicating, so a placement sent
+		-- in that window is already measured from the right lane.
+		laneX = TowerController.laneOriginX()
 		task.spawn(setup)
-	end)
+	end
+
+	TowerController.DataChanged:Connect(onStateChanged)
+	PvpController.DataChanged:Connect(onStateChanged)
 
 	RunService.RenderStepped:Connect(step)
 end

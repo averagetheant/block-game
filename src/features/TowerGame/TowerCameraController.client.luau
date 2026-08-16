@@ -14,9 +14,12 @@ local RunService = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+local PvpConstants = require(ReplicatedStorage.Features.TowerGame.PvpConstants)
+local PvpLanes = require(ReplicatedStorage.Features.TowerGame.PvpLanes)
 
--- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
+-- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
 local TowerController = require(script.Parent.TowerController)
+local PvpController = require(script.Parent.PvpController)
 
 local TowerCameraController = {}
 
@@ -69,8 +72,14 @@ function TowerCameraController.Start()
 	-- Half the height the ordinary shot has in frame, at its ordinary distance.
 	local halfSpan = distance * math.tan(halfAngle)
 
-	local function shot(aimY: number, from: number): CFrame
-		return CFrame.lookAt(Vector3.new(0, aimY, Constants.PLANE_Z + from), Vector3.new(0, aimY, Constants.PLANE_Z))
+	-- `aimX` is which column of the arena the camera stands in front of. Zero for
+	-- every classic shot — one tower, at the origin — and the player's own lane
+	-- in PVP, which is the whole of "your camera follows your tower".
+	local function shot(aimX: number, aimY: number, from: number): CFrame
+		return CFrame.lookAt(
+			Vector3.new(aimX, aimY, Constants.PLANE_Z + from),
+			Vector3.new(aimX, aimY, Constants.PLANE_Z)
+		)
 	end
 
 	-- How far back `span` studs of height need the camera to stand — and never
@@ -81,12 +90,16 @@ function TowerCameraController.Start()
 	-- what a monitor does across. On those screens the horizontal axis is the one
 	-- that clips first, and the piece would slide off the side at the steering
 	-- limit. Reading the real viewport aspect covers both axes on any screen.
-	local function distanceFor(span: number, minimum: number): number
+	--
+	-- `halfWidth` and `maximum` default to the ordinary play area's; the PVP map
+	-- shot overrides both, because it has to fit six lanes across rather than one
+	-- tower and the classic ceiling would crop the outer two off the sides.
+	local function distanceFor(span: number, minimum: number, halfWidth: number?, maximum: number?): number
 		local viewport = workspace.CurrentCamera.ViewportSize
 		local aspect = if viewport.Y > 0 then viewport.X / viewport.Y else 1
-		local forWidth = Constants.CAMERA_MIN_HALF_WIDTH / math.max(aspect, 0.1)
+		local forWidth = (halfWidth or Constants.CAMERA_MIN_HALF_WIDTH) / math.max(aspect, 0.1)
 		local needed = math.max(span / 2, forWidth) / math.tan(halfAngle)
-		return math.clamp(needed, minimum, Constants.CAMERA_MAX_DISTANCE)
+		return math.clamp(needed, minimum, maximum or Constants.CAMERA_MAX_DISTANCE)
 	end
 
 	-- The playing shot: level with the tower top, stretched upward by however much
@@ -98,14 +111,15 @@ function TowerCameraController.Start()
 	-- *more* tower rather than trading it away. With nothing held this reduces
 	-- exactly to the old shot: aim CAMERA_AIM_LIFT above the top, stand at
 	-- CAMERA_DISTANCE.
-	local function trackingShot(baseTopY: number, data: TowerController.State): CFrame
-		local towerTop = baseTopY + math.max(data.height, Constants.CAMERA_MIN_HEIGHT)
+	--
+	-- `aimX`, `height` and `pieceTop` are all the caller's, so this one shot
+	-- serves the classic tower and a PVP lane alike — the framing rules don't
+	-- change just because there are five more towers off to the sides.
+	local function trackingShot(aimX: number, floorY: number, height: number, pieceTop: number): CFrame
+		local towerTop = floorY + math.max(height, Constants.CAMERA_MIN_HEIGHT)
 		local bottom = towerTop + aimLift - halfSpan
-		local top = math.max(
-			towerTop + aimLift + halfSpan,
-			baseTopY + data.pieceTop + Constants.CAMERA_PIECE_MARGIN
-		)
-		return shot((bottom + top) / 2, distanceFor(top - bottom, distance))
+		local top = math.max(towerTop + aimLift + halfSpan, floorY + pieceTop + Constants.CAMERA_PIECE_MARGIN)
+		return shot(aimX, (bottom + top) / 2, distanceFor(top - bottom, distance))
 	end
 
 	-- The checkpoint look: frame the whole leg the players just built, from where
@@ -117,9 +131,70 @@ function TowerCameraController.Start()
 		local top = baseTopY + math.max(data.height, Constants.CAMERA_MIN_HEIGHT)
 		local span = math.max(top - bottom, 1) + Constants.CAMERA_CHECKPOINT_PADDING
 		return shot(
+			0,
 			(bottom + top) / 2,
 			distanceFor(span, distance * Constants.CAMERA_CHECKPOINT_PULLBACK)
 		)
+	end
+
+	-- ------------------------------------------------------------------- PVP --
+	--
+	-- Two shots, and they're the two the mode is about: your own lane, and the
+	-- whole board.
+
+	-- The map: every lane at once, which is what the HUD's camera button shows
+	-- during a match. Centred on the arena's origin because the seats are laid
+	-- out symmetrically about it (see PvpLanes), so this is the same shot however
+	-- many of them are taken — a framing that re-centred on whoever happened to
+	-- be playing would swing the whole board sideways every time somebody joined.
+	--
+	-- Width is what decides the distance here, not height: six lanes is 600 studs
+	-- across and the tallest tower in a three-minute match is a fraction of that.
+	-- Hence its own half-width and its own ceiling.
+	local function mapShot(floorY: number, tallest: number): CFrame
+		local top = floorY + math.max(tallest, PvpConstants.MAP_MIN_HEIGHT)
+		local span = math.max(top - floorY, 1) + PvpConstants.MAP_PADDING
+		return shot(
+			0,
+			(floorY + top) / 2,
+			distanceFor(
+				span,
+				distance,
+				PvpLanes.halfWidth() + PvpConstants.MAP_PADDING,
+				PvpConstants.MAP_MAX_DISTANCE
+			)
+		)
+	end
+
+	-- Which PVP shot to frame, or nil when no match owns the board.
+	--
+	-- A player with no lane — spectating, or the match was full when they arrived
+	-- — gets the map. It's the only honest shot for them: there is no "their"
+	-- tower to ride, and parking on an empty seat would show them a bare platform
+	-- for three minutes.
+	local function pvpTarget(floorY: number): (CFrame?, number)
+		if not PvpController.isActive() then
+			return nil, Constants.CAMERA_LERP
+		end
+
+		local data = PvpController.GetData()
+		local tallest = 0
+		for _, lane in data.lanes do
+			tallest = math.max(tallest, lane.height)
+		end
+
+		-- The standings are the point of the last ten seconds, so the board is
+		-- framed for them whatever the player had the toggle set to.
+		if data.phase == PvpConstants.PHASE.RESULTS then
+			return mapShot(floorY, tallest), Constants.CAMERA_CHECKPOINT_LERP
+		end
+
+		local mine = PvpController.myLane()
+		if overview or mine == nil then
+			return mapShot(floorY, tallest), Constants.CAMERA_CHECKPOINT_LERP
+		end
+		return trackingShot(PvpLanes.xOf(mine.slot), floorY, mine.height, mine.pieceTop),
+			Constants.CAMERA_LERP
 	end
 
 	-- How hard the camera should be shaking, 0–1. Ramps from nothing at
@@ -130,6 +205,14 @@ function TowerCameraController.Start()
 	-- Squared, so the first twenty of the thirty seconds are a faint unease and
 	-- the tell arrives late. A linear ramp reads as "the camera is broken".
 	local function shakeIntensity(data: TowerController.State): number
+		-- There is no storm in PVP, and `stormEndsAt` is a stale number for the
+		-- whole match — the classic clock was set running when the round broke and
+		-- nothing has touched it since. Left unguarded it runs out somewhere in the
+		-- middle of a match and shakes the camera for a deadline that doesn't
+		-- exist.
+		if PvpController.isActive() then
+			return 0
+		end
 		local secondsOut = data.stormEndsAt - workspace:GetServerTimeNow()
 		if secondsOut <= 0 or secondsOut >= Constants.STORM_SHAKE_LEAD_SECONDS then
 			return 0
@@ -158,12 +241,21 @@ function TowerCameraController.Start()
 			local top = math.max(baseTopY + data.height, floor + Constants.CAMERA_MIN_HEIGHT)
 			local span = math.max(top - floor, 1) + Constants.CAMERA_OVERVIEW_PADDING
 			return shot(
+				0,
 				(floor + top) / 2,
 				distanceFor(span, distance * Constants.CAMERA_CHECKPOINT_PULLBACK)
 			)
 		end
 
 		local function target(data: TowerController.State): (CFrame, number)
+			-- A PVP match owns the board outright, and it runs *inside* the classic
+			-- round break — so this comes first, before the GAMEOVER branch below
+			-- would frame a tower that was demolished three minutes ago.
+			local pvpShot, pvpRate = pvpTarget(baseTopY)
+			if pvpShot ~= nil then
+				return pvpShot, pvpRate
+			end
+
 			-- Phase wins over the player's toggle. The checkpoint cutscene and the
 			-- round break each own the camera and frame something specific; an
 			-- overview left switched on must not eat that shot.
@@ -173,7 +265,7 @@ function TowerCameraController.Start()
 			if overview then
 				return overviewShot(baseTopY, data), Constants.CAMERA_CHECKPOINT_LERP
 			end
-			return trackingShot(baseTopY, data), Constants.CAMERA_LERP
+			return trackingShot(0, baseTopY, data.height, data.pieceTop), Constants.CAMERA_LERP
 		end
 
 		local camera = workspace.CurrentCamera

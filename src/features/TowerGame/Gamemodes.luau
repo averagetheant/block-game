@@ -20,6 +20,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local assets = require(ReplicatedStorage.Shared.Boil).assets
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+local PvpConstants = require(ReplicatedStorage.Features.TowerGame.PvpConstants)
 
 export type Modifier = {
 	-- Seconds on a turn clock before the piece drops itself.
@@ -38,6 +39,15 @@ export type Modifier = {
 	-- Lightning strikes regardless of zone. Normally it's the Stormy zone's
 	-- hazard; a mode can turn it on everywhere.
 	alwaysLightning: boolean?,
+	-- This mode isn't a set of numbers for the classic round — it *replaces* the
+	-- round. `TowerService.runRoundBreak` hands the board to `PvpService` and
+	-- waits, then puts the vote back up rather than starting a classic run.
+	--
+	-- It's a flag rather than a fifth number because there is nothing to tune:
+	-- the turn queue, the storm and the checkpoints all stop existing, and the
+	-- two clocks below describe PVP's own piece and match timers only so the
+	-- ballot card and the HUD have honest denominators to draw against.
+	pvp: boolean?,
 }
 
 export type Gamemode = {
@@ -134,6 +144,26 @@ Gamemodes.List = {
 			stormSeconds = Constants.STORM_SECONDS,
 			blockTypeScale = 1,
 			alwaysLightning = true,
+		},
+	},
+	{
+		id = "pvp",
+		name = "PVP",
+		blurb = "Own platform. Build highest before the timer.",
+		icon = assets.Icons.friends,
+		order = 5,
+		-- The one mode on the ballot that isn't a variation on the round. The two
+		-- clocks are PVP's own — the drop clock and the match clock — so the HUD
+		-- and this card describe the mode that actually runs rather than a
+		-- classic round nobody is going to play. `blockTypeChance` is the same
+		-- lever Roulette uses: a flat promise that bypasses the escalating curve,
+		-- which a three-minute round with no checkpoints would never climb.
+		modifier = {
+			turnSeconds = PvpConstants.PIECE_SECONDS,
+			stormSeconds = PvpConstants.MATCH_SECONDS,
+			blockTypeScale = 1,
+			blockTypeChance = PvpConstants.SPECIAL_CHANCE,
+			pvp = true,
 		},
 	},
 } :: { Gamemode }

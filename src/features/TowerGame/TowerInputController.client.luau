@@ -27,6 +27,7 @@ local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 -- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
 local TowerAimController = require(script.Parent.TowerAimController)
 local TowerController = require(script.Parent.TowerController)
+local PvpController = require(script.Parent.PvpController)
 
 local TowerInputController = {}
 
@@ -189,14 +190,19 @@ function TowerInputController.Start()
 	-- were waiting on the previous player. No input event fires for a key that
 	-- never moved, and the aim controller resets its direction on every new turn,
 	-- so re-assert what's held the moment the piece becomes ours.
-	local wasMyTurn = false
-	TowerController.DataChanged:Connect(function()
-		local isMyTurn = TowerController.isMyTurn()
-		if isMyTurn and not wasMyTurn then
+	--
+	-- Fed by both modes' packets: in PVP the piece arriving is announced on the
+	-- match packet, and `isAiming` is the answer that covers either.
+	local wasAiming = false
+	local function onStateChanged()
+		local isAiming = TowerController.isAiming()
+		if isAiming and not wasAiming then
 			sendHeld()
 		end
-		wasMyTurn = isMyTurn
-	end)
+		wasAiming = isAiming
+	end
+	TowerController.DataChanged:Connect(onStateChanged)
+	PvpController.DataChanged:Connect(onStateChanged)
 end
 
 return TowerInputController

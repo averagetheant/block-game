@@ -86,24 +86,31 @@ function TowerStatsService.recordBlockPlaced(player: Player)
 	end
 end
 
+-- One player's own best. Nothing happens unless it beats what's on the profile,
+-- so this is safe to call with whatever a tower currently measures.
+function TowerStatsService.recordPlayerHeight(player: Player, height: number)
+	local saved = slice(player)
+	if saved == nil or height <= (saved.BiggestHeight or 0) then
+		return
+	end
+
+	PlayerDataService.SetValue(player, { KEY, "BiggestHeight" }, height)
+
+	local entry = stats[player]
+	if entry then
+		entry.height.Value = math.floor(height)
+	end
+end
+
 -- The tower hit a new record. It's one shared tower, so this is a record for
 -- everyone currently in the server, not just whoever placed the last piece.
+--
+-- PVP is the other case and calls `recordPlayerHeight` directly: there the tower
+-- is one player's, so crediting the room would hand five people a record they
+-- didn't build.
 function TowerStatsService.recordHeight(height: number)
 	for _, player in Players:GetPlayers() do
-		local saved = slice(player)
-		if saved == nil then
-			continue
-		end
-		if height <= (saved.BiggestHeight or 0) then
-			continue
-		end
-
-		PlayerDataService.SetValue(player, { KEY, "BiggestHeight" }, height)
-
-		local entry = stats[player]
-		if entry then
-			entry.height.Value = math.floor(height)
-		end
+		TowerStatsService.recordPlayerHeight(player, height)
 	end
 end
 

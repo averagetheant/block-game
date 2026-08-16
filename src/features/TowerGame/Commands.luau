@@ -30,6 +30,7 @@ end
 
 local BlockSkins = require(ReplicatedStorage.Features.TowerGame.BlockSkins)
 local BlockTypes = require(ReplicatedStorage.Features.TowerGame.BlockTypes)
+local Gamemodes = require(ReplicatedStorage.Features.TowerGame.Gamemodes)
 local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 local function findBlockType(name: string): BlockTypes.BlockType?
@@ -152,6 +153,74 @@ return {
 			return `Next piece forced: {if resolvedType then resolvedType.name else "Normal"} / {if resolvedSkin
 				then resolvedSkin.name
 				else "Random"}`
+		end,
+	},
+	{
+		Name = "blockrate",
+		Aliases = { "specials" },
+		Description = "Hold the odds a piece is special at a flat rate. No argument puts the curve back.",
+		Group = "TowerGame",
+		Args = {
+			{
+				Type = "number",
+				Name = "chance",
+				Description = "0 to 1. Omit to hand the roll back to the checkpoint curve.",
+				Optional = true,
+			},
+		},
+		Run = function(_context, chance: number?)
+			local ServerScriptService = game:GetService("ServerScriptService")
+			local TowerService = require(ServerScriptService.Features.TowerGame.TowerService)
+
+			if chance == nil then
+				TowerService.setBlockTypeChance(nil)
+				return "Special-block odds back on the curve."
+			end
+
+			local clamped = math.clamp(chance, 0, 1)
+			TowerService.setBlockTypeChance(clamped)
+			return `Special-block odds held at {math.floor(clamped * 100)}%.`
+		end,
+	},
+	{
+		Name = "gamemode",
+		Aliases = { "pvp" },
+		Description = "End the round now and play the given gamemode next, skipping the vote.",
+		Group = "TowerGame",
+		Args = {
+			{
+				Type = "string",
+				Name = "mode",
+				Description = "Gamemode id from Gamemodes.luau. Defaults to pvp.",
+				Default = "pvp",
+			},
+		},
+		Run = function(_context, mode: string)
+			local ServerScriptService = game:GetService("ServerScriptService")
+			local TowerService = require(ServerScriptService.Features.TowerGame.TowerService)
+
+			local id = mode:lower()
+			local known = false
+			for _, entry in Gamemodes.List do
+				if entry.id:lower() == id then
+					id = entry.id
+					known = true
+					break
+				end
+			end
+			if not known then
+				return `Unknown gamemode "{mode}".`
+			end
+
+			-- Routed through the real round break, so this is the round the vote
+			-- would have produced rather than a parallel path — which is the whole
+			-- point of having it.
+			if not TowerService.forceRound(id) then
+				return "Can't switch right now — a checkpoint or round break is running."
+			end
+			-- Deliberately doesn't wait: the wreck, the fade and the break run for
+			-- several seconds, and a console blocking on them would look hung.
+			return `Round ending — {id} next.`
 		end,
 	},
 	{

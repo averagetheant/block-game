@@ -26,9 +26,11 @@ export type Zone = {
 	-- nil and roll one of the skies in `Assets.Zones.Normal` instead.
 	sky: string?,
 	tint: Color3,
-	-- Rarity among the *specials* — higher shows up more often. Normal zones are
-	-- never rolled for (the cadence in `Zones.next` places them), so their weight
-	-- is unread and kept only so every entry reads the same.
+	-- Rarity — higher shows up more often. The classic run never rolls for a
+	-- normal zone (the cadence in `Zones.next` places those), so this only ever
+	-- ranked the specials against each other there. `Zones.roll` rolls the whole
+	-- list, so the normal zone's weight is what decides how much of a PVP match
+	-- is played in plain weather.
 	weight: number,
 	-- World gravity while this zone is up. nil means Roblox's default, which is
 	-- what every zone but Space wants. The server writes `workspace.Gravity`, so
@@ -172,6 +174,43 @@ function Zones.next(cleared: number, avoidId: number?): Zone
 		end
 	end
 	return specials[#specials]
+end
+
+-- A zone rolled from the whole list, weights and all, avoiding the one that's up.
+--
+-- The counterpart to `Zones.next`, for a mode with nothing to count. The cadence
+-- is measured in *checkpoints cleared*, and a PVP match clears none — it changes
+-- zone on a clock instead, so there is no "third floor" to put a special on. A
+-- plain roll is also the right shape for it: a match is three minutes, so a run
+-- of two calm zones would be most of the round, and the weights already say a
+-- normal zone should come up about three times as often as any one special.
+--
+-- `avoidId` keeps the same zone from being rolled twice running, which would
+-- otherwise read as the clock having failed rather than as luck.
+function Zones.roll(avoidId: number?): Zone
+	local pool = {}
+	local total = 0
+	for _, zone in Zones.List do
+		if zone.id == avoidId then
+			continue
+		end
+		table.insert(pool, zone)
+		total += zone.weight
+	end
+	-- Only one zone exists and it's the one we're avoiding. Repeating it beats
+	-- returning nothing.
+	if total <= 0 then
+		return byId[avoidId or Zones.DEFAULT_ID] or byId[Zones.DEFAULT_ID]
+	end
+
+	local roll = math.random() * total
+	for _, zone in pool do
+		roll -= zone.weight
+		if roll <= 0 then
+			return zone
+		end
+	end
+	return pool[#pool]
 end
 
 return Zones

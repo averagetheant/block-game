@@ -63,7 +63,7 @@ local claimedByGui: { [InputObject]: boolean } = {}
 
 local function startTouch()
 	local function moveTo(input: InputObject)
-		if not TowerController.isMyTurn() then
+		if not TowerController.isAiming() then
 			return
 		end
 		local x = planeXAt(input.Position.X, input.Position.Y)
@@ -122,7 +122,7 @@ function TowerPointerController.Start()
 	-- and the aim controller is what decides how often the server hears about it.
 	-- Throttling here would put the steppiness back into the thing we're smoothing.
 	RunService.RenderStepped:Connect(function()
-		if not TowerController.isMyTurn() then
+		if not TowerController.isAiming() then
 			-- Re-baseline while we wait, so the piece doesn't snap to a stale
 			-- pointer position the instant the turn arrives.
 			lastScreen = nil

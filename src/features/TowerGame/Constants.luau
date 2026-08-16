@@ -34,6 +34,19 @@ return {
 	-- being built out of tetromino cells. Zone dressing skips those: studding a
 	-- Noob over or handing it snow friction turns a character back into a prop.
 	RAW_MODEL_ATTRIBUTE = "RawModel",
+	-- Attribute carrying the block's rolled skin id. The skin itself is a server
+	-- decision the client can't re-derive — material is the wrong tell, because a
+	-- purchased colour pack overrides it — and every client needs it to know how
+	-- squishy the block should look. An attribute rather than a packet: it has to
+	-- arrive with the block and stay attached to it for the block's whole life.
+	SKIN_ATTRIBUTE = "SkinId",
+	-- Marks the rounded shell a block is seen as, so `modelParts` can keep it out of
+	-- everything that speaks for the simulation. Load-bearing: `modelParts` walks
+	-- descendants, and without a per-part tell the body is indistinguishable from a
+	-- tetromino cell to every loop that measures, weighs or plane-clamps a block —
+	-- while the body carries no mass, answers no raycast, and grows a stud past the
+	-- cubes underneath it whenever the squash has hold of it.
+	BODY_ATTRIBUTE = "BlockBody",
 	-- Nobody walks around in a stationary-camera stacking game, so characters are
 	-- off by default. Flip to false to get avatars back (they spawn at the world
 	-- origin and are unrelated to the tower).
@@ -424,7 +437,16 @@ return {
 	-- Clearing a stage also *wipes the blocks below the new platform* — the
 	-- checkpoint becomes a clean foundation hanging in the air, which is what
 	-- keeps a long session from dragging a thousand physics parts behind it.
+	-- The first stage's clock. Later stages get STORM_TIME_GROWTH more each.
 	STORM_SECONDS = 300,
+	-- Every cleared stage adds this much to the stage clock, so the climb and the
+	-- time to make it grow together: 300, then 305, then 310…
+	--
+	-- Paired with STORM_GAP_GROWTH deliberately. A gap that grows against a fixed
+	-- clock makes every stage strictly harder than the last, and the run ends at
+	-- whatever height that curve happens to cross — extending the clock alongside
+	-- it means a later stage asks for a longer climb rather than a faster one.
+	STORM_TIME_GROWTH = 5,
 	-- Distance to the first checkpoint, in studs above the base.
 	--
 	-- Read this against the turn budget, not on its own: a stage is about 18
@@ -437,13 +459,13 @@ return {
 	-- still make.
 	STORM_FIRST_TARGET = 40,
 	-- Every cleared stage puts the next checkpoint this much further out than
-	-- the last gap: 40, then 48, then 56…
+	-- the last gap: 40, then 45, then 50…
 	--
-	-- Raised with the target above rather than left alone: the first stage is
-	-- the one the funnel dies on, so that's the only one that should get
-	-- easier. This curve passes the old one (60, 65, 70, 75, 80) by the fifth
-	-- checkpoint, so a room that's still climbing is climbing the same wall.
-	STORM_GAP_GROWTH = 8,
+	-- Five studs is a little over one clean placement, and it's the same slope
+	-- the targets had before STORM_FIRST_TARGET was cut — so the curve runs
+	-- parallel to the old one (60, 65, 70…), a permanent 20 studs below it,
+	-- rather than climbing back up to meet it a few checkpoints in.
+	STORM_GAP_GROWTH = 5,
 	-- When the clock runs out the tower is thrown apart rather than quietly
 	-- deleted. Random horizontal shove + upward kick, then cleanup.
 	STORM_BLAST_HORIZONTAL = 90,

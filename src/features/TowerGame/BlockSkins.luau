@@ -34,6 +34,11 @@ export type Skin = {
 	pitchRange: { number },
 	-- Rarity weight; higher shows up more often.
 	weight: number,
+	-- How far this skin deforms when it lands, 0 = rigid, 1 = full jelly. Read by
+	-- TowerJellyController, which scales its whole squash-and-stretch output by
+	-- it — so this is "how soft does this material look", in one number, and a
+	-- skin that reads as stone should be near zero however good the wobble is.
+	squish: number,
 }
 
 local RELEASE_SOUND = "rbxassetid://133222321566847"
@@ -52,6 +57,10 @@ BlockSkins.List = {
 		volume = 0.55,
 		pitchRange = { 0.85, 1.1 },
 		weight = 4,
+		-- Not zero. A dry knock still gives a little on the frame it lands, and
+		-- flat zero next to a Needoh reads as the effect having failed rather than
+		-- as the material being hard.
+		squish = 0.15,
 	},
 	{
 		id = 2,
@@ -64,6 +73,8 @@ BlockSkins.List = {
 		volume = 0.7,
 		pitchRange = { 0.9, 1.15 },
 		weight = 3,
+		-- The reference squish. Everything else is graded against this one.
+		squish = 1,
 	},
 	{
 		id = 3,
@@ -75,6 +86,58 @@ BlockSkins.List = {
 		volume = 0.7,
 		pitchRange = { 0.9, 1.15 },
 		weight = 3,
+		-- Softer than Needoh but it holds its shape: butter dents, jelly wobbles.
+		-- Most of the difference the eye reads between these two is that Needoh
+		-- comes back with an overshoot and this doesn't get far enough to.
+		squish = 0.75,
+	},
+	{
+		id = 5,
+		name = "Wood",
+		color = Color3.fromRGB(168, 116, 68),
+		material = Enum.Material.WoodPlanks,
+		-- Placeholder: Assets.Sounds.Stamp, a short thunk that isn't the Classic
+		-- knock. Worth auditioning against the ASMR kit's own wood sample.
+		impactSound = "rbxassetid://521293072",
+		volume = 0.6,
+		pitchRange = { 0.8, 1.05 },
+		-- Wood, Grass and Concrete are the rare tier: one weight each against the
+		-- stock three's 3-4, so any one of them turns up about a third as often as
+		-- Butter and the three together are under a quarter of all pieces. They're
+		-- the ends of the squish scale (0.06 to 0.45) rather than the middle of it,
+		-- and a tower built mostly out of the extremes stops reading as a range.
+		weight = 1,
+		-- The rigid end of the range. A plank that wobbled would stop being wood.
+		squish = 0.12,
+	},
+	{
+		id = 6,
+		name = "Grass",
+		color = Color3.fromRGB(126, 190, 88),
+		material = Enum.Material.Grass,
+		-- Placeholder: Assets.Sounds.Drop2, the most muted thing in the library.
+		impactSound = "rbxassetid://535716488",
+		settleSound = RELEASE_SOUND,
+		volume = 0.5,
+		pitchRange = { 0.85, 1.05 },
+		weight = 1,
+		-- Turf gives underfoot without springing back — a soft landing and a dead
+		-- one, which is the low-damping end rather than the low-amplitude end.
+		squish = 0.45,
+	},
+	{
+		id = 7,
+		name = "Concrete",
+		color = Color3.fromRGB(148, 148, 152),
+		material = Enum.Material.Concrete,
+		-- Placeholder: Assets.Sounds.NormalBlockCollision, pitched down at the
+		-- bottom of its range so it reads heavier than Classic's knock.
+		impactSound = "rbxassetid://120925282182940",
+		volume = 0.65,
+		pitchRange = { 0.7, 0.9 },
+		weight = 1,
+		-- The floor of the scale: it lands and it stops.
+		squish = 0.06,
 	},
 } :: { Skin }
 

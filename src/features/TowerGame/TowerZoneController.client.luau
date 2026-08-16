@@ -16,10 +16,14 @@ local TweenService = game:GetService("TweenService")
 local Signal = require(ReplicatedStorage.Packages.Signal)
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+local PvpConstants = require(ReplicatedStorage.Features.TowerGame.PvpConstants)
+local PvpLanes = require(ReplicatedStorage.Features.TowerGame.PvpLanes)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
--- Client-realm sibling (StarterPlayerScripts.Features.TowerGame.TowerController).
+-- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*). The zone is
+-- announced on whichever mode's packet is live, so both stores are read here.
+local PvpController = require(script.Parent.PvpController)
 local TowerController = require(script.Parent.TowerController)
 
 local TowerZoneController = {}
@@ -245,10 +249,19 @@ local function followTower()
 	if part == nil then
 		return
 	end
+	-- In PVP the weather follows the player's *own* lane, since that's what their
+	-- camera is on. Snow falling over the middle of a six-lane board would be
+	-- weather nobody is standing in.
+	local x = 0
 	local height = TowerController.GetData().height
+	local mine = PvpController.myLane()
+	if mine ~= nil then
+		x = PvpLanes.xOf(mine.slot)
+		height = mine.height
+	end
 	local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
 	local baseTop = if arena then arena:GetAttribute(Constants.BASE_TOP_ATTRIBUTE) else nil
-	part.Position = Vector3.new(0, (baseTop or 0) + height + Constants.WEATHER_HEIGHT, Constants.PLANE_Z)
+	part.Position = Vector3.new(x, (baseTop or 0) + height + Constants.WEATHER_HEIGHT, Constants.PLANE_Z)
 end
 
 -- Draw a bolt onto the point the server said was struck. Purely local: a beam
@@ -359,12 +372,33 @@ end
 function TowerZoneController.Start()
 	local lastZoneId, lastSky = nil, nil
 
-	TowerController.DataChanged:Connect(function(data)
-		if data.zoneId == lastZoneId and data.zoneSky == lastSky then
+	-- Both modes carry the zone on their own packet, and the classic one stops
+	-- being sent for the length of a PVP match — so the zone is read from
+	-- whichever packet arrived, through one handler that doesn't care which. The
+	-- dedupe below is what makes that safe: two sources agreeing on the same zone
+	-- re-apply nothing.
+	local function onZone(zoneId: number, sky: number)
+		if zoneId == lastZoneId and sky == lastSky then
 			return
 		end
-		lastZoneId, lastSky = data.zoneId, data.zoneSky
-		applyZone(data.zoneId, data.zoneSky)
+		lastZoneId, lastSky = zoneId, sky
+		applyZone(zoneId, sky)
+	end
+
+	TowerController.DataChanged:Connect(function(data)
+		-- A stale classic packet arriving mid-match must not drag the world back
+		-- to the zone the last round ended in.
+		if PvpController.isActive() then
+			return
+		end
+		onZone(data.zoneId, data.zoneSky)
+	end)
+
+	PvpController.DataChanged:Connect(function(data)
+		if data.phase == PvpConstants.PHASE.OFF then
+			return
+		end
+		onZone(data.zoneId, data.zoneSky)
 	end)
 
 	-- The arena carries the strike position as an attribute. Waiting for the

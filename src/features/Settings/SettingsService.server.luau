@@ -61,9 +61,16 @@ end
 -- reaches the replica (the Settings window's row flips live, with no separate
 -- "the server thinks otherwise" state to reconcile) and the next autosave.
 --
--- Returns whether it was written. A caller passing an unregistered id or the
--- wrong kind for it is a bug in the caller, so it warns rather than failing
--- quietly — the same treatment a client sending that packet would get.
+-- Returns whether it was **written** — not merely whether it was valid. A caller
+-- passing an unregistered id or the wrong kind for it is a bug in the caller, so
+-- those warn rather than failing quietly (the same treatment a client sending
+-- that packet would get); a player whose profile hasn't loaded yet is not a bug
+-- and fails silently.
+--
+-- That last case is the one worth checking for. `SetValue` can't write without a
+-- replica, so a caller that assumes success acts on a change that never happened
+-- — telling a player they've been taken out of the turn order while the server
+-- goes on dealing them turns, say. Answer honestly and let the caller decide.
 function SettingsService.set(player: Player, id: string, value: any): boolean
 	local def = Registry.getSetting(id)
 	if def == nil then
@@ -75,8 +82,7 @@ function SettingsService.set(player: Player, id: string, value: any): boolean
 		return false
 	end
 
-	PlayerDataService.SetValue(player, { Constants.PROFILE_KEY, id }, value)
-	return true
+	return PlayerDataService.SetValue(player, { Constants.PROFILE_KEY, id }, value)
 end
 
 function SettingsService.Start()

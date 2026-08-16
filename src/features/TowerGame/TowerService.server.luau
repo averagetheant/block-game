@@ -290,12 +290,20 @@ local function noteTurnIdleness(player: Player)
 		return
 	end
 
+	-- The card is only sent if the bench actually took. A profile that hasn't
+	-- loaded can't be written to, and announcing a benching that didn't happen is
+	-- worse than staying quiet: the player reads that they're out, presses "I'm
+	-- here!" to fix a state they were never in, and their turns keep arriving
+	-- either way. Leaving the counter alone means the next idle turn tries again.
+	if not SettingsService.set(player, Constants.SETTING_NOT_PLAYING, true) then
+		return
+	end
+
 	-- Counted from zero rather than left at the limit: if they come back, play a
 	-- turn and wander off again, that's a fresh two turns before this fires
 	-- again rather than a single missed turn benching them.
 	idleTurns[player] = 0
 
-	SettingsService.set(player, Constants.SETTING_NOT_PLAYING, true)
 	-- Remembered so their next visit starts with them in the game. The setting
 	-- persists, which is right for a player who chose it and a trap for one who
 	-- was away — see PlayerData.luau.

@@ -31,6 +31,8 @@ export type Kind =
 	| "mystery"
 	| "crate"
 	| "feather"
+	| "ghost"
+	| "magnet"
 
 export type BlockType = {
 	id: number,
@@ -169,6 +171,27 @@ BlockTypes.List = {
 		description = "Takes its time.",
 		tell = Color3.fromRGB(255, 240, 200),
 		weight = 2,
+	},
+	-- Ghost belongs with the physics types rather than the landing ones, and for
+	-- their reason: what it does happens on the way down. It's out of the Mystery
+	-- pool because a Ghost revealed after settling would have fallen solid — the
+	-- reveal would name a thing that had already not happened.
+	{
+		id = 13,
+		kind = "ghost",
+		name = "Ghost",
+		description = "Falls through the tower.",
+		tell = Color3.fromRGB(214, 208, 255),
+		weight = 2,
+	},
+	{
+		id = 14,
+		kind = "magnet",
+		name = "Magnet",
+		description = "Pulls blocks in.",
+		tell = Color3.fromRGB(208, 72, 96),
+		weight = 2,
+		viaMystery = true,
 	},
 } :: { BlockType }
 

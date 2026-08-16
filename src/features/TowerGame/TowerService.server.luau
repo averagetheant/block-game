@@ -22,6 +22,7 @@
 -- like Tricky Towers instead of scattering into a 3D pile.
 
 local CollectionService = game:GetService("CollectionService")
+local PhysicsService = game:GetService("PhysicsService")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
@@ -616,6 +617,35 @@ local function restoreCollision(model: Model, saved: { [BasePart]: boolean })
 	end
 end
 
+-- Collision groups exist for exactly one thing: letting a Ghost fall through the
+-- tower without falling through the world. Every block goes in one group, the
+-- base and the checkpoint platforms stay in Default, and a ghost sits in a group
+-- that ignores the first and still lands on the second.
+--
+-- Registering is idempotent-by-pcall rather than by asking: the groups persist in
+-- the place once created, so a second server start (or a Studio session that has
+-- already run one) would otherwise error on a name that's simply already there.
+local function ensureCollisionGroups()
+	for _, name in { Constants.BLOCK_COLLISION_GROUP, Constants.GHOST_COLLISION_GROUP } do
+		pcall(function()
+			PhysicsService:RegisterCollisionGroup(name)
+		end)
+	end
+	pcall(function()
+		PhysicsService:CollisionGroupSetCollidable(
+			Constants.GHOST_COLLISION_GROUP,
+			Constants.BLOCK_COLLISION_GROUP,
+			false
+		)
+	end)
+end
+
+local function setCollisionGroup(model: Model, group: string)
+	for _, part in modelParts(model) do
+		part.CollisionGroup = group
+	end
+end
+
 -- The name plate hanging off the piece: "Bomb T-Shape", or just "T-Shape" for an
 -- ordinary block. Types with their own model have no silhouette to name.
 local function labelPiece(model: Model, root: BasePart, shape: Shapes.Shape?, blockType: BlockTypes.BlockType?)
@@ -1072,6 +1102,71 @@ local function blastAt(
 	end
 end
 
+-- The blast pointed the other way: everything in reach is tugged *toward* the
+-- origin instead of away from it, with the same distance falloff.
+--
+-- No upward bias, which is the one place it deliberately departs from `blastAt`.
+-- A blast lifts because a tower erupting reads better than one swept sideways; a
+-- pull that lifted would hand the room free height for landing one piece, and
+-- height is the thing the whole game is scored on.
+--
+-- Blocks that have been anchored (the Anchor type, and the platforms) ignore
+-- impulses on their own, so a Magnet can't drag the floor out from under anyone.
+local function pullAt(origin: Vector3, radius: number, impulse: number, exclude: Block?)
+	for _, other in blocks do
+		local root = other.root
+		if root.Parent == nil or other == exclude then
+			continue
+		end
+		local offset = origin - root.Position
+		local distance = offset.Magnitude
+		-- The block sitting exactly on the origin has no direction to be pulled
+		-- in, and `Unit` on a zero vector is NaN — which would poison the
+		-- assembly's velocity rather than simply doing nothing.
+		if distance > radius or distance < 1e-3 then
+			continue
+		end
+		local falloff = 1 - distance / radius
+		root:ApplyImpulse(offset.Unit * impulse * falloff * root.AssemblyMass)
+	end
+end
+
+local function magnetiseBlock(block: Block)
+	pullAt(block.root.Position, Constants.MAGNET_RADIUS, Constants.MAGNET_IMPULSE, block)
+end
+
+-- A Ghost falls through the tower for GHOST_SECONDS and then turns solid
+-- wherever it has got to. The transparency is saved per part rather than assumed:
+-- skins already set their own (Needoh is squishy and translucent), and blanket
+-- restoring to 0 would repaint a skin the player paid for.
+--
+-- Solidifying inside another block is a real outcome, not a bug to prevent — the
+-- physics shoves the two apart and the tower lurches. That's the cost of a piece
+-- that can be threaded into a gap it doesn't fit through: aim well and it's the
+-- best block in the game, aim badly and you've put a wedge in your own tower.
+local function startGhost(block: Block)
+	local saved: { [BasePart]: number } = {}
+	for _, part in modelParts(block.model) do
+		saved[part] = part.Transparency
+		part.Transparency = Constants.GHOST_TRANSPARENCY
+	end
+	setCollisionGroup(block.model, Constants.GHOST_COLLISION_GROUP)
+
+	task.delay(Constants.GHOST_SECONDS, function()
+		-- Burned, blasted or stormed away in the meantime.
+		if block.model.Parent == nil then
+			return
+		end
+		setCollisionGroup(block.model, Constants.BLOCK_COLLISION_GROUP)
+		for _, part in modelParts(block.model) do
+			local was = saved[part]
+			if was ~= nil then
+				part.Transparency = was
+			end
+		end
+	end)
+end
+
 local function detonateBlock(block: Block)
 	local origin = block.root.Position
 	blastAt(origin, Constants.EXPLOSION_RADIUS, Constants.EXPLOSION_PRESSURE, Constants.EXPLOSION_IMPULSE, block)
@@ -1320,6 +1415,10 @@ local function registerBlock(
 	}
 	table.insert(blocks, block)
 	blockByModel[model] = block
+	-- Everything in the tower shares one group, so a Ghost has a single thing to
+	-- ignore. Ghosts are moved out of it by `startGhost` and back into it when
+	-- they solidify.
+	setCollisionGroup(model, Constants.BLOCK_COLLISION_GROUP)
 	watchLanding(block)
 
 	-- A Burning block arrives already alight; everything else has to catch.
@@ -1435,7 +1534,7 @@ function TowerService.release()
 		part.Anchored = false
 	end
 
-	registerBlock(
+	local dropped = registerBlock(
 		piece.model,
 		piece.root,
 		piece.shape,
@@ -1445,6 +1544,12 @@ function TowerService.release()
 		piece.custom,
 		piece.pack
 	)
+
+	-- Starts the moment it's let go, not when it lands — phasing is the fall.
+	-- After `registerBlock`, which is what put it in the ordinary block group.
+	if piece.blockType ~= nil and piece.blockType.kind == "ghost" then
+		startGhost(dropped)
+	end
 	-- Everyone hears the drop from where it happened. The holder also gets their
 	-- own confirmation cue locally (Drop2, played client-side).
 	Sfx.playAt("Drop", piece.root)
@@ -2381,6 +2486,8 @@ local function applySettleEffect(block: Block, blockType: BlockTypes.BlockType)
 		shatterBlock(block)
 	elseif kind == "burning" then
 		igniteBlock(block)
+	elseif kind == "magnet" then
+		magnetiseBlock(block)
 	elseif kind == "explosion" then
 		-- Only reachable through a Mystery reveal. A block that was *dealt* as a
 		-- Bomb arms on impact instead, and by the time it settles that has already
@@ -2440,6 +2547,7 @@ local SETTLE_RESOLVED: { [string]: boolean } = {
 	anchor = true,
 	crate = true,
 	mystery = true,
+	magnet = true,
 }
 
 -- What a block does the moment it comes to rest. Everything here is once-only:
@@ -2825,6 +2933,10 @@ function TowerService.Start()
 		-- standing under a falling tower.
 		Players.CharacterAutoLoads = false
 	end
+
+	-- Before anything is built: `registerBlock` puts every block in a group, and a
+	-- group that doesn't exist yet is an error per part rather than a warning.
+	ensureCollisionGroups()
 
 	buildArena()
 	-- Zones own gravity (Space drops it to a sixth), so the run starts from the

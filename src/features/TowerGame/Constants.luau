@@ -235,6 +235,33 @@ return {
 	-- How long the ragdoll is left lying there after it's squashed.
 	NOOB_DESPAWN_SECONDS = 2.5,
 
+	-- ----------------------------------------------------------------- magnet --
+	-- The tug a Magnet gives when it settles: every loose block in reach is
+	-- pulled toward it, falling off with distance the way a blast does.
+	--
+	-- Tighter and much weaker than a Bomb (radius 46, impulse 120) on purpose.
+	-- The two are the same mechanism pointed opposite ways, and a pull as strong
+	-- as the blast wouldn't gather a tower, it would collapse one inward — which
+	-- is just a bomb that takes longer. This is meant to be the piece that tidies
+	-- a lean, so it has to be gentle enough to lose to a well-built stack.
+	MAGNET_RADIUS = 22,
+	MAGNET_IMPULSE = 26,
+
+	-- ------------------------------------------------------------------ ghost --
+	-- How long a Ghost falls through the tower before it turns solid. Long enough
+	-- to clear a couple of floors from the spawn height, short enough that the
+	-- player is still watching the piece they dropped.
+	GHOST_SECONDS = 1.2,
+	-- How see-through it is while it's phasing. It has to read as *not solid yet*
+	-- from across the arena, since everyone else is watching it pass through the
+	-- tower they built.
+	GHOST_TRANSPARENCY = 0.55,
+	-- Collision groups. A ghost ignores blocks and nothing else: it still lands
+	-- on the base and on checkpoint platforms, because a piece that fell through
+	-- the floor would be a lost turn rather than a clever one.
+	BLOCK_COLLISION_GROUP = "TowerBlock",
+	GHOST_COLLISION_GROUP = "TowerGhost",
+
 	-- ------------------------------------------------------------------ zones --
 	-- Studio-authored asset folders (Rojo doesn't sync these; see docs).
 	ASSETS_FOLDER = "Assets",

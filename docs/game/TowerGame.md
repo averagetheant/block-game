@@ -397,6 +397,8 @@ than as escalation.
 | **Mystery** | ??? | Lands as a question mark, then rolls one of the landing types and fires it. |
 | **Crate** | Breaks apart! | Cuts its own welds on settle and collapses into the loose cubes it was pretending to be. |
 | **Feather** | Takes its time. | Terminal velocity of `FEATHER_FALL_SPEED` (12 studs/s) on the way down, and light enough to shove nothing. |
+| **Ghost** | Falls through the tower. | Phases through every block for `GHOST_SECONDS` (1.2) after release, then turns solid wherever it got to. Still lands on the base and the platforms. |
+| **Magnet** | Pulls blocks in. | On settle, tugs every loose block within `MAGNET_RADIUS` toward itself — `blastAt` pointed the other way. |
 
 Details worth knowing:
 
@@ -454,9 +456,30 @@ Details worth knowing:
   the write that clamp was already making. Only the downward half is capped, so a
   blast can still throw one. It buys the holder several extra seconds of steering
   at the cost of the same seconds off their turn clock.
+- **Ghost** is the only type that acts during the **fall** rather than at either
+  end of it, and the only one that needed a new mechanism: **collision groups**.
+  Every block goes in `BLOCK_COLLISION_GROUP` at `registerBlock`; the base and the
+  checkpoint platforms stay in `Default`; a ghost sits in `GHOST_COLLISION_GROUP`,
+  which is set non-collidable with the first and left collidable with the second.
+  That distinction is the whole design — "passes through everything" would mean
+  falling out of the world, which is a lost turn rather than a clever one.
+  Transparency is saved per part and restored, because skins set their own (Needoh
+  is translucent) and blanket-restoring to 0 would repaint a skin someone bought.
+  Solidifying *inside* another block is a real outcome and deliberately not
+  guarded against: the physics shoves the two apart and the tower lurches. Aim
+  well and it's the best piece in the game; aim badly and you've wedged your own
+  tower.
+- **Magnet** is `blastAt` with the sign flipped, sharing its distance falloff and
+  its mass scaling, and departing in one place: **no upward bias**. A blast lifts
+  because an erupting tower reads better than a swept one, but a pull that lifted
+  would hand the room free height for landing a single piece — and height is what
+  the whole game is scored on. It's much weaker and tighter than a Bomb (22/26 vs
+  46/120) because a pull as strong as the blast doesn't gather a tower, it
+  collapses one inward, which is just a slower bomb. Anchored blocks and the
+  platforms ignore impulses on their own, so it can't drag the floor out.
 - **Mystery** is a bluff: you place it exactly as carefully as you'd place the
   worst thing it could be. It rolls from the types flagged `viaMystery` — Bomb,
-  Glue, Clone, Burning, Anchor, Crate — weighted by the same `weight` the ordinary
+  Glue, Clone, Burning, Anchor, Crate, Magnet — weighted by the same `weight` the ordinary
   roll uses, so a type that's rare as a piece stays rare as a reveal. The physics
   types are deliberately excluded: an Anvil reveal would be a word with no event
   behind it, since the block has already fallen at ordinary weight. The reveal
@@ -919,6 +942,9 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `ANVIL_PHYSICS`, `ICE_PHYSICS`, `FEATHER_PHYSICS` | The other three physics types. Density survives a Snowy zone; friction and elasticity don't |
 | `FEATHER_FALL_SPEED` | A Feather's terminal velocity (12). The actual mechanic — density can't slow a fall |
 | `CRATE_SCATTER`, `CRATE_LIFT`, `CRATE_SPIN` | How far a broken Crate's cells throw themselves apart. In-plane only |
+| `GHOST_SECONDS`, `GHOST_TRANSPARENCY` | How long a Ghost phases for, and how see-through it is while it does |
+| `BLOCK_COLLISION_GROUP`, `GHOST_COLLISION_GROUP` | The two groups that let a Ghost ignore blocks without ignoring the floor |
+| `MAGNET_RADIUS`, `MAGNET_IMPULSE` | Reach and strength of a Magnet's pull. Read them against `EXPLOSION_RADIUS` / `EXPLOSION_IMPULSE` — same mechanism, opposite sign |
 | `MYSTERY_REVEAL_SECONDS` | How long the revealed name hangs over a Mystery block |
 | `NOOB_*` | Walk speed, jump odds, and how long a squashed Noob lies there |
 | `SETTLE_CONFIRM_SECONDS`, `UNSETTLE_SPEED/SPIN` | How long a block has to hold still to count, and what knocks it back out |
@@ -1541,10 +1567,15 @@ pushes `stormEndsAt` back out.
   end-to-end in a real run. The code paths are short, but they haven't been watched.
   Temporarily zeroing the normal zone's `weight` in `Zones.luau` is the quickest way
   to force one.
-- **The block types haven't been watched in a real run either.** All twelve are
+- **The block types haven't been watched in a real run either.** All fourteen are
   wired end-to-end, but the odds curve is deliberately stingy (3% on the first
-  floor), so forcing one means the `block` Cmdr command, raising
-  `BlockTypes.BASE_CHANCE`, or zeroing every other type's `weight`. The six newest
+  floor), so forcing one means the `block` Cmdr command (`block Ghost`,
+  `block Magnet` — it matches on the type's name), raising
+  `BlockTypes.BASE_CHANCE`, or zeroing every other type's `weight`. Ghost's
+  collision-group rule has been verified directly — a ghost-grouped part dropped
+  from above a twenty-block tower passed through all of it and came to rest on the
+  base — but neither Ghost nor Magnet has been seen as a *dealt piece*. Magnet's
+  pull strength in particular is a first guess. The six before them
   (Anvil, Ice, Anchor, Mystery, Crate, Feather) have had no play-testing at all —
   in particular `ANVIL_PHYSICS`'s density and `FEATHER_FALL_SPEED` are first
   guesses, and a Feather's drift is slow enough that it may want its own turn

@@ -10,5 +10,6 @@ TowerGame.Constants = require(script.Constants)
 TowerGame.Shapes = require(script.Shapes)
 TowerGame.UI = require(script.TowerHUD)
 TowerGame.AfkNotice = require(script.AfkNotice)
+TowerGame.SpectatorNotice = require(script.SpectatorNotice)
 
 return TowerGame

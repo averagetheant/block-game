@@ -31,9 +31,20 @@ local visible = false
 -- How many turns went by, for the card's own wording. The server counts them;
 -- the client only repeats the number.
 local missedTurns = 0
+-- Last seen value of the "Not playing" setting. Kept because what closes the
+-- card is the *transition* out of spectating, not the value being false — see
+-- the note in Start.
+local spectating = false
 
 function TowerAfkController.visible(): boolean
 	return visible
+end
+
+-- Whether this player is currently out of the turn order, however they got
+-- there: benched for inactivity, or their own choice in Settings. The persistent
+-- notice reads this; the card is only about the moment they were benched.
+function TowerAfkController.spectating(): boolean
+	return spectating
 end
 
 function TowerAfkController.missedTurns(): number
@@ -66,15 +77,35 @@ function TowerAfkController.Start()
 		setVisible(true)
 	end)
 
+	spectating = SettingsController.get(Constants.SETTING_NOT_PLAYING) == true
+
 	-- Turning "Not playing" back off anywhere else — the Settings window — answers
-	-- the card's question too. Leaving it up would be asking a player who has
-	-- already come back whether they're still there. Settings live in the profile
-	-- replica, so this is the change that reaches every route into them rather
+	-- the card's question too, so the card closes with it. Settings live in the
+	-- profile replica, which is what makes this reach every route into them rather
 	-- than only the one the card owns.
+	--
+	-- What closes it is the **transition** out of spectating, not the setting
+	-- merely reading false. That distinction is the whole fix for a card nobody on
+	-- a phone could see: the bench arrives over ReplicaService and the card over
+	-- ByteNet, two transports with no ordering between them, and `DataChanged`
+	-- fires on *any* profile write — cash, which is credited constantly. Test the
+	-- level and a payout landing in the gap before the bench replicates closes the
+	-- card in the frame it opened. On a desktop in Studio that gap is nothing; on
+	-- a phone it's the difference between a popup and a rumour.
 	PlayerDataController.DataChanged:Connect(function()
-		if visible and SettingsController.get(Constants.SETTING_NOT_PLAYING) ~= true then
-			setVisible(false)
+		local now = SettingsController.get(Constants.SETTING_NOT_PLAYING) == true
+		local left = spectating and not now
+		if now == spectating then
+			return
 		end
+		spectating = now
+		if left and visible then
+			-- setVisible fires Changed for us.
+			setVisible(false)
+			return
+		end
+		-- The notice tracks this too, so a change either way is worth a render.
+		TowerAfkController.Changed:Fire()
 	end)
 end
 

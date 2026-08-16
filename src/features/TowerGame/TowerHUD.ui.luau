@@ -57,7 +57,9 @@ local STACK_GAP = 6
 local BUTTON_SIZE = UDim2.fromOffset(110, 88)
 local DROP_SIZE = UDim2.fromOffset(160, 88)
 local CONTROL_GAP = 12
-local EDGE_MARGIN = 20
+-- Shared with anything else pinned to an edge (the spectator badge), so the HUD
+-- and its neighbours can't disagree about where the screen ends.
+local EDGE_MARGIN = Constants.EDGE_MARGIN
 local CONTROL_ROW_HEIGHT = 88
 -- The steering stick, then TURN and DROP, with a double gap between the stick
 -- and the buttons.

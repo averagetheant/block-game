@@ -121,6 +121,31 @@ Some notes on why it's shaped this way:
 - **The card is centred and covers the screen.** A notification in a corner is
   exactly what a player who has wandered off will miss, and it catches the clicks
   that would otherwise reach the HUD behind it.
+- **A badge stays up for as long as they're out** (`SpectatorNotice`), whether
+  they were benched or chose it in Settings. The card is a *moment* and can be
+  missed — dismissed, or arriving while they were looking away, or never sent
+  because they joined already spectating — and without the badge the only evidence
+  of being out of the game is turns quietly never arriving, which is
+  indistinguishable from the game being broken.
+
+  It hangs **centred, under the HUD's top column**, and that placement was
+  arrived at by measurement rather than taste. Every corner loses: the turn dial
+  sits *outside* the stats column and swings toward the right edge as the screen
+  narrows (taking that corner on a phone), while the reaction bar owns a band
+  across the vertical middle from x 1459 (taking it on a short window) — two
+  hazards that move in opposite directions as the aspect changes, so no fixed
+  offset clears both. Left is the rail; bottom-left the controls hint and the
+  voice chips; bottom-right the cash counter. Centre-x has no neighbour at any
+  size and can only ever overlap the tower — pixels, not buttons.
+
+  `TowerAfkView` adds the **GUI inset** back before positioning it, converted
+  into canvas units by dividing by the viewport scale. The root ScreenGui sets
+  `IgnoreGuiInset`, so canvas y = 0 is the true top of the display and Roblox's
+  own topbar occupies the first stretch of it; and because the inset is a fixed
+  number of *screen* pixels while everything in the tree is scaled, a plain
+  constant is wrong by construction — whatever clears the topbar on a monitor is
+  half that on a phone at the 0.5 scale floor. ScaleLayer documents this
+  conversion; this is the first thing in the game to need it.
 - **Being benched doesn't follow them to tomorrow.** The setting persists — right
   for a player who chose it, a trap for one who stepped away — so the auto-bench
   is recorded as `AutoAfk` in the profile slice and undone on their next join
@@ -129,6 +154,15 @@ Some notes on why it's shaped this way:
 - The counter resets to zero on the bench as well as on a touch, so a player who
   comes back, takes a turn and wanders off again gets a fresh two turns rather
   than being benched by a single missed one.
+- **What closes the card is the transition out of spectating, not the setting
+  reading false.** This one is worth remembering, because the level test looks
+  identical and is wrong in a way that only shows up on a phone. The bench travels
+  over ReplicaService and the card over ByteNet — two transports with no ordering
+  between them — and `DataChanged` fires on *any* profile write, cash included,
+  which is credited constantly. Test the level, and a payout landing in the window
+  before the bench replicates closes the card in the frame it opened. On a desktop
+  in Studio that window is nothing; on a phone it was the whole bug, reported as
+  "the popup doesn't show".
 
 **Only the newest platform survives.** When a floor lands, every earlier one goes
 out with the scaffolding under it: `blastPlatformsBelow` un-anchors them, turns
@@ -821,6 +855,7 @@ devices.
 | `TowerAfkView.client.luau` | client | Container for the card; renders nothing while it's down |
 | `TowerAfkPresentation.client.luau` | client | Registers the card as an always-mounted root (`Presentations.afk`) |
 | `AfkNotice.ui.luau` | shared | Dumb card: the copy, the red / green pair, the screen cover |
+| `SpectatorNotice.ui.luau` | shared | The badge that stays up while a player is out of the rotation |
 | `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls, Extend Storm, the urgency tick) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
 | `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
@@ -939,6 +974,8 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | -------- | ------ |
 | `TURN_SECONDS` | The drop clock (15) |
 | `IDLE_TURN_SECONDS`, `IDLE_GRACE_TURNS`, `IDLE_TURNS_BEFORE_AFK` | The short clock for an untouched turn (6), how many of a player's first turns are exempt (1), and how many untouched turns in a row bench them (2) — see [Idle turns](#idle-turns-and-the-inactivity-card) |
+| `EDGE_MARGIN` | How far anything pinned to a screen edge sits in from it (20). Shared by the HUD and the spectator badge so the two can't disagree |
+| `SPECTATOR_NOTICE_WIDTH`, `SPECTATOR_NOTICE_TOP`, `SPECTATOR_NOTICE_COLOR` | The spectator badge. `TOP` hangs it below the HUD's top column; the GUI inset is added on top of it at render |
 | `SETTLE_SECONDS` | Pause between turns |
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `GAMEPAD_STEER_DEADZONE` | Below this the left stick reads as centred and the D-pad / bumpers take over (0.2) |

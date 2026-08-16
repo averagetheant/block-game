@@ -60,6 +60,43 @@ return {
 	-- the HUD. Under the storm's white-out, which is drawn inside the HUD at its
 	-- own ZIndex and covers the screen on purpose.
 	AFK_Z_INDEX = 50,
+	-- How far anything anchored to a screen edge sits in from it. Lives here
+	-- rather than as a local in TowerHUD (where it started) because the HUD is no
+	-- longer the only thing pinned to a corner, and two copies of the same margin
+	-- drift the moment one is tuned.
+	EDGE_MARGIN = 20,
+	-- The badge that stays up while a player is out of the rotation. Centred,
+	-- hanging just under the HUD's top column.
+	--
+	-- The corners were all tried and all lose. The right edge looks free until you
+	-- measure it: the turn dial sits *outside* the stats column and swings closer
+	-- to the edge as the screen narrows (so it takes the corner on a phone), while
+	-- the reaction bar owns a band from x 1459 across the vertical middle (so it
+	-- takes the corner on a short window). There is no fixed offset that clears
+	-- both — the two hazards move in opposite directions as the aspect changes.
+	-- Left is the rail, bottom-left the controls hint and the voice chips,
+	-- bottom-right the cash counter.
+	--
+	-- Centre-x has no such neighbour at any size, and the only thing it can ever
+	-- overlap is the tower itself — pixels, not buttons. It's also the most
+	-- visible spot on the screen, which is the right trade for a badge that exists
+	-- because somebody missed the message the first time.
+	SPECTATOR_NOTICE_WIDTH = 330,
+	-- Hangs this far below the GUI inset, clearing the HUD's top column (measured
+	-- at 182 canvas units: turn strip, stats row, storm clock and its progress
+	-- line). Authored in canvas units like the column itself, so the two stay in
+	-- step at every viewport rather than only at the one they were checked on.
+	SPECTATOR_NOTICE_TOP = 200,
+	-- Note the badge does *not* sit at EDGE_MARGIN from the top. The root
+	-- ScreenGui sets `IgnoreGuiInset`, so y = 0 is the true top of the display and
+	-- the first stretch belongs to Roblox's own topbar — the player-list button is
+	-- in this very corner. TowerAfkView adds the real inset back, converted into
+	-- canvas units, because a constant can't do it: the inset is a fixed number of
+	-- *screen* pixels while everything in here is scaled, so any offset big enough
+	-- on a monitor is too small on the phone that needed it. See TowerAfkView.
+	-- Red, matching the "Not playing" toggle's own variant in Settings, so the
+	-- badge and the switch that causes it read as the same thing.
+	SPECTATOR_NOTICE_COLOR = Color3.fromRGB(255, 138, 138),
 	-- Consecutive untouched turns before the player is put in the "Not playing"
 	-- seat and asked whether they're still there. Two rather than one: a single
 	-- missed turn is a phone call or a tab switch, and the cost of being wrong

@@ -285,8 +285,21 @@ end
 -- bench a solo player — the queue would be empty and the game would stop — so
 -- flipping the setting there would do nothing except leave them a card about a
 -- rotation they aren't in.
-local function noteTurnIdleness(player: Player)
-	if heldTouched then
+local function noteTurnIdleness(player: Player, autoDropped: boolean)
+	-- Two ways to prove you're there, and dropping the piece is the stronger one.
+	--
+	-- Steering was the only test at first, which quietly libelled anyone who
+	-- plays by dropping the piece where it spawns: a straight drop down the middle
+	-- is a placement, often the right one, and it moves nothing. Two of those in a
+	-- row and the game benched a player who was taking their turns. `autoDropped`
+	-- is false whenever `held` went nil on its own — the player's own Release —
+	-- so pressing drop counts however still the piece was.
+	--
+	-- It's also false when a checkpoint takes the piece mid-turn, which reads as
+	-- presence the player didn't demonstrate. That's the harmless direction: the
+	-- cost of being wrong here is one un-benched idle turn, against a player who
+	-- has to press a button to keep playing.
+	if heldTouched or not autoDropped then
 		idleTurns[player] = 0
 		return
 	end
@@ -2898,11 +2911,15 @@ local function runTurns()
 		while held ~= nil and workspace:GetServerTimeNow() < state.turnEndsAt and player.Parent == Players do
 			task.wait(0.1)
 		end
+		-- Read before the drop below, because that's what clears it: `held` still
+		-- being here means the clock beat the player to it, while it going nil is
+		-- them having released the piece themselves.
+		local autoDropped = held ~= nil
 		if held ~= nil then
 			TowerService.release()
 		end
 
-		noteTurnIdleness(player)
+		noteTurnIdleness(player, autoDropped)
 
 		task.wait(Constants.SETTLE_SECONDS)
 	end

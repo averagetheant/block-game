@@ -101,6 +101,18 @@ short teaches them the game is impatient before they've placed anything — and 
 gamemode whose `turnSeconds` is already under the idle window keeps its own, so
 the fast mode isn't handed a *longer* turn than it asked for.
 
+**There are two ways to prove you're there, and dropping the piece is the
+stronger one.** Steering was the only test at first, and it quietly libelled
+everyone who plays by dropping the piece where it spawns — a straight drop down
+the middle is a placement, often the right one, and it moves nothing. Two of
+those in a row benched a player who was taking every turn. So the turn loop reads
+whether `held` went nil on its own (the player's own `Release`) before it drops
+the piece itself, and hands that to `noteTurnIdleness` as `autoDropped`: pressing
+drop counts however still the piece was. A checkpoint taking the piece mid-turn
+also reads as presence, which is the harmless direction — the cost of being wrong
+that way is one un-benched idle turn, against a player having to press a button
+to keep playing.
+
 **Two untouched turns in a row and they're benched.** `noteTurnIdleness` runs at
 the end of every turn. At `IDLE_TURNS_BEFORE_AFK` (2) consecutive untouched turns
 it turns the player's **"Not playing"** setting on through `SettingsService.set`

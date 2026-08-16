@@ -27,6 +27,19 @@ wally install   # reads wally.toml, populates Packages/
 
 After `wally install`, `Packages/` will contain `React.lua`, `ReactRoblox.lua`, `Loader.lua`, and an `_Index/` folder with transitive dependencies.
 
+**Re-run `wally install` whenever `wally.toml` or `wally.lock` changes** — after a
+pull, after `boil add`, after anyone adds a dependency. `Packages/` is gitignored,
+so the lockfile can name a package your checkout doesn't have on disk, and the
+symptom is nastier than a missing file: `ReplicatedStorage.Packages` is a Rojo
+`$path`, so the *only* thing that puts a package in Studio is having it on disk,
+and a feature requiring the missing one throws inside the client entry's
+presentation loop — which aborts the loop, so every presentation after it silently
+never mounts. A single uninstalled dependency reads as "half the UI is gone".
+
+Adding the module by hand in Studio doesn't fix it and can't: Rojo owns that
+folder and removes anything it doesn't have a file for on the next sync, so the
+manual copy disappears again on the next connect.
+
 ## Dev loop
 
 If you have the CLI installed, one command runs both halves:

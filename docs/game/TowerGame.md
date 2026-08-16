@@ -19,7 +19,9 @@ and no scoring (see [Not built yet](#not-built-yet)).
 1. `TowerService` builds the arena (base platform) at server start.
 2. Players enter a round-robin `queue` on join.
 3. **Turn** — the holder gets a piece spawned clear of the tower (see
-   [The held piece](#the-held-piece)) and `TURN_SECONDS` (15) on the clock.
+   [The held piece](#the-held-piece)) and `TURN_SECONDS` (15) on the clock —
+   or `IDLE_TURN_SECONDS` (6) until they touch it (see
+   [Idle turns](#idle-turns-and-the-inactivity-card)).
 4. The holder steers (continuous left/right) and spins (quarter turns). The piece
    is an *anchored, non-colliding, server-owned Model*, so every player watches
    the same aim with no transform packets involved.
@@ -48,9 +50,19 @@ time it jumped.
 The pressure mechanic, running independently of whose turn it is.
 
 - Each stage names a `targetHeight` and a `STORM_SECONDS` (300) clock. The first
-  checkpoint is `STORM_FIRST_TARGET` (60 studs) up, and every cleared stage puts
-  the next one `STORM_GAP_GROWTH` (5) studs further than the last gap — 60, 65,
-  70, and so on.
+  checkpoint is `STORM_FIRST_TARGET` (40 studs) up, and every cleared stage puts
+  the next one `STORM_GAP_GROWTH` (8) studs further than the last gap — 40, 48,
+  56, and so on.
+
+  **Read the target against the turn budget, not on its own.** A stage is one
+  shared allowance of about eighteen turns (`STORM_SECONDS` / (`TURN_SECONDS` +
+  `SETTLE_SECONDS`)) however many players are in the room, and a flat piece adds
+  `BLOCK_SIZE` (4) studs. The first target used to be 60 — fifteen of those
+  eighteen turns spent gaining full height, a three-turn margin for every piece
+  that slid off and every player who wasn't looking — and the onboarding funnel
+  lost three quarters of its players at the first checkpoint. 40 is ten clean
+  placements. The growth was raised alongside it so only the early stages get
+  easier: the curve passes the old one by the fifth checkpoint.
 - **Cleared** — the tower reaches the target and the [checkpoint cutscene](#the-checkpoint-cutscene)
   runs. Afterwards the floor count is up and the next target is set to *the height
   they actually reached* plus the new gap; overshooting doesn't make the next stage
@@ -66,6 +78,57 @@ grows it evenly about its center instead of dragging one face.
 
 Checkpoints are tracked in their own list, separate from `blocks` — they have no
 physics but still count toward the tower's top.
+
+## Idle turns and the inactivity card
+
+The stage's turn allowance is the room's, not any one player's, so a player who
+isn't there spends the room's budget. They drop the piece from dead centre
+whatever the clock says — the last ten seconds of their turn buy nothing and cost
+a turn the room needed to make its target.
+
+**A turn opens short and is bought back.** `beginTurn` sets the deadline to
+`IDLE_TURN_SECONDS` (6); the first steer or rotate extends it to the stage's full
+`turnSeconds`, measured from when the turn started. The test for "touched" is the
+same displacement / rotation check that decides whether a turn counts as
+`Steered` / `Rotated` for the turn funnel, so there's one definition of engagement
+rather than two that can disagree. `turnEndsAt` is a server-time stamp the HUD's
+ring counts down from, so the extension replicates as more time on the dial with
+nothing to reconcile.
+
+Two exemptions, both in `beginTurn`: a player's first `IDLE_GRACE_TURNS` (1) turns
+get the whole clock up front — they're reading the controls hint, and cutting that
+short teaches them the game is impatient before they've placed anything — and a
+gamemode whose `turnSeconds` is already under the idle window keeps its own, so
+the fast mode isn't handed a *longer* turn than it asked for.
+
+**Two untouched turns in a row and they're benched.** `noteTurnIdleness` runs at
+the end of every turn. At `IDLE_TURNS_BEFORE_AFK` (2) consecutive untouched turns
+it turns the player's **"Not playing"** setting on through `SettingsService.set`
+and sends them `Packets.AfkNotice`; the client raises a centred card
+(`AfkNotice.ui.luau`) offering **"OK"** (stay out) and **"I'm here!"** (back in).
+
+Some notes on why it's shaped this way:
+
+- **It reuses the existing setting rather than inventing a second kind of
+  benched.** The queue already skips spectators (`isSpectating`), the Settings
+  window already has the row, and the card's green button is the ordinary
+  Settings write — so the two surfaces agree without either knowing about the
+  other, and the way back is never a special case.
+- **Alone in the server, none of it runs.** `isSpectating` already refuses to
+  bench a solo player (the queue would be empty and the game would stop), so
+  flipping the setting there would achieve nothing except a card about a rotation
+  they aren't in.
+- **The card is centred and covers the screen.** A notification in a corner is
+  exactly what a player who has wandered off will miss, and it catches the clicks
+  that would otherwise reach the HUD behind it.
+- **Being benched doesn't follow them to tomorrow.** The setting persists — right
+  for a player who chose it, a trap for one who stepped away — so the auto-bench
+  is recorded as `AutoAfk` in the profile slice and undone on their next join
+  (`TowerStatsService.consumeAutoAfk`). Being idle costs a player the rest of that
+  session at most.
+- The counter resets to zero on the bench as well as on a touch, so a player who
+  comes back, takes a turn and wanders off again gets a fresh two turns rather
+  than being benched by a single missed one.
 
 **Only the newest platform survives.** When a floor lands, every earlier one goes
 out with the scaffolding under it: `blastPlatformsBelow` un-anchors them, turns
@@ -543,8 +606,8 @@ the tower has to stay empty.
 | Play plane | `z = 0`; blocks are 4 deep, so they occupy `z −2 … +2` | `PLANE_Z`, `BLOCK_DEPTH` |
 | Base platform | 48 × 4 × 8 centred at **(0, 40, 0)** — top surface **y = 42** | `PLATFORM_SIZE`, `BASE_POSITION` |
 | Build column | `x −24 … +24` (pieces steer to ±22 and overhang) | `STEER_LIMIT_X` |
-| First checkpoint floor | **y 102 – 106** (60 studs above the base top) | `STORM_FIRST_TARGET` |
-| Later checkpoints | +65, +70, +75 … above the last one; everything below each new floor is demolished | `STORM_GAP_GROWTH` |
+| First checkpoint floor | **y 82 – 86** (40 studs above the base top) | `STORM_FIRST_TARGET` |
+| Later checkpoints | +48, +56, +64 … above the last one; everything below each new floor is demolished | `STORM_GAP_GROWTH` |
 | Camera, desktop | (0, ≈66, **+78**), FOV 60 vertical | `CAMERA_DISTANCE` |
 | Camera, phone | (0, ≈57, **+94**) | `CAMERA_DISTANCE_TOUCH` |
 | Camera, max pullback | up to **z +420** on overview / checkpoint shots | `CAMERA_MAX_DISTANCE` |
@@ -692,7 +755,7 @@ devices.
 | ---- | ----- | ---- |
 | `Constants.luau` | shared | Every tunable + `Presentations` gating |
 | `Shapes.luau` | shared | The seven tetrominoes as grid cells (ids are wire-stable) |
-| `Packets.luau` | shared | ByteNet: `Place`, `Release`, `State` |
+| `Packets.luau` | shared | ByteNet: `Place`, `Release`, `State`, `Announce`, `AfkNotice` |
 | `BlockSkins.luau` | shared | Look + sounds per skin, with rarity weights |
 | `BlockTypes.luau` | shared | The twelve block types, their descriptions, the odds curve, and the Mystery pool |
 | `BlockLabel.luau` | shared | The world-space name plate, and `titleFor` — the one place a piece is named |
@@ -714,6 +777,10 @@ devices.
 | `TowerPointerController.client.luau` | client | Mouse aiming + click-to-drop (PC) |
 | `TowerCameraController.client.luau` | client | Scriptable camera riding the tower's altitude, the checkpoint pull-back, and the storm shake |
 | `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the clocks, picks the device |
+| `TowerAfkController.client.luau` | client | Whether the inactivity card is up, and the two answers to it |
+| `TowerAfkView.client.luau` | client | Container for the card; renders nothing while it's down |
+| `TowerAfkPresentation.client.luau` | client | Registers the card as an always-mounted root (`Presentations.afk`) |
+| `AfkNotice.ui.luau` | shared | Dumb card: the copy, the red / green pair, the screen cover |
 | `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls, Extend Storm, the urgency tick) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
 | `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
@@ -831,12 +898,13 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | Constant | Effect |
 | -------- | ------ |
 | `TURN_SECONDS` | The drop clock (15) |
+| `IDLE_TURN_SECONDS`, `IDLE_GRACE_TURNS`, `IDLE_TURNS_BEFORE_AFK` | The short clock for an untouched turn (6), how many of a player's first turns are exempt (1), and how many untouched turns in a row bench them (2) — see [Idle turns](#idle-turns-and-the-inactivity-card) |
 | `SETTLE_SECONDS` | Pause between turns |
 | `STEER_SPEED`, `STEER_LIMIT_X` | How fast a piece slides and how far off-center it can get |
 | `GAMEPAD_STEER_DEADZONE` | Below this the left stick reads as centred and the D-pad / bumpers take over (0.2) |
 | `SPAWN_CLEARANCE` | Clear air under a fresh piece, measured from its lowest possible point — see [The held piece](#the-held-piece) |
 | `STORM_SECONDS` | The stage clock (300) |
-| `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 60 studs, each next gap 5 further |
+| `STORM_FIRST_TARGET`, `STORM_GAP_GROWTH` | First checkpoint at 40 studs, each next gap 8 further. Tune them against the ~18-turn stage budget, not on their own — see [The storm](#the-storm) |
 | `STORM_BLAST_*` | How hard the storm throws the tower, and how long the debris flies |
 | `CHECKPOINT_*_SECONDS` | The four beats of the checkpoint cutscene. Total pause is their sum plus `PLATFORM_GROW_SECONDS` |
 | `CHECKPOINT_BLAST_*` | How hard the old tower is thrown when the new floor lands |

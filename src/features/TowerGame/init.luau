@@ -9,5 +9,6 @@ local TowerGame = {}
 TowerGame.Constants = require(script.Constants)
 TowerGame.Shapes = require(script.Shapes)
 TowerGame.UI = require(script.TowerHUD)
+TowerGame.AfkNotice = require(script.AfkNotice)
 
 return TowerGame

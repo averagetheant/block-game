@@ -11,5 +11,14 @@ return function(PlayerData)
 		BiggestHeight = 0,
 		-- Earned by reaching zones and by time played. See CashService.
 		Cash = 0,
+		-- Whether the "Not playing" setting was turned on *for* this player by
+		-- the inactivity check rather than by them.
+		--
+		-- The setting itself is a preference and persists, which is right for a
+		-- player who chose it and a trap for one who was away: they would come
+		-- back tomorrow already benched, never get a turn, and have no reason to
+		-- connect the two. TowerService clears both on join when this is set, so
+		-- being idle costs a player the rest of that session at most.
+		AutoAfk = false,
 	})
 end

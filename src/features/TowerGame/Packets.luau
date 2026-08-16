@@ -115,5 +115,21 @@ return ByteNet.defineNamespace("TowerGame", function()
 			}),
 			reliabilityType = "reliable",
 		}),
+
+		-- Server -> One: you've been taken out of the turn order for sitting out
+		-- two turns in a row. The setting is already flipped by the time this
+		-- arrives — this is the telling, not the doing, which is why there's
+		-- nothing in it. The card it raises offers the way back, and that route
+		-- is the ordinary Settings write every other toggle uses.
+		AfkNotice = ByteNet.definePacket({
+			value = ByteNet.struct({
+				-- ByteNet wants a shape; the fact of the packet is the message.
+				-- How many turns went by is the only thing worth saying beyond
+				-- that, and it lets the card read "two turns" without the client
+				-- hardcoding a number the server owns.
+				turns = ByteNet.uint8,
+			}),
+			reliabilityType = "reliable",
+		}),
 	}
 end)

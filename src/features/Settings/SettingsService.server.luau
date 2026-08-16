@@ -52,6 +52,33 @@ function SettingsService.get(player: Player, id: string): any
 	return value
 end
 
+-- Set `id` for this player from the server, as if they had toggled it.
+--
+-- The mirror of `get`, for the case where the *game* has to change a player's
+-- setting rather than answer a request to: an idle player taken out of the turn
+-- order, a mode that forces an option off. It goes through the same validation
+-- and the same blessed mutation path as the packet handler below, so the change
+-- reaches the replica (the Settings window's row flips live, with no separate
+-- "the server thinks otherwise" state to reconcile) and the next autosave.
+--
+-- Returns whether it was written. A caller passing an unregistered id or the
+-- wrong kind for it is a bug in the caller, so it warns rather than failing
+-- quietly — the same treatment a client sending that packet would get.
+function SettingsService.set(player: Player, id: string, value: any): boolean
+	local def = Registry.getSetting(id)
+	if def == nil then
+		warn(`[Settings] server tried to set unregistered setting "{id}"`)
+		return false
+	end
+	if def.kind == "toggle" and typeof(value) ~= "boolean" then
+		warn(`[Settings] server sent a non-boolean for toggle "{id}"`)
+		return false
+	end
+
+	PlayerDataService.SetValue(player, { Constants.PROFILE_KEY, id }, value)
+	return true
+end
+
 function SettingsService.Start()
 	Packets.SetToggle.listen(function(payload: { id: string, value: boolean }, player: Player)
 		local id = payload.id

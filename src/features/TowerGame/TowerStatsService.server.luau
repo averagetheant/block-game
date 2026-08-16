@@ -107,6 +107,38 @@ function TowerStatsService.recordHeight(height: number)
 	end
 end
 
+-- Remember that the "Not playing" setting was turned on *for* this player by the
+-- inactivity check rather than by them. See the note on `AutoAfk` in
+-- PlayerData.luau for why that distinction has to survive the session.
+--
+-- Not a stat, but the profile slice is this module's to touch: PlayerData.luau
+-- registers the shape and everything that reads or writes it comes through here.
+function TowerStatsService.setAutoAfk(player: Player, value: boolean)
+	if slice(player) == nil then
+		return
+	end
+	PlayerDataService.SetValue(player, { KEY, "AutoAfk" }, value)
+end
+
+-- Whether this player was benched by the inactivity check last time, clearing
+-- the flag as it answers. **Yields**: the profile loads asynchronously and the
+-- caller runs on join, so a plain read would answer "no" for every player every
+-- time — which is the bug this whole flag exists to avoid, arrived at from the
+-- other direction. A profile that never loads answers false and stays as it is.
+function TowerStatsService.consumeAutoAfk(player: Player): boolean
+	local deadline = os.clock() + PROFILE_WAIT_SECONDS
+	while slice(player) == nil and os.clock() < deadline and player.Parent == Players do
+		task.wait(0.25)
+	end
+
+	local saved = slice(player)
+	if saved == nil or saved.AutoAfk ~= true then
+		return false
+	end
+	PlayerDataService.SetValue(player, { KEY, "AutoAfk" }, false)
+	return true
+end
+
 function TowerStatsService.Start()
 	Players.PlayerAdded:Connect(ensureFolder)
 	Players.PlayerRemoving:Connect(function(player)

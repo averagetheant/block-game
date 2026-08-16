@@ -177,6 +177,27 @@ local placerOf: { [Model]: Player } = setmetatable({}, { __mode = "k" }) :: any
 local nextShape: Shapes.Shape = Shapes.random()
 local lastBroadcast = 0
 
+-- ------------------------------------------------------------------ idleness --
+-- A stage is one shared budget of about eighteen turns, and a player who isn't
+-- there spends theirs dropping the piece from where it spawned. These three
+-- track that so the clock can be handed back (a turn nobody touches ends early)
+-- and so the room stops dealing turns to an empty chair (two in a row and they
+-- take the "Not playing" seat until they say otherwise).
+--
+-- "Touched" is steering or rotating — the same test that decides whether a turn
+-- counts as Steered / Rotated for the funnel. Holding the piece still for the
+-- full clock is a decision, but it isn't one that needs fifteen seconds.
+local heldTouched = false
+-- When the current turn began, so granting the full clock on first touch is
+-- measured from the start of the turn rather than from the moment they woke up.
+local turnStartedAt = 0
+-- Consecutive untouched turns, per player. Cleared the moment they touch a
+-- piece, and on the way into the "Not playing" seat.
+local idleTurns: { [Player]: number } = {}
+-- Turns dealt to each player this session, so a first-timer's first turn can be
+-- exempt from the short clock (IDLE_GRACE_TURNS).
+local turnsDealt: { [Player]: number } = {}
+
 -- Mirrors the State packet exactly; `broadcast` ships it as-is.
 local state = {
 	phase = PHASE.IDLE,
@@ -237,6 +258,49 @@ local function isSpectating(player: Player): boolean
 		return false
 	end
 	return SettingsService.get(player, Constants.SETTING_NOT_PLAYING) == true
+end
+
+-- Book-keeping at the end of a turn: did they touch the piece, and if they
+-- haven't for IDLE_TURNS_BEFORE_AFK turns running, take them out of the
+-- rotation and tell them why.
+--
+-- Being taken out is the ordinary "Not playing" setting rather than a second,
+-- parallel notion of benched. That's what makes the way back free: the toggle
+-- in the Settings window and the card's own button are the same write, the
+-- queue already honours it (`isSpectating` above), and the room needs no new
+-- rule to understand the state.
+--
+-- Alone in the server, none of this runs. `isSpectating` already refuses to
+-- bench a solo player — the queue would be empty and the game would stop — so
+-- flipping the setting there would do nothing except leave them a card about a
+-- rotation they aren't in.
+local function noteTurnIdleness(player: Player)
+	if heldTouched then
+		idleTurns[player] = 0
+		return
+	end
+
+	local missed = (idleTurns[player] or 0) + 1
+	idleTurns[player] = missed
+
+	if missed < Constants.IDLE_TURNS_BEFORE_AFK or #Players:GetPlayers() <= 1 then
+		return
+	end
+	if SettingsService.get(player, Constants.SETTING_NOT_PLAYING) == true then
+		return
+	end
+
+	-- Counted from zero rather than left at the limit: if they come back, play a
+	-- turn and wander off again, that's a fresh two turns before this fires
+	-- again rather than a single missed turn benching them.
+	idleTurns[player] = 0
+
+	SettingsService.set(player, Constants.SETTING_NOT_PLAYING, true)
+	-- Remembered so their next visit starts with them in the game. The setting
+	-- persists, which is right for a player who chose it and a trap for one who
+	-- was away — see PlayerData.luau.
+	TowerStatsService.setAutoAfk(player, true)
+	Packets.AfkNotice.sendTo({ turns = missed }, player)
 end
 
 -- Turn order for the HUD: whoever holds the piece first, then the queue in the
@@ -880,6 +944,21 @@ function TowerService.applyPlacement(player: Player, x: number, turns: number)
 	if quarter ~= 0 then
 		AnalyticsService.step(player, "turn", "Rotated")
 	end
+
+	-- First sign of life this turn: hand back the rest of the clock.
+	--
+	-- The turn opened on IDLE_TURN_SECONDS, and this is what makes that safe —
+	-- the short window is only ever spent by someone who isn't aiming, and the
+	-- moment they are, they have the whole of it. `turnEndsAt` is a server-time
+	-- stamp the HUD's dial counts down from, so the extension replicates as more
+	-- time on the ring rather than as a dial that has to be told it lied.
+	if heldTouched or (math.abs(clampedX) <= 1 and quarter == 0) then
+		return
+	end
+	heldTouched = true
+	idleTurns[player] = 0
+	state.turnEndsAt = turnStartedAt + stage.turnSeconds
+	broadcast()
 end
 
 -- -------------------------------------------------------------- the landing --
@@ -1463,7 +1542,19 @@ local function beginTurn(player: Player)
 	state.phase = PHASE.AIMING
 	state.pieceTop = pivot.Position.Y + halfHeight - baseTopY
 	state.holderUserId = player.UserId
-	state.turnEndsAt = workspace:GetServerTimeNow() + stage.turnSeconds
+
+	-- The turn opens short and is extended to the full clock by the first steer
+	-- or rotate (see `aim`). A player's first turns get the whole thing up front
+	-- — they're reading the controls hint — and a gamemode with turns already
+	-- shorter than the idle window keeps its own, so the fast mode isn't handed
+	-- a longer turn than it asked for.
+	turnsDealt[player] = (turnsDealt[player] or 0) + 1
+	heldTouched = turnsDealt[player] <= Constants.IDLE_GRACE_TURNS
+	turnStartedAt = workspace:GetServerTimeNow()
+	local window = if heldTouched
+		then stage.turnSeconds
+		else math.min(Constants.IDLE_TURN_SECONDS, stage.turnSeconds)
+	state.turnEndsAt = turnStartedAt + window
 	-- 0 for a piece with no silhouette; the HUD names it from blockTypeId instead.
 	state.shapeId = if shape then shape.id else 0
 	state.blockTypeId = if blockType then blockType.id else 0
@@ -2642,14 +2733,19 @@ local function runTurns()
 
 		beginTurn(player)
 
-		-- Ends on any of: the player released it (held goes nil), the 20s clock
+		-- Ends on any of: the player released it (held goes nil), the clock
 		-- expired, the holder left mid-turn, or a checkpoint took the piece away.
+		-- The clock is re-read each pass rather than captured, because the first
+		-- touch extends it (see `aim`) — a captured deadline would end the turn
+		-- of the player who just woke up.
 		while held ~= nil and workspace:GetServerTimeNow() < state.turnEndsAt and player.Parent == Players do
 			task.wait(0.1)
 		end
 		if held ~= nil then
 			TowerService.release()
 		end
+
+		noteTurnIdleness(player)
 
 		task.wait(Constants.SETTLE_SECONDS)
 	end
@@ -2679,6 +2775,18 @@ local function addPlayer(player: Player)
 	AnalyticsService.start(player, "round", "Round Started")
 	AnalyticsService.start(player, "stage", "Stage Started")
 
+	-- Put back anyone the inactivity check benched in an earlier session. The
+	-- setting persists — it's a preference — so without this, being away for two
+	-- turns once would greet them with a game that never deals them a piece and
+	-- nothing on screen connecting the two. Spawned because the answer waits on
+	-- the profile and a join shouldn't.
+	task.spawn(function()
+		if not TowerStatsService.consumeAutoAfk(player) or player.Parent ~= Players then
+			return
+		end
+		SettingsService.set(player, Constants.SETTING_NOT_PLAYING, false)
+	end)
+
 	-- The joiner's controller isn't listening yet; the 1s heartbeat in
 	-- updateHeight is what actually gets them their first state.
 	broadcast()
@@ -2696,6 +2804,11 @@ local function removePlayer(player: Player)
 		repeatTurnFor = nil
 		repeatTurnsLeft = 0
 	end
+	-- Idleness is a fact about this visit. A rejoin starts clean — including the
+	-- first-turn grace, which someone coming back deserves as much as someone
+	-- arriving for the first time.
+	idleTurns[player] = nil
+	turnsDealt[player] = nil
 end
 
 function TowerService.Start()

@@ -194,6 +194,17 @@ SettingsController.setToggle("myfeature.cool_thing", false)
 
 The client never mutates the value locally — the ByteNet packet round-trips through the server, which validates against the Registry and routes the write through `PlayerDataService.SetValue`. The Replica diff comes back and the UI updates from `useReplica`.
 
+## Writing values from feature code (server)
+
+```lua
+local SettingsService = require(ServerScriptService.Features.Settings.SettingsService)
+SettingsService.set(player, "myfeature.cool_thing", false)
+```
+
+For the case where the *game* changes a player's setting rather than answering a request to — TowerGame benching an idle player by turning their "Not playing" on, a mode forcing an option off. Same validation and same mutation path as the packet handler, so the Settings window's row flips live off the replica and there's no second "the server thinks otherwise" state to reconcile. Returns whether it wrote; an unregistered id or the wrong type for the kind warns and returns false, because that's a bug in the caller.
+
+Reach for it sparingly. A setting is the player's, and a feature that quietly rewrites one owes them a reason on screen — the AFK card is what makes that particular write fair rather than baffling.
+
 ## Linking from another UI
 
 ```lua

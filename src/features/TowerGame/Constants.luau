@@ -42,6 +42,30 @@ return {
 	-- ---------------------------------------------------------------- turns --
 	-- Hard cap on how long the holder may aim before the piece drops itself.
 	TURN_SECONDS = 15,
+	-- How long a turn runs for a holder who hasn't touched the piece yet. The
+	-- full clock is granted the moment they steer or rotate it.
+	--
+	-- A stage is one shared budget of turns — STORM_SECONDS / (TURN_SECONDS +
+	-- SETTLE_SECONDS), about 18 of them — and the room needs most of those to
+	-- gain height. Someone who is away drops the piece from dead centre whatever
+	-- the clock says, so the last ten seconds of their turn buy the room nothing
+	-- and cost it a turn it needed. This gives those seconds back without
+	-- hurrying anybody who is actually aiming.
+	IDLE_TURN_SECONDS = 6,
+	-- A player's first turn always gets the full clock: they are reading the
+	-- controls hint, and cutting that one short teaches them the game is
+	-- impatient before they have placed anything.
+	IDLE_GRACE_TURNS = 1,
+	-- The inactivity card is a question the player has to answer, so it sits over
+	-- the HUD. Under the storm's white-out, which is drawn inside the HUD at its
+	-- own ZIndex and covers the screen on purpose.
+	AFK_Z_INDEX = 50,
+	-- Consecutive untouched turns before the player is put in the "Not playing"
+	-- seat and asked whether they're still there. Two rather than one: a single
+	-- missed turn is a phone call or a tab switch, and the cost of being wrong
+	-- (a player who has to press a button to keep playing) is paid by the player
+	-- who did nothing wrong.
+	IDLE_TURNS_BEFORE_AFK = 2,
 	-- Grace period after a drop before the next player is handed a piece.
 	SETTLE_SECONDS = 1.5,
 	-- Clear air between the *bottom* of a fresh piece and the top of everything it
@@ -318,10 +342,24 @@ return {
 	-- keeps a long session from dragging a thousand physics parts behind it.
 	STORM_SECONDS = 300,
 	-- Distance to the first checkpoint, in studs above the base.
-	STORM_FIRST_TARGET = 60,
+	--
+	-- Read this against the turn budget, not on its own: a stage is about 18
+	-- turns (STORM_SECONDS / (TURN_SECONDS + SETTLE_SECONDS)) and a flat piece
+	-- adds BLOCK_SIZE studs. At 60 the room needed ~15 of its ~18 turns to gain
+	-- full height — a three-turn margin for every piece that slides off, every
+	-- overhang and every player who wasn't looking — and the onboarding funnel
+	-- lost three quarters of its players at the first checkpoint. 40 is ten
+	-- clean placements, which a room of strangers can miss a few times and
+	-- still make.
+	STORM_FIRST_TARGET = 40,
 	-- Every cleared stage puts the next checkpoint this much further out than
-	-- the last gap: 60, then 65, then 70…
-	STORM_GAP_GROWTH = 5,
+	-- the last gap: 40, then 48, then 56…
+	--
+	-- Raised with the target above rather than left alone: the first stage is
+	-- the one the funnel dies on, so that's the only one that should get
+	-- easier. This curve passes the old one (60, 65, 70, 75, 80) by the fifth
+	-- checkpoint, so a room that's still climbing is climbing the same wall.
+	STORM_GAP_GROWTH = 8,
 	-- When the clock runs out the tower is thrown apart rather than quietly
 	-- deleted. Random horizontal shove + upward kick, then cleanup.
 	STORM_BLAST_HORIZONTAL = 90,
@@ -645,5 +683,9 @@ return {
 		-- server handlers behind them. Off = the products stop being offered and
 		-- any receipt for one is left undelivered rather than silently eaten.
 		actions = true,
+		-- The "are you still there?" card, shown to a player the turn order has
+		-- just dropped for inactivity. Off = they're still taken out of the
+		-- rotation, they're just never told — so leave it on.
+		afk = true,
 	},
 }

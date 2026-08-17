@@ -145,6 +145,21 @@ return function()
 	-- classic state packet — which the server stops sending for the duration.
 	local pvp = Boil.useReplica(PvpController)
 
+	-- Which control list the hint shows, and whether the touch buttons render.
+	-- `useDevice` starts from what the machine *has* and then follows what the
+	-- player actually *uses*, so plugging in a controller on a PC switches the
+	-- hint to the stick bindings the moment it's touched.
+	--
+	-- Called up here with the rest of the hooks and *above* the early returns
+	-- below, not down beside the render that reads it. React identifies a hook by
+	-- call order, so a hook that only runs on the renders that get past a guard is
+	-- a different hook count each time — which is exactly what "Rendered fewer
+	-- hooks than expected" means. It fired every time a PVP round started (the
+	-- guard below trips, the render is one `useState`/`useEffect` shorter, React
+	-- throws) and took the whole UI root down with it. Every hook in this file
+	-- runs unconditionally; the guards start after the last one.
+	local device = useDevice()
+
 	if state == nil then
 		return nil
 	end
@@ -168,11 +183,6 @@ return function()
 		if shape then shape.name else nil
 	)
 
-	-- Which control list the hint shows, and whether the touch buttons render.
-	-- Owned by `useDevice` below: it starts from what the machine *has* and then
-	-- follows what the player actually *uses*, so plugging in a controller on a
-	-- PC switches the hint to the stick bindings the moment it's touched.
-	local device = useDevice()
 	local touchOnly = device == "touch"
 
 	return React.createElement(TowerHUD, {

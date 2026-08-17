@@ -31,6 +31,19 @@ core can be driven by a screen GUI, an in-world part, or a Cmdr command at once.
 3. **The core never imports a view.** Dependencies point *from* the view *into*
    the core, never back.
 
+4. **Every hook runs before the first guard.** A container view is mostly guards
+   — "no state yet", "the other mode owns the board" — and each one is a `return
+   nil` partway down the render. React identifies a hook by *call order*, so a
+   hook placed below a guard runs on some renders and not others, and the render
+   where the guard trips is a hook short: `Rendered fewer hooks than expected`.
+   That throw isn't local to the view. It propagates to the React root, which
+   unmounts the **whole tree** — every other feature's UI included — so the
+   symptom is "all the UI vanished when X happened", never "this view broke".
+   Call `useReplica` / `useState` / `useEffect` / any `useX()` at the top,
+   unconditionally, then guard. `TowerView` learned this the hard way: its
+   `useDevice()` sat below the PVP guard, so starting a PVP round took the entire
+   HUD, sidebar and reaction bar down with it.
+
 ## Enforcement
 
 `lune run tools/check-views` scans every `*.ui.luau` and `*View*.luau` under

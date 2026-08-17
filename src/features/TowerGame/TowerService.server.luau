@@ -1131,6 +1131,13 @@ local function applyZoneLook(
 	-- stopped studding. Hiding the body puts the square cells back on screen —
 	-- which is exactly what a 1962 brick should look like, and costs nothing,
 	-- because the cells were never removed, only made invisible.
+	-- `skin.transparency` is optional and most skins don't set it, so it needs the
+	-- same `or 0` buildPiece gives it. Without it this assigns nil to Transparency,
+	-- which throws — and because applyZoneLook runs *before* the piece is pivoted
+	-- and parented, that took the whole deal down with it: the piece was left
+	-- unpivoted at the layout origin instead of at spawn height.
+	local transparency = skin.transparency or 0
+
 	local body = BlockBody.of(model)
 	if body then
 		body.Transparency = if retro then 1 else transparency

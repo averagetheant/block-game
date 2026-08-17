@@ -40,13 +40,17 @@ return {
 	-- squishy the block should look. An attribute rather than a packet: it has to
 	-- arrive with the block and stay attached to it for the block's whole life.
 	SKIN_ATTRIBUTE = "SkinId",
-	-- Marks the rounded shell a block is seen as, so `modelParts` can keep it out of
-	-- everything that speaks for the simulation. Load-bearing: `modelParts` walks
-	-- descendants, and without a per-part tell the body is indistinguishable from a
-	-- tetromino cell to every loop that measures, weighs or plane-clamps a block —
-	-- while the body carries no mass, answers no raycast, and grows a stud past the
-	-- cubes underneath it whenever the squash has hold of it.
+	-- Marks the rounded shell a block is seen as. Client-only — the server never
+	-- makes one — so this exists for the client-side passes that walk a block's
+	-- parts (the zone dressing's lights, the aim preview's clone) and must not
+	-- mistake a render part for a cell.
 	BODY_ATTRIBUTE = "BlockBody",
+	-- Which tetromino a piece was built from, so each client knows which rounded
+	-- body to build over it. An attribute rather than a packet for the same reason
+	-- the skin is one: it has to arrive with the block and stay attached for the
+	-- block's whole life — including on the clone the aim preview makes of it,
+	-- which is a piece the client has to dress without ever being told about.
+	SHAPE_ATTRIBUTE = "ShapeId",
 	-- Nobody walks around in a stationary-camera stacking game, so characters are
 	-- off by default. Flip to false to get avatars back (they spawn at the world
 	-- origin and are unrelated to the tower).

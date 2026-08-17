@@ -413,37 +413,52 @@ shape settles into its neighbours' corners, and a flat course would stop being
 flat. They are also **invisible**.
 
 What you see is the **body** (`BlockBody.luau`): a single CSG union of the whole
-tetromino with its corners rounded, one per shape, cloned out of
-`ReplicatedStorage.Assets.BlockBodies` and welded over the cubes. The rounding
-runs *through* the joints between cells — a cell with a neighbour drops its
-rounding on that side and the edge cylinders are stretched across — so a piece
-reads as one moulded shape rather than four blocks bolted together. Rounded only
-at the shape's true outside corners.
+tetromino with its corners rounded, one per shape, out of
+`ReplicatedStorage.Assets.BlockBodies`. The rounding runs *through* the joints
+between cells — a cell with a neighbour drops its rounding on that side and the
+edge cylinders are stretched across — so a piece reads as one moulded shape
+rather than four blocks bolted together. Rounded only at the shape's true outside
+corners.
 
-The body is `CanCollide` false, `CanQuery` false and `Massless`. That is what
-makes it safe to **resize**, which is how the squash works
-(`TowerSquashController`): a damped spring off each impact writes the body's
-`Size`, and shifts its weld's `C0` so the compression happens *onto* the surface
-it hit rather than about its own centre. Doing any of that to a cell would change
-its mass (breaking the Anvil and Feather densities), change its collision, and
-corrupt `partTopY` → `restingTopY` → `SPAWN_CLEARANCE`, which is how a piece ends
-up spawning inside the tower.
+**Each client builds its own** (`TowerBodyController`), and that is not an
+optimisation, it's the only way it renders. The body was server-made and welded
+on first. It replicated with the right `Size`, the right `TriangleCount` and its
+mesh present — every measurement came back clean — and drew on the client as a
+tiny cube. A union the client clones out of its own ReplicatedStorage draws
+correctly, which is what the aim preview had been demonstrating the whole time:
+the preview looked right while the dropped block didn't, because the preview is a
+clone the client made.
+
+So the server ships four **visible** cubes and stamps the shape id on the model;
+each client clones the matching body, hides the cubes with
+`LocalTransparencyModifier`, and drives the body off the root cell every frame.
+Nothing extra crosses the wire, and the server view stays readable for debugging.
+
+The body is `CanCollide` false, `CanQuery` false, `Massless` and never welded —
+welding a local part onto a server-owned assembly puts a render instance into the
+physics engine's idea of that assembly. That is what makes it safe to **resize**,
+which is how the squash works: a damped spring off each impact writes the body's
+`Size` and offsets its CFrame so the compression happens *onto* the surface it hit
+rather than about its own centre. Doing any of that to a cell would change its
+mass (breaking the Anvil and Feather densities), change its collision, and corrupt
+`partTopY` → `restingTopY` → `SPAWN_CLEARANCE`, which is how a piece ends up
+spawning inside the tower.
 
 Three consequences worth knowing:
 
-- **`modelParts` excludes the body; `allParts` includes it.** The body is a
-  BasePart descendant like any cell, and it is the wrong answer to every question
-  the simulation asks — no mass, no raycast, and a stud wider than the cubes
-  whenever the squash has hold of it. Excluding it in the helper rather than at
-  the call sites makes the safe answer the default. A third helper, `shownParts`,
-  is what anything writing *transparency* must use: fading "every part" would fade
-  the hidden cubes up from invisible and a ghost would show its own skeleton.
+- **The server never mentions the body, and `modelParts` is unchanged.** Nothing
+  in the simulation has to know bodies exist, because on that side they don't.
+- **The body mirrors its cells.** Colour, material and transparency are read off
+  the root cell every frame, so every server-side effect reaches the screen
+  without knowing about bodies: a bomb's red flash, a burning block charring and
+  fading, a ghost going see-through, a zone re-dressing the tower.
 - **The Retro zone takes the coat off.** Studs are a property of a flat face and
-  render as nothing on a rounded one, so Retro hides the body and puts the square
-  cells back on screen — which is what a 1962 brick should look like, and costs
-  nothing, because the cells were only ever invisible, never removed.
-- **A missing asset degrades to the old game.** No `BlockBodies` folder means the
-  cubes stay visible and the game looks exactly as it did before bodies existed.
+  render as nothing on a rounded one, so when the client sees studs on a cell it
+  hides the body and shows the square cells — which is what a 1962 brick should
+  look like. Read off the cells, so it needs no packet and no state.
+- **A missing asset degrades to the old game.** No `BlockBodies` folder, or a
+  client that can't build one, means the visible cubes are the block and the game
+  looks exactly as it did before bodies existed.
 
 Skins still own **material and colour**, so a Concrete block is a rounded concrete
 block and Needoh is rounded glass. The shape is the house style; the surface is
@@ -940,8 +955,8 @@ devices.
 | `BlockTypes.luau` | shared | The twelve block types, their descriptions, the odds curve, and the Mystery pool |
 | `BlockLabel.luau` | shared | The world-space name plate, and `titleFor` — the one place a piece is named |
 | `NoobBlock.luau` | shared | The Noob rig: build, wander, squash. Server-only in practice |
-| `BlockBody.luau` | shared | The rounded shell: the template lookup, welding one over a piece's cubes, and the guard that keeps it out of the simulation |
-| `TowerSquashController.client.luau` | client | Squash and stretch — a damped spring off each impact, written to the body's `Size` and weld `C0` and to nothing else |
+| `BlockBody.luau` | shared | The rounded shell: the template lookup and the offset that seats one over a piece's cubes |
+| `TowerBodyController.client.luau` | client | Builds each block's body client-side, hides the cubes under it, mirrors their look, and runs the squash spring |
 | `Zones.luau` | shared | The seven zones, their skies, and their gravity |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `Gamemodes.luau` | shared | The three votable modes and the stage numbers each one sets |

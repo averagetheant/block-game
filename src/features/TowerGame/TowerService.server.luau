@@ -51,7 +51,6 @@ local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
 local Sfx = require(ReplicatedStorage.Features.TowerGame.Sfx)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
 local SkinPacks = require(ReplicatedStorage.Features.TowerGame.SkinPacks)
-local BlockBody = require(ReplicatedStorage.Features.TowerGame.BlockBody)
 local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 -- Server-realm siblings (ServerScriptService.Features.TowerGame.*).
@@ -693,59 +692,27 @@ local function randomColor(): Color3
 	return Color3.fromHSV(math.random(), 0.68, 0.98)
 end
 
-local function collectParts(model: Model, body: boolean): { BasePart }
+local function collectParts(model: Model): { BasePart }
 	local found = {}
 	for _, descendant in model:GetDescendants() do
-		if not descendant:IsA("BasePart") then
-			continue
+		if descendant:IsA("BasePart") then
+			table.insert(found, descendant)
 		end
-		if not body and BlockBody.isBody(descendant) then
-			continue
-		end
-		table.insert(found, descendant)
 	end
 	return found
 end
 
--- Every BasePart the *simulation* owns, descendants included. Pieces built here
--- are flat (cells are direct children), but a Noob rig hangs a Handle inside
--- every accessory, and an anchored hat on an unanchored rig floats where it was.
+-- Every BasePart of a model, descendants included. Pieces built here are flat
+-- (cells are direct children), but a Noob rig hangs a Handle inside every
+-- accessory, and an anchored hat on an unanchored rig floats where it was.
 --
--- The rounded body a block is *seen* as is deliberately **not** here (see
--- BlockBody). It's a coat over the cubes, and it is the wrong answer to every
--- question this list is asked: it carries no mass, it answers no raycast, and the
--- squash grows it a stud past the cells underneath — which would report height
--- the tower hadn't been built to and feed it straight into the next piece's spawn
--- clearance.
---
--- Excluding it here rather than at the call sites makes the safe answer the
--- default: a loop added later gets the simulation's parts without having to know
--- bodies exist, and the few passes that paint a block ask for it.
+-- The rounded body a block is seen as never appears here, because it never exists
+-- on this side: each client builds its own over these cubes and mirrors whatever
+-- this file does to them. That's the whole reason the body is client-built —
+-- besides being the only way it renders — it means nothing in the simulation has
+-- to know it exists.
 local function modelParts(model: Model): { BasePart }
-	return collectParts(model, false)
-end
-
--- ...and every BasePart including the body. For the passes that decide how a
--- block *looks* — colour, transparency — and for anchoring, where the coat has to
--- be let go at the same moment as the cells under it. Never for physical
--- properties: the body has none worth setting, and writing them to it is how a
--- massless render part quietly starts weighing something.
-local function allParts(model: Model): { BasePart }
-	return collectParts(model, true)
-end
-
--- The parts a player can actually *see*: the body on a dressed block, the cells
--- on one without a body (a Noob rig, or any block at all when the Studio asset is
--- missing). Anything that writes transparency has to go through here — a pass
--- that fades "every part" would fade the hidden cubes up from invisible to
--- whatever it wanted, and a ghost or a burning block would show its own skeleton
--- through the shell that's supposed to be the block.
-local function shownParts(model: Model): { BasePart }
-	local body = BlockBody.of(model)
-	if body then
-		return { body }
-	end
-	return collectParts(model, false)
+	return collectParts(model)
 end
 
 -- Highest world-Y a part reaches, accounting for rotation: project each half
@@ -849,11 +816,19 @@ local function buildPiece(
 
 	-- The cells are the *collision*, and they stay square: a rounded collision
 	-- shape would settle into its neighbours' corners and a flat course would stop
-	-- being flat. What the player sees is the rounded body hung over them below.
-	-- When that body is there the cubes are invisible, and when the asset is
-	-- missing they're the block, exactly as they were before bodies existed.
-	local dressed = BlockBody.available(shape)
-
+	-- being flat.
+	--
+	-- They also stay **visible**, and the rounded body the player actually sees is
+	-- built over them by each client (see TowerBodyController). The body used to be
+	-- made here and welded on, which worked in every measurement and rendered as a
+	-- tiny cube on the client — a server-made CSG union is data the client has
+	-- (right Size, right triangle count) and still won't draw. The client's own
+	-- clone of the same asset draws perfectly, which is what the aim preview has
+	-- always done, so the body is now built where it renders.
+	--
+	-- Leaving the cubes visible is the fallback rather than a compromise: a client
+	-- that can't build a body shows the block the game had before bodies existed,
+	-- and the server view stays readable for debugging.
 	local root: BasePart? = nil
 	for index, cell in shape.cells do
 		local cube = Instance.new("Part")
@@ -861,7 +836,7 @@ local function buildPiece(
 		cube.Size = Vector3.new(Constants.BLOCK_SIZE, Constants.BLOCK_SIZE, Constants.BLOCK_DEPTH)
 		cube.Color = color
 		cube.Material = material
-		cube.Transparency = if dressed then 1 else transparency
+		cube.Transparency = transparency
 		cube.TopSurface = Enum.SurfaceType.Smooth
 		cube.BottomSurface = Enum.SurfaceType.Smooth
 		cube.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
@@ -880,6 +855,11 @@ local function buildPiece(
 	-- client reading the skin off a freshly-parented model would find nothing and
 	-- fall back to a default for the block's whole fall.
 	model:SetAttribute(Constants.SKIN_ATTRIBUTE, skin.id)
+	-- Which rounded body each client should build over these cubes. An attribute
+	-- rather than a packet for the same reason the skin is one: it has to arrive
+	-- with the block and stay attached to it for the block's whole life, including
+	-- on the clone the aim preview makes of it.
+	model:SetAttribute(Constants.SHAPE_ATTRIBUTE, shape.id)
 	-- Weld the cells into one rigid body up front. Welds are inert while the
 	-- parts are anchored, so the piece becomes a single assembly the instant
 	-- `release` unanchors it.
@@ -893,13 +873,6 @@ local function buildPiece(
 		weld.Parent = rootPart
 	end
 
-	-- After the weld loop, deliberately. The body is a BasePart child like a cell,
-	-- so welding it here too would pin it rigidly — and the squash moves it, by
-	-- shifting the C0 of its own Weld. Two welds on one part means the stiffer one
-	-- wins and the block flattens through the floor it landed on instead of onto it.
-	if dressed then
-		BlockBody.attach(model, rootPart, shape, color, material, transparency)
-	end
 
 	-- A special block has to be readable at a glance, and it can't repaint the
 	-- piece to say so — the skin already owns the color. A Highlight sits on top
@@ -1123,27 +1096,12 @@ local function applyZoneLook(
 		)
 		else base
 
-	-- The surface is the *look*, so the body wears the zone like everything else.
-	--
-	-- Retro is the one zone that can't be worn, and it's handled by taking the coat
-	-- off: studs are a property of a flat face and render as nothing on a rounded
-	-- one, so a Retro tower of bodies would just be a tower that had quietly
-	-- stopped studding. Hiding the body puts the square cells back on screen —
-	-- which is exactly what a 1962 brick should look like, and costs nothing,
-	-- because the cells were never removed, only made invisible.
-	-- `skin.transparency` is optional and most skins don't set it, so it needs the
-	-- same `or 0` buildPiece gives it. Without it this assigns nil to Transparency,
-	-- which throws — and because applyZoneLook runs *before* the piece is pivoted
-	-- and parented, that took the whole deal down with it: the piece was left
-	-- unpivoted at the layout origin instead of at spawn height.
-	local transparency = skin.transparency or 0
-
-	local body = BlockBody.of(model)
-	if body then
-		body.Transparency = if retro then 1 else transparency
-	end
-
-	for _, part in allParts(model) do
+	-- Cells only, because cells are all the server has: the rounded body is built
+	-- by each client over the top of these, and it mirrors what it finds here — so
+	-- dressing the cubes correctly is what dresses the block. Retro's studs are the
+	-- clearest case: the client reads them off a cell and takes the rounded body
+	-- off, because studs render as nothing on a rounded face.
+	for _, part in modelParts(model) do
 		if retro then
 			part.Material = Enum.Material.Plastic
 			setSurfaces(part, Enum.SurfaceType.Studs)
@@ -1151,15 +1109,7 @@ local function applyZoneLook(
 			part.Material = if pack and pack.material then pack.material else skin.material
 			setSurfaces(part, Enum.SurfaceType.Smooth)
 		end
-	end
-
-	-- The cells come back with the body, and go back to being invisible under it.
-	-- Written after the loop above, which has no opinion about transparency.
-	for _, part in modelParts(model) do
 		part.CustomPhysicalProperties = physics
-		if body then
-			part.Transparency = if retro then transparency else 1
-		end
 	end
 end
 
@@ -1293,12 +1243,8 @@ local function glueBlock(block: Block)
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { block.model }
 
-	-- Cells only. The body is a child BasePart like they are, but it spans the
-	-- whole piece — gluing *it* to the neighbourhood would weld a four-cell box
-	-- plus GLUE_RADIUS to everything inside it, which on a packed tower is most of
-	-- the tower, from a block that touched one corner.
 	for _, part in block.model:GetChildren() do
-		if not part:IsA("BasePart") or BlockBody.isBody(part) then
+		if not part:IsA("BasePart") then
 			continue
 		end
 		local reach = part.Size + Vector3.one * Constants.GLUE_RADIUS
@@ -1404,13 +1350,12 @@ end
 -- that can be threaded into a gap it doesn't fit through: aim well and it's the
 -- best block in the game, aim badly and you've put a wedge in your own tower.
 local function startGhost(block: Block)
-	-- Only what's on screen: fading "every part" would bring the hidden cells up to
-	-- GHOST_TRANSPARENCY and show four cubes floating inside the block. The
-	-- per-part save is what keeps the restore honest — a block carries its skin's
-	-- own transparency (Needoh is translucent) and a blanket restore to 0 would
-	-- repaint a skin someone bought.
+	-- Saved per part rather than assumed, because a block carries its skin's own
+	-- transparency (Needoh is translucent) and a blanket restore to 0 would repaint
+	-- a skin someone bought. Each client's rounded body mirrors these cells, so it
+	-- goes see-through with them and needs no telling.
 	local saved: { [BasePart]: number } = {}
-	for _, part in shownParts(block.model) do
+	for _, part in modelParts(block.model) do
 		saved[part] = part.Transparency
 		part.Transparency = Constants.GHOST_TRANSPARENCY
 	end
@@ -1422,7 +1367,7 @@ local function startGhost(block: Block)
 			return
 		end
 		setCollisionGroup(block.model, Constants.BLOCK_COLLISION_GROUP)
-		for _, part in shownParts(block.model) do
+		for _, part in modelParts(block.model) do
 			local was = saved[part]
 			if was ~= nil then
 				part.Transparency = was
@@ -1577,11 +1522,10 @@ local function updateLightning()
 end
 
 local function paint(block: Block, color: Color3)
-	-- The body included — it's the only part of a dressed block anyone can see, so
-	-- a bomb flashing the cells red would flash nothing at all. The hidden cells
-	-- are painted too, so a block that loses its body to a Retro zone mid-fuse is
-	-- already the right colour underneath.
-	for _, part in allParts(block.model) do
+	-- The cells, which is everything the server has; each client's rounded body
+	-- reads its colour off them, so a bomb's red flash reaches the screen through
+	-- the same write.
+	for _, part in modelParts(block.model) do
 		part.Color = color
 	end
 end
@@ -1825,7 +1769,7 @@ local function tickBurn(block: Block, now: number): boolean
 	local fadeFrom = 1 - Constants.BURN_FADE_FRACTION
 	local fade = if progress > fadeFrom then (progress - fadeFrom) / Constants.BURN_FADE_FRACTION else 0
 	local transparency = math.max(block.skin.transparency or 0, fade)
-	for _, part in shownParts(block.model) do
+	for _, part in modelParts(block.model) do
 		part.Color = charred
 		part.Transparency = transparency
 	end
@@ -1861,10 +1805,7 @@ function TowerService.dropPiece(player: Player): Block?
 	-- Solid before it's loose, so the first frame of physics already has the piece
 	-- colliding with the tower rather than a frame of it falling through.
 	restoreCollision(piece.model, piece.collision)
-	-- The body goes loose on the same frame as the cells under it: it's welded to
-	-- the root cell, and a welded part left anchored anchors the assembly it's
-	-- welded to — the piece would hang in the air exactly where it was dropped.
-	for _, part in allParts(piece.model) do
+	for _, part in modelParts(piece.model) do
 		part.Anchored = false
 	end
 
@@ -2231,7 +2172,7 @@ end
 -- against the tower, not against the storm. An assembly is only loose once every
 -- part of it is, so this is all of them rather than the root.
 local function unanchorModel(model: Model)
-	for _, part in allParts(model) do
+	for _, part in modelParts(model) do
 		if part.Anchored then
 			part.Anchored = false
 		end

@@ -979,8 +979,10 @@ devices.
 | `TowerAfkPresentation.client.luau` | client | Registers the card as an always-mounted root (`Presentations.afk`) |
 | `AfkNotice.ui.luau` | shared | Dumb card: the copy, the red / green pair, the screen cover |
 | `SpectatorNotice.ui.luau` | shared | The badge that stays up while a player is out of the rotation |
-| `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, height, clocks, hint, touch controls, Extend Storm, the urgency tick) |
+| `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, clocks, climb rail, hint, touch controls, Extend Storm, the urgency tick) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
+| `ProgressLine.ui.luau` | shared | The climb rail down the right edge: start / goal dots and a marker carrying the height readout |
+| `ProgressLine.story.luau` | shared | UI Labs story — drag `current` and watch the marker glide |
 | `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
 | `StormFade.ui.luau` | shared | The storm's one-shot white-out, played on `PHASE.GAMEOVER` |
 | `SteerStick.ui.luau` | shared | Touch steering: a horizontal drag track reporting analog `[-1, 1]` |
@@ -992,13 +994,22 @@ devices.
 ## The HUD
 
 ```
-                 ( o ) (O) ( o )           turn strip — current player centered
-          (⚡) [ 24.5 studs  best 60.0 ] (◕) Extend Storm | height | turn clock
-              ●────────●────────────○      progress: start, tower, next zone
-                   3:42 until storm!
+          (⚡)  ( o ) (O) ( o )  (◕)        Extend Storm | turn strip | turn clock
+                3:42 until storm!                                    ○
+                                                                     │  next zone
+                                                       24.5 studs ─● │  the tower
+                                                                     ●  leg start
   Move — A / D…        Your turn — Bomb T-Shape       [LEFT][TURN][RIGHT][DROP]
   (fades after 60s)                            $ 1,250   (touch only)
 ```
+
+**The top column is two rows and no surface.** It used to be four — turn strip,
+a panel holding the height beside a best-ever reading, the progress bar, and the
+storm clock — which on a phone is a stack of chrome sitting on top of the thing
+the player is aiming at. The height moved onto the climb rail's marker, the
+best-ever reading was dropped (it's a number nobody can act on mid-drop, and the
+server still keeps it — `state.maxHeight` is what cash is paid against), and the
+panel behind them went with them.
 
 The **turn clock is a plain circle** (`RadialTimer`), only existing while
 someone is aiming. Two radial-fill treatments were tried first — a filling pie
@@ -1009,16 +1020,17 @@ under `URGENT_SECONDS`.
 
 ### Nothing that comes and goes may move what stays
 
-The dial and the Extend Storm button **flank** the stats row at `FLANK_Y`,
+The dial and the Extend Storm button **flank** the turn strip at `FLANK_Y`,
 positioned absolutely *outside* the column rather than laid out inside it.
 
 This is the fix for a real bug, not a style choice. The dial used to sit in a
 row beside the stats panel, so the panel had to give up width for it — which
 meant the height readout resized *and* slid sideways twice a turn, every turn.
 Worse, mid-tween the row was briefly wider than the column and centred itself,
-shoving the panel a further half-dial to the left. Now the panel is a fixed full
-width and the dial simply appears in a gap that was always there. Measured live:
-the panel's x and width each hold a single value across turn boundaries.
+shoving the panel a further half-dial to the left. The panel is gone now, but
+the rule it taught isn't: both flanks clear the **column's** width rather than
+the turn strip's own, so headshots coming and going either side of the holder
+can't move them.
 
 The dial **pops in** on mount — a `UIScale` tweened 0 → 1 on `Back/Out`, so it
 reads as arriving rather than fading up. Its appearance is the cue that a turn
@@ -1030,18 +1042,33 @@ re-render inside the same second can't double it up; the latch clears whenever
 the countdown leaves the window, which re-arms it for the next turn without
 having to watch the turn itself.
 
-The **progress line** (`ProgressLine`) measures *this leg of the climb only* —
-from `zoneBaseHeight` (where the current zone started) to `targetHeight` — so a
-run always begins at the left dot no matter how tall the tower already is. The
+The **climb rail** (`ProgressLine`) measures *this leg of the climb only* — from
+`zoneBaseHeight` (where the current zone started) to `targetHeight` — so a run
+always begins at the bottom dot no matter how tall the tower already is. The
 tower is a dot for now; it's a separate element rather than a bar fill precisely
 so it can grow into a little stack later.
 
-**The whole storm row is dropped during `PHASE.GAMEOVER.`** The round is over,
-the tower it measured is wreckage, and the server has frozen `stormEndsAt` — but
-the client draws the clock as `stormEndsAt - now`, so leaving it up counted a
-dead deadline down behind the gamemode vote and then snapped back when the next
-round started. It stays up through a checkpoint, where the line showing the leg
-just built is the point of the moment.
+**It runs vertically, down the right edge**, because the thing it measures does:
+the tower goes up, the marker goes up. The **height readout is a child of that
+marker** rather than a readout elsewhere on the screen — how high the tower is
+and how far through the stage that is are the same fact, so one tween moves both
+and they can't disagree.
+
+The rail is inset `RAIL_RIGHT` (96) from the edge rather than flush to it: the
+[Reactions](Reactions.md) column opens down that edge vertically centred and the
+two would overlap. That number is hardcoded in `TowerHUD` with a note — a feature
+can't reach into another feature's constants, and the rail only has to be *clear*
+of it. `RAIL_TOP` clears Roblox's own topbar (the root ScreenGui sets
+`IgnoreGuiInset`, so y = 0 is the true top of the display) and `RAIL_BOTTOM` is
+derived from the camera toggle and cash counter stacked in the corner below.
+
+**The storm clock and the rail both go during `PHASE.GAMEOVER`** (one flag,
+`stormRunning`, so they can't disagree). The round is over, the tower they
+measured is wreckage, and the server has frozen `stormEndsAt` — but the client
+draws the clock as `stormEndsAt - now`, so leaving it up counted a dead deadline
+down behind the gamemode vote and then snapped back when the next round started.
+They stay up through a checkpoint, where the rail showing the leg just built is
+the point of the moment.
 
 The status line lives at the **bottom**, where the player is already looking when
 they're about to place, and lifts clear of the touch controls when those show.
@@ -1140,9 +1167,9 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `CAMERA_MIN_HALF_WIDTH` | Half the play area the camera must show across, on any aspect ratio |
 | `DESPAWN_BELOW` | How far under the platform a fallen block is cleaned up |
 
-The HUD is a full-screen gameplay surface, so it hugs the top and bottom edges
-rather than following the centered-by-default rule for feature UIs — centering a
-height readout would put it on top of the tower the player is aiming at.
+The HUD is a full-screen gameplay surface, so it hugs the edges rather than
+following the centered-by-default rule for feature UIs — centering a height
+readout would put it on top of the tower the player is aiming at.
 
 ## Zones
 

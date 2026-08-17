@@ -7,18 +7,25 @@
 -- edges rather than following the centered-by-default rule for feature UIs.
 -- Centering a height readout would sit it on top of the tower being aimed at.
 --
---   top center     turn strip → height/best → storm clock
+--   top center     turn strip → storm clock
 --   flanking those  Extend Storm (left) and the turn dial (right)
+--   right edge     the climb, as a vertical rail; the height rides its marker
 --   bottom left    controls hint (fades out on its own)
 --   bottom center  touch controls (touch devices only)
 --
 -- The top column flows through one Stack rather than being positioned by hand,
 -- so a row appearing or disappearing reflows the rest instead of leaving a hole.
 --
--- The two things flanking the stats row are the exception, and deliberately so:
--- they sit *outside* the column at a computed y (FLANK_Y) rather than inside it.
--- The turn dial used to be laid out beside the stats panel, which meant the
--- panel had to shrink to make room and the whole readout resized and slid
+-- The column is deliberately thin — a strip of headshots and one line of clock.
+-- Height used to sit up here in a panel of its own alongside a best-ever
+-- reading, which put three stacked surfaces over the tower on a phone. The
+-- height now travels with the marker on the rail (one fact, one object) and the
+-- best-ever reading is gone: it's a number the player can't act on mid-drop.
+--
+-- The two things flanking the turn strip are the exception to the column, and
+-- deliberately so: they sit *outside* it at a computed y (FLANK_Y) rather than
+-- inside. The turn dial used to be laid out beside the stats panel, which meant
+-- the panel had to shrink to make room and the whole readout resized and slid
 -- sideways twice a turn. Nothing that comes and goes each turn should be able to
 -- move the things that don't.
 
@@ -45,8 +52,6 @@ local PHASE = Constants.PHASE
 -- clips a descender or crops a status line — and the column width is what a long
 -- one ("SomePlayer is placing the Bomb T-Shape") has to fit inside.
 local COLUMN_WIDTH = 460
-local STATS_HEIGHT = 66
-local STAT_TEXT_SIZE = 34
 -- The status line names who is placing what; it's read mid-round at a glance,
 -- so it holds the body floor and its row is sized from the tier.
 local STATUS_TEXT_SIZE = ui.theme.textSizeRegular
@@ -67,26 +72,44 @@ local CONTROL_ROW_WIDTH = Constants.STICK_TRACK_WIDTH + 110 + 160 + CONTROL_GAP 
 
 local STORM_LABEL_TEXT_SIZE = ui.theme.textSizeRegular
 local STORM_LABEL_HEIGHT = STORM_LABEL_TEXT_SIZE + 8
-local PROGRESS_HEIGHT = 26
 -- The camera toggle, sitting above the cash panel on the right edge.
 local CAMERA_BUTTON = 62
 -- Extend Storm. Matched to CAMERA_BUTTON rather than given its own size: they
 -- are the HUD's two icon buttons and reading as a pair is the point.
 local EXTEND_BUTTON = CAMERA_BUTTON
 -- What TurnStrip sizes itself to (`AVATAR_SIZE + 8`, see TurnStrip.ui.luau).
--- Needed here to line the Extend button up with the stats row *below* the strip
--- — derived from the same expression rather than hardcoded, so a bigger avatar
--- moves both.
+-- Needed here to centre the two things flanking the strip on it — derived from
+-- the same expression rather than hardcoded, so a bigger avatar moves all three.
 local TURN_STRIP_HEIGHT = Constants.AVATAR_SIZE + 8
--- Where the two things that flank the stats row sit vertically: Extend Storm on
+-- The turn dial. Was the stats row's height back when it flanked that row, and
+-- kept at the same value now that it flanks the strip — it reads as a chip
+-- among the headshots at this size, and the seconds label needs the room.
+local DIAL_SIZE = 66
+-- Where the two things that flank the top row sit vertically: Extend Storm on
 -- the left, the turn dial on the right. Walks the column's own stack — top
--- margin, the turn strip, the gap, then half the stats row — so a taller avatar
--- or a bigger stat row carries both with it.
-local FLANK_Y = TOP_MARGIN + TURN_STRIP_HEIGHT + STACK_GAP + STATS_HEIGHT / 2
+-- margin, then half the turn strip — so a taller avatar carries both with it.
+local FLANK_Y = TOP_MARGIN + TURN_STRIP_HEIGHT / 2
+
 local CASH_WIDTH = 205
 local CASH_HEIGHT = 58
 local CASH_TEXT_SIZE = 32
 local CASH_ICON = 34
+
+-- The climb, as a vertical rail down the right side of the screen.
+--
+-- Right rather than left: the left edge is the sidebar rail (navigation) and
+-- the controls hint. Inset from the edge rather than flush to it because the
+-- reactions column opens down that edge vertically centred — ~66 units of it —
+-- and the two would sit on top of each other. Hardcoded rather than read from
+-- that feature's constants: a feature can't name another feature, and the rail
+-- only needs to be clear of it, not glued to it.
+local RAIL_WIDTH = 24
+local RAIL_RIGHT = 96
+-- Clear of Roblox's own topbar, which owns the top strip at the true top of the
+-- display (the root ScreenGui sets IgnoreGuiInset, so y = 0 really is the top).
+local RAIL_TOP = 84
+-- Clear of the camera toggle and the cash counter stacked in the corner below.
+local RAIL_BOTTOM = CASH_HEIGHT + CAMERA_BUTTON + EDGE_MARGIN * 3
 local WARNING_WIDTH = 460
 -- Sized from its contents: title row + gap + detail row + the Stack's padding
 -- on both sides. Grows if either text tier does.
@@ -110,7 +133,6 @@ local CASH_TARGET = UDim2.new(1, -(EDGE_MARGIN + CASH_WIDTH / 2), 1, -(EDGE_MARG
 
 export type Props = {
 	height: number,
-	maxHeight: number,
 	blockCount: number,
 	phase: number,
 	isMyTurn: boolean,
@@ -213,71 +235,26 @@ return function(props: Props)
 			repeatUserId = props.repeatUserId or 0,
 			layoutOrder = 1,
 		}),
-
-		-- Height. Always the full column width — the turn dial used to sit beside
-		-- it in a row and the panel gave up room for it, which meant the whole
-		-- readout resized and shifted twice a turn. The dial is now placed
-		-- absolutely outside the column (see children.Timer), so nothing the
-		-- dial does moves anything else.
-		Stats = React.createElement(ui.Panel, {
-			size = UDim2.new(1, 0, 0, STATS_HEIGHT),
-			layoutOrder = 2,
-		}, {
-			Row = React.createElement(ui.Row, { size = UDim2.fromScale(1, 1) }, {
-				Height = React.createElement(ui.Text, {
-					text = `{string.format("%.1f", props.height)} studs`,
-					textSize = STAT_TEXT_SIZE,
-					weight = Enum.FontWeight.Heavy,
-					shadow = true,
-					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(0.55, 0, 1, 0),
-					layoutOrder = 1,
-				}),
-				Best = React.createElement(ui.Text, {
-					text = `best {string.format("%.1f", props.maxHeight)}`,
-					textSize = STAT_TEXT_SIZE - 6,
-					color = Color3.fromRGB(184, 192, 214),
-					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(0.45, 0, 1, 0),
-					layoutOrder = 2,
-				}),
-			}),
-		}),
 	}
 
-	-- The climb to the next checkpoint, as a journey between two dots rather
-	-- than a bar: it measures this leg only, so every zone starts at the left.
-	--
-	-- Gone during the round break. The round is over, the tower it measured is
-	-- wreckage, and the server has frozen `stormEndsAt` — but the client draws
-	-- the clock as `stormEndsAt - now`, so leaving it up counts a dead deadline
-	-- down behind the gamemode vote and then snaps back when the next round
-	-- starts. Nothing to show is the honest answer.
-	if props.phase ~= PHASE.GAMEOVER then
-		column.Storm = React.createElement(ui.Stack, {
-			gap = 2,
-			size = UDim2.new(1, 0, 0, PROGRESS_HEIGHT + STORM_LABEL_HEIGHT + 2),
-			layoutOrder = 3,
-		}, {
-			Line = React.createElement(ProgressLine, {
-				from = props.zoneBaseHeight,
-				current = props.height,
-				to = props.targetHeight,
-				size = UDim2.new(1, 0, 0, PROGRESS_HEIGHT),
-				layoutOrder = 1,
-			}),
-			Countdown = React.createElement(ui.Text, {
-				text = `{clock(props.stormSecondsLeft)} until storm!`,
-				textSize = STORM_LABEL_TEXT_SIZE,
-				weight = Enum.FontWeight.Bold,
-				shadow = true,
-				color = if props.stormSecondsLeft <= STORM_URGENT_SECONDS
-					then Color3.fromRGB(255, 138, 122)
-					else Color3.fromRGB(226, 230, 245),
-				xAlignment = Enum.TextXAlignment.Center,
-				size = UDim2.new(1, 0, 0, STORM_LABEL_HEIGHT),
-				layoutOrder = 2,
-			}),
+	-- Gone during the round break, storm clock and rail alike. The round is over,
+	-- the tower they measured is wreckage, and the server has frozen
+	-- `stormEndsAt` — but the client draws the clock as `stormEndsAt - now`, so
+	-- leaving it up counts a dead deadline down behind the gamemode vote and then
+	-- snaps back when the next round starts. Nothing to show is the honest answer.
+	local stormRunning = props.phase ~= PHASE.GAMEOVER
+	if stormRunning then
+		column.Countdown = React.createElement(ui.Text, {
+			text = `{clock(props.stormSecondsLeft)} until storm!`,
+			textSize = STORM_LABEL_TEXT_SIZE,
+			weight = Enum.FontWeight.Bold,
+			shadow = true,
+			color = if props.stormSecondsLeft <= STORM_URGENT_SECONDS
+				then Color3.fromRGB(255, 138, 122)
+				else Color3.fromRGB(226, 230, 245),
+			xAlignment = Enum.TextXAlignment.Center,
+			size = UDim2.new(1, 0, 0, STORM_LABEL_HEIGHT),
+			layoutOrder = 2,
 		})
 	end
 
@@ -305,6 +282,23 @@ return function(props: Props)
 		}),
 	}
 
+	-- The climb to the next checkpoint, as a rail up the right side: it measures
+	-- this leg only, so every zone starts at the bottom dot. The height readout
+	-- rides the marker (see ProgressLine) rather than sitting in the top column —
+	-- how high the tower is and how far that is through the stage are the same
+	-- question, and they're now answered in one place instead of two.
+	if stormRunning then
+		children.Climb = React.createElement(ProgressLine, {
+			from = props.zoneBaseHeight,
+			current = props.height,
+			to = props.targetHeight,
+			label = `{string.format("%.1f", props.height)} studs`,
+			size = UDim2.new(0, RAIL_WIDTH, 1, -(RAIL_TOP + RAIL_BOTTOM)),
+			position = UDim2.new(1, -RAIL_RIGHT, 0, RAIL_TOP),
+			anchorPoint = Vector2.new(1, 0),
+		})
+	end
+
 	-- Right edge, clear of the cash panel below it. Toggles the camera between
 	-- following the tower and framing the whole thing.
 	--
@@ -319,28 +313,25 @@ return function(props: Props)
 		onClick = props.onToggleCamera,
 	})
 
-	-- Immediately left of the stats panel and vertically centred on it, rather
+	-- Immediately left of the turn strip and vertically centred on it, rather
 	-- than out at the screen edge. It buys time on the clock this column is
-	-- about, so it sits beside the readout it changes — and the left edge is
+	-- about, so it sits beside the row it changes — and the left edge is
 	-- already taken twice over, by the sidebar rail (centred) and the controls
 	-- hint (bottom).
 	--
-	-- The y offset walks the column's own stack: top margin, the turn strip,
-	-- the gap, then half the stats row. Derived rather than measured, so a
-	-- taller avatar or a bigger stat row carries the button with it.
+	-- The y offset walks the column's own stack: top margin, then half the turn
+	-- strip. Derived rather than measured, so a taller avatar carries the button
+	-- with it.
 	--
-	-- The x offset clears the column by half the dial's footprint *on top of*
-	-- the usual margin. At rest the stats panel is flush with the column, but
-	-- when the dial appears the panel is still full width for the length of its
-	-- resize tween — for those 0.3s the row is wider than the column and centres
-	-- itself, pushing the panel half a dial to the left. Clearing only the
-	-- column would put the button under the panel twice a turn, every turn.
+	-- The x offset clears the whole column width, not the strip's — the strip is
+	-- narrower than the column it sits in, and pinning the button to the column
+	-- keeps it still while headshots come and go either side of the holder.
 	--
-	-- Hidden during the round break for the same reason the storm row above is:
-	-- the clock is frozen and the tower it was counting down to is wreckage, so
+	-- Hidden during the round break for the same reason the storm clock is: the
+	-- clock is frozen and the tower it was counting down to is wreckage, so
 	-- there is nothing to extend. Offering it there would be selling a minute of
 	-- a stage that no longer exists.
-	if props.onExtendStorm and props.phase ~= PHASE.GAMEOVER then
+	if props.onExtendStorm and stormRunning then
 		children.ExtendStorm = React.createElement(ui.IconButton, {
 			icon = Constants.EXTEND_STORM_ICON,
 			variant = "yellow",
@@ -351,22 +342,22 @@ return function(props: Props)
 		})
 	end
 
-	-- The turn dial, flanking the stats row on the right exactly as Extend
+	-- The turn dial, flanking the turn strip on the right exactly as Extend
 	-- Storm flanks it on the left — same y, same margin, mirrored anchor.
 	--
 	-- Outside the column and absolutely positioned, which is the whole point:
-	-- laid out in a row it took space from the stats panel, so the readout
-	-- resized and slid sideways every time a turn started and ended. Nothing
-	-- moves now; the dial simply appears in the gap that was always there.
+	-- laid out in a row it took space from the readout beside it, which resized
+	-- and slid sideways every time a turn started and ended. Nothing moves now;
+	-- the dial simply appears in the gap that was always there.
 	if aiming then
 		children.Timer = React.createElement(RadialTimer, {
 			progress = props.secondsLeft / math.max(props.turnSeconds, 1),
 			color = if props.secondsLeft <= URGENT_SECONDS
 				then Color3.fromRGB(232, 96, 96)
 				else Color3.fromRGB(112, 214, 122),
-			size = STATS_HEIGHT,
+			size = DIAL_SIZE,
 			label = tostring(math.ceil(props.secondsLeft)),
-			position = UDim2.new(0.5, COLUMN_WIDTH / 2 + EDGE_MARGIN + STATS_HEIGHT / 2, 0, FLANK_Y),
+			position = UDim2.new(0.5, COLUMN_WIDTH / 2 + EDGE_MARGIN + DIAL_SIZE / 2, 0, FLANK_Y),
 		})
 	end
 

@@ -47,7 +47,6 @@ return {
 	controls = {
 		phase = UILabs.Choose(PHASE_NAMES),
 		height = UILabs.Slider(24.5, 0, 300, 0.5),
-		maxHeight = UILabs.Slider(48, 0, 300, 0.5),
 		blockCount = UILabs.Slider(11, 0, 200, 1),
 		secondsLeft = UILabs.Slider(13, 0, Constants.TURN_SECONDS, 1),
 		targetHeight = UILabs.Slider(120, 0, 600, 1),
@@ -111,7 +110,6 @@ return {
 
 		return React.createElement(TowerHUD, {
 			height = c.height,
-			maxHeight = c.maxHeight,
 			blockCount = c.blockCount,
 			phase = phase,
 			isMyTurn = selected == "aiming (yours)",

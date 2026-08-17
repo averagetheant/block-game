@@ -86,12 +86,13 @@ return {
 	-- hanging just under the HUD's top column.
 	--
 	-- The corners were all tried and all lose. The right edge looks free until you
-	-- measure it: the turn dial sits *outside* the stats column and swings closer
+	-- measure it: the turn dial sits *outside* the top column and swings closer
 	-- to the edge as the screen narrows (so it takes the corner on a phone), while
 	-- the reaction bar owns a band from x 1459 across the vertical middle (so it
-	-- takes the corner on a short window). There is no fixed offset that clears
-	-- both — the two hazards move in opposite directions as the aspect changes.
-	-- Left is the rail, bottom-left the controls hint and the voice chips,
+	-- takes the corner on a short window) — and the climb rail now runs down that
+	-- edge between them. There is no fixed offset that clears them all; the
+	-- hazards move in opposite directions as the aspect changes. Left is the
+	-- sidebar rail, bottom-left the controls hint and the voice chips,
 	-- bottom-right the cash counter.
 	--
 	-- Centre-x has no such neighbour at any size, and the only thing it can ever
@@ -99,11 +100,13 @@ return {
 	-- visible spot on the screen, which is the right trade for a badge that exists
 	-- because somebody missed the message the first time.
 	SPECTATOR_NOTICE_WIDTH = 330,
-	-- Hangs this far below the GUI inset, clearing the HUD's top column (measured
-	-- at 182 canvas units: turn strip, stats row, storm clock and its progress
-	-- line). Authored in canvas units like the column itself, so the two stay in
-	-- step at every viewport rather than only at the one they were checked on.
-	SPECTATOR_NOTICE_TOP = 200,
+	-- Hangs this far below the GUI inset, clearing the HUD's top column (128
+	-- canvas units now that the column is just the turn strip and the storm
+	-- clock — the height readout moved to the climb rail on the right edge, and
+	-- the panel that held it went with it). Authored in canvas units like the
+	-- column itself, so the two stay in step at every viewport rather than only
+	-- at the one they were checked on.
+	SPECTATOR_NOTICE_TOP = 150,
 	-- Note the badge does *not* sit at EDGE_MARGIN from the top. The root
 	-- ScreenGui sets `IgnoreGuiInset`, so y = 0 is the true top of the display and
 	-- the first stretch belongs to Roblox's own topbar — the player-list button is

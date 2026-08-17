@@ -187,7 +187,6 @@ return function()
 
 	return React.createElement(TowerHUD, {
 		height = state.height,
-		maxHeight = state.maxHeight,
 		blockCount = state.blockCount,
 		phase = state.phase,
 		isMyTurn = TowerController.isMyTurn(),

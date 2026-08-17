@@ -106,8 +106,18 @@ would silently fail forever.
 it ever went on sale, so putting it in the shop later is one flag rather than a
 number someone has to invent.
 
-Two ship this way, both [daily-run](DailyRewards.md) rewards: `skins.needoh`
-(day 7's grand prize) and `reactions.hearts` (day 4).
+Three ship this way:
+
+| Pack | Earned by | Owner |
+| ---- | --------- | ----- |
+| `skins.needoh` | day 7 of the daily run — the grand prize | [DailyRewards](DailyRewards.md) |
+| `reactions.hearts` | day 4 of the daily run | [DailyRewards](DailyRewards.md) |
+| `skins.gold` | clearing your first checkpoint | [TowerGame § the first-checkpoint quest](TowerGame.md#the-first-checkpoint-quest) |
+
+Not being for sale is what makes each of these a reward. They're the payoff for a
+retention mechanic, and a payoff that's also on a shelf for 60 coins isn't one —
+so when you add a prize, add it `forSale = false` rather than pricing it and
+hoping nobody buys it.
 
 ### Action products need a server handler
 

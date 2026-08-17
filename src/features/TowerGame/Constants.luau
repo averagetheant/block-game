@@ -719,6 +719,21 @@ return {
 	-- pack starts handing out oranges and stops being what the card promised.
 	COLOR_SKIN_HUE_JITTER = 0.02,
 
+	-- --------------------------------------------------- first-checkpoint quest --
+	-- The retention hook for a brand-new player. Reaching the first checkpoint is
+	-- where most of them stop playing, and the climb up to it promised nothing but
+	-- coins they had no use for yet — so the HUD names a prize instead, and
+	-- clearing one hands it over (CheckpointQuestService).
+	--
+	-- The pack is `forSale = false` in SkinPacks, so this quest is the *only* way
+	-- to get it. That's what makes the line's "RARE" true rather than marketing: a
+	-- prize also sitting in the shop for 60 coins is not a prize.
+	FIRST_CHECKPOINT_PACK = "skins.gold",
+	-- How long the quest line holds its claimed state before retiring for good.
+	-- Long enough to read through the checkpoint cutscene, which is what the
+	-- player is watching when it fires.
+	QUEST_CLAIMED_SECONDS = 8,
+
 	-- ------------------------------------------------------------ persistence --
 	-- Top-level profile key this feature owns (registered in PlayerData.luau).
 	PROFILE_KEY = "TowerGame",

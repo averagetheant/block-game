@@ -55,6 +55,7 @@ local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 -- Server-realm siblings (ServerScriptService.Features.TowerGame.*).
 local CashService = require(script.Parent.CashService)
+local CheckpointQuestService = require(script.Parent.CheckpointQuestService)
 local TowerStatsService = require(script.Parent.TowerStatsService)
 
 -- Whose skin pack is on the piece. Read once per turn, on the server, so the
@@ -2455,6 +2456,11 @@ local function runCheckpoint(height: number)
 		state.zoneSky = math.random(1, 255)
 		applyZoneToTower()
 		CashService.awardZone()
+		-- Paired with the payout on purpose: the quest line promises this floor is
+		-- worth something, so the moment the promise is kept is the moment it stops
+		-- being shown. Hands the rare skin to anyone on their first checkpoint and
+		-- closes the quest for the rest — see CheckpointQuestService.
+		CheckpointQuestService.award()
 		reportStageCleared(state.checkpoints)
 
 		-- Note what does *not* happen here: the gamemode is not re-voted. The vote

@@ -755,6 +755,13 @@ across sessions.
   `leaderstats` folder. The profile is the truth; the leaderstats values are
   display mirrors (the height column is floored to an integer, the profile keeps
   the decimals).
+- The slice also carries `SeenCheckpoint`, which is **not** a stat — it's a
+  write-once false → true flag saying whether this player has ever been in the
+  server when a checkpoint cleared. It's what qualifies them for the
+  [first-checkpoint quest](#the-first-checkpoint-quest), read through
+  `isFirstCheckpointFor` on the server and off the replica by the HUD. It's on
+  the profile rather than in a session variable so a player who leaves during
+  their first run doesn't come back and get handed the same prize twice.
 - Every write goes through `PlayerDataService.SetValue`, so it lands in the replica
   *and* the next autosave.
 - `Biggest Height` credits **everyone in the server** when the tower sets a
@@ -958,6 +965,9 @@ devices.
 | `BlockBody.luau` | shared | The rounded shell: the template lookup and the offset that seats one over a piece's cubes |
 | `TowerBodyController.client.luau` | client | Builds each block's body client-side, hides the cubes under it, mirrors their look, and runs the squash spring |
 | `Zones.luau` | shared | The seven zones, their skies, and their gravity |
+| `CheckpointQuest.ui.luau` | shared | The quest line: promises the rare skin, then names it once it lands |
+| `CheckpointQuest.story.luau` | shared | UI Labs story — the only place to see the claimed side, which happens once ever in game |
+| `CheckpointQuestService.server.luau` | server | Hands the rare skin over on a player's first checkpoint, then closes the quest |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `Gamemodes.luau` | shared | The three votable modes and the stage numbers each one sets |
 | `Gamemode.luau` | shared | Registers those modes into GamemodeVote (auto-discovered) |
@@ -996,7 +1006,8 @@ devices.
 ```
           (⚡)  ( o ) (O) ( o )  (◕)        Extend Storm | turn strip | turn clock
                 3:42 until storm!                                    ○
-                                                                     │  next zone
+    Get to the next checkpoint for a RARE skin!                       │  next zone
+                       (new players only)                             │
                                                        24.5 studs ─● │  the tower
                                                                      ●  leg start
   Move — A / D…        Your turn — Bomb T-Shape       [LEFT][TURN][RIGHT][DROP]
@@ -1047,6 +1058,67 @@ The **climb rail** (`ProgressLine`) measures *this leg of the climb only* — fr
 always begins at the bottom dot no matter how tall the tower already is. The
 tower is a dot for now; it's a separate element rather than a bar fill precisely
 so it can grow into a little stack later.
+
+### The first-checkpoint quest
+
+**The game's one retention mechanic**, and the only place it pays a player for
+playing rather than for spending. Roughly **70% of new players stop before their
+first checkpoint** — it's the steepest drop-off in the game — so the climb up to
+it is the one stretch worth buying outright.
+
+A gold line under the countdown says **"Get to the next checkpoint for a RARE
+skin!"**, and clearing one hands over `skins.gold` — **Golden Blocks** (see
+[Skin packs](#skin-packs)).
+
+It's a **bare label, not a panel**. A gem surface was tried first and read as a
+separate widget parked on top of the HUD rather than as part of the block of text
+describing the climb. Colour carries the whole distinction instead — gold while
+it's a promise, green once it's paid — and the line is deliberately *unwrapped*
+and wider than the top column, centred on it so it overruns evenly, exactly like
+the status line at the bottom of the screen.
+
+Five things keep it honest:
+
+- **The prize can't be bought.** `skins.gold` is `forSale = false`, so it gets no
+  shop card and `StoreService` refuses to sell it (see
+  [Store § Reward-only packs](Store.md#reward-only-packs)). That's what makes
+  "RARE" a fact rather than marketing — a reward also sitting in the shop for 60
+  coins is not a reward.
+- **One definition of what's promised.** `Constants.FIRST_CHECKPOINT_PACK` is the
+  id the server grants *and* the id the HUD resolves the display name from, so the
+  line cannot congratulate a player with a skin nothing hands over. The coins on
+  the claimed side read off `Constants.CASH_PER_ZONE`, the constant `CashService`
+  pays from.
+- **The grant is server-side.** `CheckpointQuestService.award()` is called from
+  `runCheckpoint`, right beside the payout it advertises. It grants to **everyone
+  in the server** who qualifies — one shared tower, one shared moment, the same
+  rule `recordHeight` follows — through `StoreService.grantPack`, the one blessed
+  way a pack ever arrives.
+- **The order inside `award()` is load-bearing.** It grants *first* and calls
+  `TowerStatsService.recordCheckpointSeen` *second*, because that flag is what
+  `isFirstCheckpointFor` reads — flipping it first would close the quest on every
+  player a line before paying them. A player whose profile hasn't loaded is
+  skipped rather than granted against nothing; they earn it on the next floor.
+- **It's shown to new players only, then held one beat longer.**
+  `SeenCheckpoint` on the profile slice (see
+  [Stats and saving](#stats-and-saving)) is what qualifies them. The line doesn't
+  vanish when the flag flips — `TowerView.useCheckpointQuest` watches the replica
+  for the false → true transition and flips the line green for
+  `QUEST_CLAIMED_SECONDS` (8), naming what they won, before it goes for good. A
+  promise whose payoff is invisible teaches players that promises here are
+  invisible; the reveal is the point. It only celebrates a transition it actually
+  watched happen, so a profile that loads already-true never congratulates a
+  veteran for a skin they earned months ago.
+
+The line sits **below** the countdown in the top column, which is what keeps it
+inside the rule above: it comes and goes, but everything it could move is above
+it, and the column is anchored at the top. Nothing that stays moves when a new
+player's line appears or a veteran's never does.
+
+Note for an existing place: `profile:Reconcile()` backfills `SeenCheckpoint` as
+`false` for players who predate it, so **veterans get the line and the free skin
+on their next checkpoint**, once. If that's not wanted, backfill the flag as
+`true` for existing profiles before shipping.
 
 **It runs vertically, down the right edge**, because the thing it measures does:
 the tower goes up, the marker goes up. The **height readout is a child of that
@@ -1123,6 +1195,8 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | Constant | Effect |
 | -------- | ------ |
 | `TURN_SECONDS` | The drop clock (15) |
+| `FIRST_CHECKPOINT_PACK` | Which pack the first-checkpoint quest hands over. Must be a `forSale = false` entry in `SkinPacks.List`, or the prize is buyable and the line is lying |
+| `QUEST_CLAIMED_SECONDS` | How long the quest line stays up naming the prize after the grant lands (8) |
 | `IDLE_TURN_SECONDS`, `IDLE_GRACE_TURNS`, `IDLE_TURNS_BEFORE_AFK` | The short clock for an untouched turn (6), how many of a player's first turns are exempt (1), and how many untouched turns in a row bench them (2) — see [Idle turns](#idle-turns-and-the-inactivity-card) |
 | `EDGE_MARGIN` | How far anything pinned to a screen edge sits in from it (20). Shared by the HUD and the spectator badge so the two can't disagree |
 | `SPECTATOR_NOTICE_WIDTH`, `SPECTATOR_NOTICE_TOP`, `SPECTATOR_NOTICE_COLOR` | The spectator badge. `TOP` hangs it below the HUD's top column; the GUI inset is added on top of it at render |
@@ -1334,12 +1408,13 @@ thing that pays out, and `StoreService` is the only thing that debits.
 
 ## Skin packs
 
-`SkinPacks.luau` lists the buyable block looks, in two families:
+`SkinPacks.luau` lists the block looks, in two families:
 
 | Pack | Price | Effect |
 | ---- | ----- | ------ |
 | `skins.needoh` — Needoh Blocks | **not for sale** | Every block **is** the Needoh `BlockSkin` — glass, translucent, squish on every landing |
 | `skins.neon` — Neon Blocks | 100 coins | Every block part becomes `Enum.Material.Neon` |
+| `skins.gold` — Golden Blocks | **not for sale** | `Enum.Material.Foil` **and** a tight gold hue |
 | `skins.red` … `skins.black` (10) | 60 coins | Every block you place is a **random shade** of that colour |
 
 A skin pack overrides the look of **the blocks its owner drops**. A pack that
@@ -1347,6 +1422,16 @@ owns the surface (Neon, Needoh) also overrides whatever the current zone had
 dressed them in — a Retro zone can't dull a neon block or stud a Needoh one.
 That override is the product; `SkinPacks.ownsSurface` is the one place that
 decides which packs get it.
+
+**Gold is the one pack that sets both halves.** Every other entry picks a lane:
+Neon sets `material`, Needoh pins a `blockSkin`, the ten colours set `hue`. Gold
+needs Foil *and* the hue, because the hue alone would land it beside the
+sixty-coin Yellow pack — which is exactly what a reward for surviving the game's
+steepest drop-off must not look like. Its jitter is deliberately tight
+(`saturationJitter` 0.1, `valueJitter` 0.08): gold that wanders is brass on one
+block and lemon on the next, and the tower stops reading as one metal. It's
+`forSale = false`, so the [first-checkpoint quest](#the-first-checkpoint-quest)
+is the only way in.
 
 ### Needoh pins the roll instead of overriding it
 

@@ -36,6 +36,7 @@ local Boil = require(ReplicatedStorage.Shared.Boil)
 local ui = Boil.ui
 local audio = Boil.audio
 local CashFly = require(script.Parent.CashFly)
+local CheckpointQuest = require(script.Parent.CheckpointQuest)
 local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
 local ProgressLine = require(script.Parent.ProgressLine)
@@ -154,6 +155,16 @@ export type Props = {
 	stormSecondsLeft: number,
 	stormSeconds: number,
 	checkpoints: number,
+	-- Whether to show the first-checkpoint quest line under the countdown. True
+	-- for a player who has never seen a checkpoint clear (and for a few seconds
+	-- after, while it shows what they won); the profile flag behind it is what
+	-- makes this a new-player line rather than permanent furniture.
+	showCheckpointQuest: boolean?,
+	-- Flips the line from promising the prize to naming it. TowerView raises this
+	-- on the replica saying the grant landed, so the line can't congratulate a
+	-- player for something the server hasn't actually handed over.
+	questClaimed: boolean?,
+	questRewardName: string?,
 	device: ControlsHint.Device,
 	cash: number,
 	-- Signal firing with an amount whenever cash arrives; drives the bill burst.
@@ -256,6 +267,24 @@ return function(props: Props)
 			size = UDim2.new(1, 0, 0, STORM_LABEL_HEIGHT),
 			layoutOrder = 2,
 		})
+
+		-- The first-checkpoint quest, directly under the countdown: that clock is
+		-- the deadline for the climb and this is what the climb is worth, so the
+		-- two belong in the same block of text. It inherits the countdown's rule
+		-- and goes during the round break along with everything else measuring a
+		-- dead run.
+		--
+		-- The coins are named on the claimed side only. Two standing gold promises
+		-- compete rather than add up, and the skin is the one a new player can
+		-- picture; the coins they can already see flying into the counter.
+		if props.showCheckpointQuest then
+			column.Quest = React.createElement(CheckpointQuest, {
+				rewardName = props.questRewardName or "A rare skin",
+				rewardExtra = `+{Constants.CASH_PER_ZONE} Coins`,
+				claimed = props.questClaimed,
+				layoutOrder = 3,
+			})
+		end
 	end
 
 	local children: { [string]: any } = {

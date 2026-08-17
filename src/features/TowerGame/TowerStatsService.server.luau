@@ -146,6 +146,39 @@ function TowerStatsService.consumeAutoAfk(player: Player): boolean
 	return true
 end
 
+-- Whether the checkpoint about to clear would be this player's first, i.e.
+-- whether they still qualify for the first-checkpoint quest.
+--
+-- A profile that hasn't loaded answers **false**, not "maybe": the caller uses
+-- this to decide whether to hand over the quest prize, and a grant written
+-- against a missing profile is one that fails anyway — better to leave the flag
+-- alone and let them earn it on the next floor than to burn the once-ever moment
+-- on a write that goes nowhere.
+function TowerStatsService.isFirstCheckpointFor(player: Player): boolean
+	local saved = slice(player)
+	return saved ~= nil and not saved.SeenCheckpoint
+end
+
+-- A checkpoint just cleared. Credits everyone in the server for the same reason
+-- `recordHeight` does — it's one shared tower, so it's one shared moment — and
+-- it's what retires the HUD's first-checkpoint quest (see TowerHUD).
+--
+-- Called by CheckpointQuestService *after* it has handed the prize over: this
+-- flag is what the quest reads to know who still qualifies, so flipping it first
+-- would close the quest on the very player it was about to pay.
+--
+-- Write-once: this only ever goes false → true, so the common case (a veteran on
+-- their tenth floor) skips the SetValue and the replica diff it would fire.
+function TowerStatsService.recordCheckpointSeen()
+	for _, player in Players:GetPlayers() do
+		local saved = slice(player)
+		if saved == nil or saved.SeenCheckpoint then
+			continue
+		end
+		PlayerDataService.SetValue(player, { KEY, "SeenCheckpoint" }, true)
+	end
+end
+
 function TowerStatsService.Start()
 	Players.PlayerAdded:Connect(ensureFolder)
 	Players.PlayerRemoving:Connect(function(player)

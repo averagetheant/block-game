@@ -17,8 +17,13 @@ local Signal = require(ReplicatedStorage.Packages.Signal)
 
 local TowerGame = Features:WaitForChild("TowerGame")
 local Constants = require(TowerGame:WaitForChild("Constants"))
+local SkinPacks = require(TowerGame:WaitForChild("SkinPacks"))
 local TowerHUD = require(TowerGame:WaitForChild("TowerHUD"))
 local Zones = require(TowerGame:WaitForChild("Zones"))
+
+-- Resolved the same way TowerView resolves it, off the pack the server grants.
+local questPack = SkinPacks.get(Constants.FIRST_CHECKPOINT_PACK)
+local questRewardName = if questPack then questPack.name else "A rare skin"
 
 local PHASE_NAMES =
 	{ "aiming (yours)", "aiming (someone else)", "settling", "checkpoint", "game over", "idle" }
@@ -53,6 +58,12 @@ return {
 		zoneBaseHeight = UILabs.Slider(0, 0, 600, 1),
 		stormSecondsLeft = UILabs.Slider(148, 0, Constants.STORM_SECONDS, 1),
 		checkpoints = UILabs.Slider(1, 0, 20, 1),
+		-- On by default so the quest line is what you see first; in game it's off
+		-- for anyone who has already cleared a checkpoint.
+		showCheckpointQuest = true,
+		-- The payoff side of the line — what a new player sees for a few seconds
+		-- once the grant lands. Once ever in game, so this is where to look at it.
+		questClaimed = false,
 		playerCount = UILabs.Slider(4, 1, 8, 1),
 		-- Tags the current player's chip "2x" — what a Double Turn owner's
 		-- headshot looks like while their second piece is still coming.
@@ -133,6 +144,9 @@ return {
 			stormSecondsLeft = c.stormSecondsLeft,
 			stormSeconds = Constants.STORM_SECONDS,
 			checkpoints = c.checkpoints,
+			showCheckpointQuest = c.showCheckpointQuest,
+			questClaimed = c.questClaimed,
+			questRewardName = questRewardName,
 			showControls = c.showControls,
 			onSteer = function(value)
 				print(`[TowerHUD.story] steer {string.format("%.2f", value)}`)

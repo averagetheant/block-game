@@ -20,6 +20,7 @@ local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local ControlsHint = require(ReplicatedStorage.Features.TowerGame.ControlsHint)
 local PvpConstants = require(ReplicatedStorage.Features.TowerGame.PvpConstants)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
+local SkinPacks = require(ReplicatedStorage.Features.TowerGame.SkinPacks)
 local TowerHUD = require(ReplicatedStorage.Features.TowerGame.TowerHUD)
 local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
@@ -89,6 +90,65 @@ local function useDevice(): ControlsHint.Device
 
 	return device
 end
+
+-- The first-checkpoint quest's two visible states, driven entirely off the
+-- profile flag the server writes when it hands the prize over.
+--
+--   pending  — the player has never been in the server for a checkpoint, so the
+--              line promises the skin.
+--   claimed  — the flag just went false → true under us, so the grant has landed
+--              and the line names what they won for a few seconds before going
+--              for good.
+--
+-- Returns (show, claimed). `seen` is nil while the profile is still loading:
+-- neither state is shown then, because a line that flashes up and vanishes on a
+-- veteran's screen is worse than one that arrives a beat late for a new player.
+local function useCheckpointQuest(seen: boolean?): (boolean, boolean)
+	local claimed, setClaimed = React.useState(false)
+	-- Whether we've actually seen the "not yet" state. Without it, a profile that
+	-- loads already-true would read as a transition and congratulate a veteran for
+	-- a skin they earned months ago.
+	local wasPending = React.useRef(false)
+
+	-- The dependency, as a string rather than the boolean itself: `seen` is nil
+	-- while the profile loads, and a nil inside a Lua dependency array is a hole
+	-- that changes the array's length instead of its contents — which is not a
+	-- comparison anything should be asked to make.
+	local phase = if seen == nil then "loading" elseif seen then "seen" else "pending"
+
+	React.useEffect(function()
+		if seen == nil then
+			return
+		end
+		if not seen then
+			wasPending.current = true
+			return
+		end
+		if not wasPending.current then
+			return
+		end
+		wasPending.current = false
+		setClaimed(true)
+
+		local alive = true
+		task.delay(Constants.QUEST_CLAIMED_SECONDS, function()
+			if alive then
+				setClaimed(false)
+			end
+		end)
+		return function()
+			alive = false
+		end
+	end, { phase })
+
+	return seen == false or claimed, claimed
+end
+
+-- The first-checkpoint prize's display name, looked up once from the pack id
+-- CheckpointQuestService actually grants rather than written out again here —
+-- one definition, so the line can't name a skin the server doesn't hand over.
+local questPack = SkinPacks.get(Constants.FIRST_CHECKPOINT_PACK)
+local questRewardName = if questPack then questPack.name else "A rare skin"
 
 return function()
 	local state = Boil.useReplica(TowerController)
@@ -160,6 +220,9 @@ return function()
 	-- runs unconditionally; the guards start after the last one.
 	local device = useDevice()
 
+	-- Same rule: called with the other hooks, above the guards.
+	local showQuest, questClaimed = useCheckpointQuest(if profile then profile.SeenCheckpoint == true else nil)
+
 	if state == nil then
 		return nil
 	end
@@ -203,6 +266,14 @@ return function()
 		stormSecondsLeft = clocks.storm,
 		stormSeconds = state.stormSeconds,
 		checkpoints = state.checkpoints,
+		-- The retention hook: shown until this player has actually been in the
+		-- server for a checkpoint, then held a few seconds longer to name the skin
+		-- they just won. See `useCheckpointQuest`.
+		showCheckpointQuest = showQuest,
+		questClaimed = questClaimed,
+		-- Read off the pack the server actually grants, so the line can't
+		-- congratulate them with a name nothing hands over.
+		questRewardName = questRewardName,
 		device = device,
 		cash = if profile then profile.Cash or 0 else 0,
 		cashAwarded = TowerFeedbackController.CashAwarded,

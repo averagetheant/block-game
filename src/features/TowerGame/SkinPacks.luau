@@ -117,6 +117,33 @@ SkinPacks.List = {
 		order = 2,
 		material = Enum.Material.Neon,
 	},
+	{
+		id = "skins.gold",
+		name = "Golden Blocks",
+		description = "Polished gold, every piece. Earned by clearing your first checkpoint — it's never for sale.",
+		icon = assets.Icons.bandOfCash,
+		-- Inert while `forSale` is false. Kept at the colour-pack price only so the
+		-- row reads like the rest, and so there's a number if it ever goes on sale.
+		price = Constants.COLOR_SKIN_PRICE,
+		currency = Constants.CURRENCY_ID,
+		variant = "yellow",
+		order = 3,
+		-- The one pack that sets *both* halves. Foil is what makes it read as metal
+		-- rather than as another yellow — the hue alone would land it next to the
+		-- sixty-coin Yellow pack, which is exactly what a reward for surviving the
+		-- game's steepest drop-off must not do.
+		material = Enum.Material.Foil,
+		hue = 0.12,
+		-- A tight family: gold that wanders is brass on one block and lemon on the
+		-- next, and the tower stops reading as one metal.
+		saturation = 0.72,
+		saturationJitter = 0.1,
+		value = 0.94,
+		valueJitter = 0.08,
+		-- Earned, never bought — the first-checkpoint quest is the only way in.
+		-- See Constants.FIRST_CHECKPOINT_PACK, which is the id this row answers to.
+		forSale = false,
+	},
 } :: { SkinPack }
 
 -- The packs written out above. Counted rather than hardcoded so the colours

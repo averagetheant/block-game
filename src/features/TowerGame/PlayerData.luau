@@ -20,5 +20,11 @@ return function(PlayerData)
 		-- connect the two. TowerService clears both on join when this is set, so
 		-- being idle costs a player the rest of that session at most.
 		AutoAfk = false,
+		-- Whether this player has ever been in the server when a checkpoint
+		-- cleared. It's what qualifies them for the first-checkpoint quest (see
+		-- CheckpointQuestService and CheckpointQuest.ui) — the rare skin is handed
+		-- over on the clear and this flag is what closes the quest behind it, so
+		-- the prize can only ever be earned once.
+		SeenCheckpoint = false,
 	})
 end

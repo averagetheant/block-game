@@ -147,6 +147,9 @@ return function(props: Props)
 					text = reaction.name,
 					textSize = NAME_TEXT_SIZE,
 					color = if isOwned then nil else DIM_COLOR,
+					-- Catalog copy in a fixed tile: shrink a long name rather
+					-- than let it run out over the tiles either side.
+					fit = true,
 					size = UDim2.new(1, 0, 0, NAME_HEIGHT),
 					position = UDim2.new(0.5, 0, 1, -10),
 					anchorPoint = Vector2.new(0.5, 1),

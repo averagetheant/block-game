@@ -92,8 +92,9 @@ function TowerCameraController.Start()
 	-- limit. Reading the real viewport aspect covers both axes on any screen.
 	--
 	-- `halfWidth` and `maximum` default to the ordinary play area's; the PVP map
-	-- shot overrides both, because it has to fit six lanes across rather than one
-	-- tower and the classic ceiling would crop the outer two off the sides.
+	-- shot overrides both, because it has to fit however many lanes are in play
+	-- across rather than one tower, and on a full board the classic ceiling would
+	-- crop the outer two off the sides.
 	local function distanceFor(span: number, minimum: number, halfWidth: number?, maximum: number?): number
 		local viewport = workspace.CurrentCamera.ViewportSize
 		local aspect = if viewport.Y > 0 then viewport.X / viewport.Y else 1
@@ -142,27 +143,25 @@ function TowerCameraController.Start()
 	-- Two shots, and they're the two the mode is about: your own lane, and the
 	-- whole board.
 
-	-- The map: every lane at once, which is what the HUD's camera button shows
-	-- during a match. Centred on the arena's origin because the seats are laid
-	-- out symmetrically about it (see PvpLanes), so this is the same shot however
-	-- many of them are taken — a framing that re-centred on whoever happened to
-	-- be playing would swing the whole board sideways every time somebody joined.
+	-- The map: every lane *in play* at once, which is what the HUD's camera button
+	-- shows during a match.
 	--
-	-- Width is what decides the distance here, not height: six lanes is 600 studs
-	-- across and the tallest tower in a three-minute match is a fraction of that.
-	-- Hence its own half-width and its own ceiling.
-	local function mapShot(floorY: number, tallest: number): CFrame
+	-- Framed from the seats that are taken (`PvpLanes.spanOf`) rather than from
+	-- all six, so a two-player match is two towers filling the screen instead of
+	-- two towers adrift in four empty lanes' worth of sky. The lanes themselves
+	-- never move for this — the camera stands closer and off to the side; see the
+	-- note on `spanOf`.
+	--
+	-- Width is what decides the distance here, not height: a full board is 600
+	-- studs across and the tallest tower in a three-minute match is a fraction of
+	-- that. Hence its own half-width and its own ceiling.
+	local function mapShot(floorY: number, tallest: number, centreX: number, halfWidth: number): CFrame
 		local top = floorY + math.max(tallest, PvpConstants.MAP_MIN_HEIGHT)
 		local span = math.max(top - floorY, 1) + PvpConstants.MAP_PADDING
 		return shot(
-			0,
+			centreX,
 			(floorY + top) / 2,
-			distanceFor(
-				span,
-				distance,
-				PvpLanes.halfWidth() + PvpConstants.MAP_PADDING,
-				PvpConstants.MAP_MAX_DISTANCE
-			)
+			distanceFor(span, distance, halfWidth + PvpConstants.MAP_PADDING, PvpConstants.MAP_MAX_DISTANCE)
 		)
 	end
 
@@ -177,21 +176,28 @@ function TowerCameraController.Start()
 			return nil, Constants.CAMERA_LERP
 		end
 
+		-- One pass over the board: how tall it is, and which seats in it are the
+		-- outer two — the map shot is framed from those rather than from all six.
+		-- The sentinels are what `spanBetween` reads as "no lanes at all".
 		local data = PvpController.GetData()
 		local tallest = 0
+		local lowest, highest = math.huge, -math.huge
 		for _, lane in data.lanes do
 			tallest = math.max(tallest, lane.height)
+			lowest = math.min(lowest, lane.slot)
+			highest = math.max(highest, lane.slot)
 		end
+		local centreX, halfWidth = PvpLanes.spanBetween(lowest, highest)
 
 		-- The standings are the point of the last ten seconds, so the board is
 		-- framed for them whatever the player had the toggle set to.
 		if data.phase == PvpConstants.PHASE.RESULTS then
-			return mapShot(floorY, tallest), Constants.CAMERA_CHECKPOINT_LERP
+			return mapShot(floorY, tallest, centreX, halfWidth), Constants.CAMERA_CHECKPOINT_LERP
 		end
 
 		local mine = PvpController.myLane()
 		if overview or mine == nil then
-			return mapShot(floorY, tallest), Constants.CAMERA_CHECKPOINT_LERP
+			return mapShot(floorY, tallest, centreX, halfWidth), Constants.CAMERA_CHECKPOINT_LERP
 		end
 		return trackingShot(PvpLanes.xOf(mine.slot), floorY, mine.height, mine.pieceTop),
 			Constants.CAMERA_LERP

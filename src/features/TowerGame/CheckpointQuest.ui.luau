@@ -1,6 +1,7 @@
 --!strict
--- The first-checkpoint quest line, shown in the HUD's storm stack to a player who
--- has never been in the server when a checkpoint cleared.
+-- The first-checkpoint quest line: a six-second notification under the storm
+-- clock, shown to a player who has never been in the server when a checkpoint
+-- cleared.
 --
 -- It exists because reaching the first checkpoint is where most new players stop
 -- playing, and the climb up to it used to promise nothing they could picture.
@@ -14,9 +15,10 @@
 -- on top of the HUD rather than as part of that block. Colour carries the whole
 -- distinction: gold while it's a promise, green once it's paid.
 --
--- Dumb by construction: two strings and a boolean. Who qualifies, when it's
--- claimed and what the prize actually is are all decided elsewhere (TowerView
--- reads the profile flag, CheckpointQuestService does the granting).
+-- Dumb by construction: two strings and a boolean. Who qualifies, how long it
+-- stays up, when it's claimed and what the prize actually is are all decided
+-- elsewhere (`TowerView.useCheckpointQuest` reads the profile flag and runs both
+-- clocks, CheckpointQuestService does the granting).
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 

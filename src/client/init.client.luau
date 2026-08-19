@@ -41,7 +41,19 @@ local playerGui = Players.LocalPlayer:WaitForChild("PlayerGui")
 local screen = Instance.new("ScreenGui")
 screen.Name = "BoilRoot"
 screen.ResetOnSpawn = false
-screen.IgnoreGuiInset = true
+-- Full-bleed, but not into the parts of a handset that aren't really screen.
+-- DeviceSafeInsets is IgnoreGuiInset's "use the whole display" on anything
+-- rectangular (every desktop viewport) while still keeping the tree clear of a
+-- notch, a punch-hole camera, the home indicator and the rounded corners a
+-- phone actually has — which is what was shaving the edge off the left rail's
+-- icons. It does *not* inset for the Roblox topbar; that overlap is deliberate.
+screen.ScreenInsets = Enum.ScreenInsets.DeviceSafeInsets
+-- ...and mean it. FullscreenExtension (the default) stretches a full-screen
+-- child back out over the unsafe area so painted backdrops don't leave bars —
+-- but our root child is the ScaleLayer, a transparent canvas *larger* than the
+-- screen that every anchored surface positions against, so extending it would
+-- hand the notch back the corner the inset just reclaimed.
+screen.SafeAreaCompatibility = Enum.SafeAreaCompatibility.None
 -- Studio's Insert menu defaults to Sibling but Instance.new defaults to
 -- Global. Global mode breaks parent/child Z-layering (a child Frame at
 -- ZIndex 1 draws behind its parent at ZIndex 2), which is almost never

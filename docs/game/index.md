@@ -28,10 +28,12 @@ Features and skins are also **distributable packages** — one folder, one
 | --- | ------- |
 | [TowerGame.md](TowerGame.md) | Turn-based co-op block stacker (the game) |
 | [TowerGamePvp.md](TowerGamePvp.md) | PVP: six lanes, no turns, tallest tower before the clock |
+| [TowerPlatforms.md](TowerPlatforms.md) | Platform layouts: the base and checkpoint floors as Studio models, gaps and all |
 | [GamemodeVote.md](GamemodeVote.md) | Between-stages gamemode poll + the `Gamemode.luau` registration convention |
 | [FavouritePrompt.md](FavouritePrompt.md) | One-time "favourite this experience?" ask, fired at a player's first vote |
 | [Store.md](Store.md) | Shop + inventory, currencies, Robux products + the `Store.luau` discovery convention |
 | [Reactions.md](Reactions.md) | Bottom emoji bar broadcast to the whole server |
+| [ChatHints.md](ChatHints.md) | Rotating tips in chat + the `ChatHints.luau` registration convention |
 | [VoiceChat.md](VoiceChat.md) | Server-wide voice + the bottom-left "who's talking" chips |
 | [Cursors.md](Cursors.md) | Live per-player pointers on the play plane |
 | [PlayerData.md](PlayerData.md) | Profile persistence + the `registerTemplate` discovery convention |
@@ -42,5 +44,6 @@ Features and skins are also **distributable packages** — one folder, one
 | [Sidebar.md](Sidebar.md) | The left rail + the `Sidebar.luau` registration convention |
 | [DailyRewards.md](DailyRewards.md) | Seven-day login run + the `DailyRewards.luau` registration convention |
 | [Analytics.md](Analytics.md) | Funnels, economy + progression events, and the `Analytics.luau` registration convention |
+| [Feedback.md](Feedback.md) | Topbar button opening Roblox's in-experience feedback panel |
 | [UIShell.md](UIShell.md) | Global frame open/close system |
 | [UIShowcase.md](UIShowcase.md) | Demo HUD / entry surface |

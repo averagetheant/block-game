@@ -81,11 +81,15 @@ return function(props: Props)
 			BorderSizePixel = 0,
 		}, if art ~= nil then { Content = art } else {}),
 
+		-- `fit` because the name is a registered pack's, not ours: a long one
+		-- gives back a few pixels of text size rather than running out over the
+		-- card's edges and into the tile beside it.
 		Name = React.createElement(ui.Text, {
 			text = props.name,
 			textSize = NAME_TEXT_SIZE,
 			weight = Enum.FontWeight.Heavy,
 			shadow = true,
+			fit = true,
 			size = UDim2.new(1, 0, 0, NAME_HEIGHT),
 			position = UDim2.fromOffset(0, Constants.CARD_ICON + GAP),
 		}),

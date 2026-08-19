@@ -80,6 +80,15 @@ export type PanelProps = {
 	zIndex: number?,
 	transparency: number?,
 	strokeThickness: number?,
+	-- Whether the surface draws its outline at all. Default true — the outline is
+	-- what separates a HUD panel from the sky behind it, so losing it is a
+	-- deliberate choice a caller opts into, not a default to forget.
+	stroke: boolean?,
+	-- Whether the surface is rounded. Semantic rather than a radius on purpose:
+	-- *how* round is the skin's business, so a caller asks for the shape and each
+	-- skin answers with its own corner. Unset means the skin's own default, which
+	-- is square for gem and rounded for flat.
+	rounded: boolean?,
 	-- Gem mode: when a variant is set the panel paints a gem surface instead of
 	-- the dark-glass default. Skins without a gem surface ignore these.
 	variant: VariantKey?,
@@ -105,6 +114,12 @@ export type TextProps = {
 	-- Wrap at the label's width instead of running off the end. Pair with
 	-- `automaticSize = Y` for a block of copy that sizes to its content.
 	wrapped: boolean?,
+	-- Give text size back (down to `minTextSize`) rather than overflow the box.
+	-- Defaults to `wrapped`, and is what stops a phone's rounded-up glyph
+	-- metrics from pushing a line out of a fixed-height label. Never renders
+	-- larger than `textSize`; ignored alongside `automaticSize`.
+	fit: boolean?,
+	minTextSize: number?,
 	-- Drop-shadow (gem look); flat skins may render a plain label.
 	shadow: boolean?,
 	shadowColor: Color3?,

@@ -38,6 +38,9 @@ if Constants.Presentations.actions then
 			color = color,
 			material = skin.material or (if pinned then pinned.material else nil),
 			transparency = if pinned then pinned.transparency else nil,
+			-- Only a pinned skin can carry one — a texture is part of what a
+			-- BlockSkin *is*, and no pack sets one of its own.
+			texture = if pinned then pinned.texture else nil,
 		})
 	end)
 end

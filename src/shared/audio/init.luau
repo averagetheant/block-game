@@ -38,6 +38,7 @@
 -- plugin), so the Audio story's playback buttons are silent in-edit. Audition
 -- the registry by Play-testing the game, not from UI Labs.
 
+local ContentProvider = game:GetService("ContentProvider")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SoundService = game:GetService("SoundService")
 
@@ -250,6 +251,41 @@ local function prepareCue(name: string, options: CueOptions?): Sound?
 	local sound = source:Clone()
 	sound.Volume = source.Volume * (opts.volumeScale or 1)
 	return sound
+end
+
+-- Pull every Sound in the cue library into this client's asset cache.
+--
+-- An unloaded one-shot plays *after* it has downloaded, which for an impact means
+-- a beat late or not at all — and the landing it belongs to is over by then. The
+-- worst case is a library of interchangeable takes (see TowerGame's per-material
+-- impact folders): every take is a separate asset and each one's first play is
+-- the one that lands wrong.
+--
+-- **Yields** until every asset resolves or fails, so call it from a spawned
+-- thread. Client-only in effect — `ContentProvider` preloads for the machine that
+-- asks, and asking on the server does nothing for anybody.
+--
+-- Whole library rather than a named list: the argument applies to every cue, and
+-- a list would be a second place to remember a sound exists.
+function Audio.preloadCues()
+	local library = cueLibrary()
+	if library == nil then
+		return
+	end
+
+	local queue = {}
+	-- Descendants, not children: cues are allowed to be filed into subfolders,
+	-- and the ones most worth preloading are exactly the ones that were.
+	for _, descendant in library:GetDescendants() do
+		if descendant:IsA("Sound") and descendant.SoundId ~= "" then
+			table.insert(queue, descendant)
+		end
+	end
+	if #queue == 0 then
+		return
+	end
+
+	ContentProvider:PreloadAsync(queue)
 end
 
 -- Fire and forget, heard only where it's called (2D, client-side).

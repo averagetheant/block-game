@@ -45,6 +45,19 @@ local MUTED = Color3.fromRGB(196, 203, 224)
 local SPENT_TRANSPARENCY = 0.9
 local SPENT_ICON_TRANSPARENCY = 0.55
 
+-- The claim button's breath, and the tween that puts it back when the day is
+-- taken. RepeatCount -1 with Reverses is what makes one tween a loop: the scale
+-- runs out to PULSE_SCALE, back to 1, and again, without a frame of Luau behind
+-- it.
+local PULSE_TWEEN = TweenInfo.new(
+	Constants.PULSE_SECONDS,
+	Enum.EasingStyle.Sine,
+	Enum.EasingDirection.InOut,
+	-1,
+	true
+)
+local SETTLE_TWEEN = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
 -- Stand-in for a slot no feature registered. Drawn rather than skipped: a hole
 -- in the week is a content bug worth seeing, and shortening the run would
 -- silently renumber every day after it.
@@ -59,7 +72,13 @@ local UNREGISTERED_NAME = "???"
 -- different controls. Disabled Button keeps every state the same object: same
 -- shape, same centered label, dimmed by the skin's own overlay, with no hover
 -- feedback and no click to promise something the day can't deliver.
-local function actionFor(props: {
+--
+-- A component rather than a plain builder, because the live one *pulses* and a
+-- pulse needs a hook. The swell is the whole reason the window opens itself at a
+-- player on join (see `DailyRewardsPrompt`): a dimmed screen points at this row,
+-- and a button that sits perfectly still in the middle of it is one a new player
+-- reads as a label rather than a control.
+local function ClaimAction(props: {
 	day: number,
 	status: Cycle.Status,
 	-- False when the slot has no registered reward: there's nothing to hand
@@ -67,6 +86,7 @@ local function actionFor(props: {
 	available: boolean,
 	height: number,
 	textSize: number,
+	layoutOrder: number,
 	onClaim: (day: number) -> (),
 }): any
 	local live = props.status == "ready" and props.available
@@ -76,18 +96,43 @@ local function actionFor(props: {
 		else `Day {props.day}`
 	local variant = if live then "green" elseif props.status == "claimed" then "white" else "red"
 
-	return React.createElement(ui.Button, {
+	-- One tween, repeating forever and reversing, is the whole animation: the
+	-- scale runs 1 → PULSE_SCALE → 1 until the day is claimed, at which point the
+	-- target drops back to 1 and SETTLE puts it there once. No per-frame work and
+	-- nothing to tear down by hand — the hook cancels the tween when the target
+	-- changes or the card unmounts.
+	local scaleRef = ui.useTweenedScale(if live then Constants.PULSE_SCALE else 1, {
+		tweenInfo = if live then PULSE_TWEEN else SETTLE_TWEEN,
+	})
+
+	local button = React.createElement(ui.Button, {
 		variant = variant :: any,
 		text = label,
 		textSize = props.textSize,
-		size = UDim2.new(1, 0, 0, props.height),
-		layoutOrder = 9,
+		size = UDim2.fromScale(1, 1),
 		disabled = not live,
 		onClick = if live
 			then function()
 				props.onClaim(props.day)
 			end
 			else nil,
+	})
+
+	return React.createElement(ui.Slot, {
+		size = UDim2.new(1, 0, 0, props.height),
+		layoutOrder = props.layoutOrder,
+	}, {
+		-- The UIScale rides on an inner, centred slot: a UIScale transforms about
+		-- its parent's AnchorPoint, and the row's own top-left anchor would make
+		-- the button swell down and to the right instead of about itself.
+		Pulse = React.createElement(ui.Slot, {
+			size = UDim2.fromScale(1, 1),
+			position = UDim2.fromScale(0.5, 0.5),
+			anchorPoint = Vector2.new(0.5, 0.5),
+		}, {
+			Scale = React.createElement("UIScale", { Scale = 1, ref = scaleRef }),
+			Button = button,
+		}),
 	})
 end
 
@@ -215,12 +260,13 @@ local function rewardCard(props: {
 					})
 					else nil,
 
-				Action = actionFor({
+				Action = React.createElement(ClaimAction, {
 					day = props.day,
 					status = props.status,
 					available = available,
 					height = props.actionHeight,
 					textSize = theme.textSizeRegular,
+					layoutOrder = 9,
 					onClaim = props.onClaim,
 				}),
 			},

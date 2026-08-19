@@ -18,7 +18,7 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 
-return {
+local PvpConstants = {
 	-- ----------------------------------------------------------------- lanes --
 	-- Hard cap on lanes, and therefore on how many players can be *playing* at
 	-- once. It is not the server's player cap: `Players.MaxPlayers` is a place
@@ -32,7 +32,7 @@ return {
 	-- Read it against the two things that can cross a lane boundary. A piece
 	-- steers to ±STEER_LIMIT_X (22) and overhangs half a block past that, so a
 	-- tower is about 52 studs wide; a bomb throws everything within
-	-- EXPLOSION_RADIUS (46) of itself. 120 leaves ~68 studs of air between two
+	-- EXPLOSION_RADIUS (36) of itself. 120 leaves ~68 studs of air between two
 	-- towers, which is more than a blast on the near edge of one lane can reach
 	-- into the next. Nobody may wreck a neighbour's tower — that is the whole
 	-- reason lanes are this far apart rather than merely not overlapping.
@@ -81,13 +81,29 @@ return {
 	-- the tower settle before the next player is up, and in PVP there is no next
 	-- player. Tempo is the mode.
 	PIECE_GAP_SECONDS = 0.5,
-	-- Odds any given piece is a special (bomb, burning, ghost, …). A flat chance
-	-- rather than the classic escalating curve: a PVP round is three minutes
-	-- long and has no checkpoints to escalate against, so the curve would spend
-	-- the whole match at its 3% floor. This bypasses `BlockTypes.MAX_CHANCE` the
-	-- same way the Roulette gamemode's does — see `blockTypeChance` in
-	-- Gamemodes.luau, which is the field this is fed through.
-	SPECIAL_CHANCE = 0.3,
+	-- Odds any given piece is a special (bomb, burning, ghost, …): what a piece
+	-- dealt at the whistle rolls against, and what one dealt after the ramp has
+	-- topped out rolls against. Read through `specialChanceAt` below, not
+	-- directly.
+	--
+	-- Not the classic escalating curve. That one is a function of checkpoints
+	-- cleared, and a PVP match clears none, so it would sit at its 3% floor for
+	-- the whole three minutes. This is PVP's own ramp, on PVP's own clock.
+	--
+	-- Rising rather than flat because the mode's shape is rising: the towers that
+	-- are going to win are tall by the last minute, and a hazard costs more the
+	-- taller the thing it lands on. Opening at 20% leaves the first minute about
+	-- learning to aim; closing at 30% makes the finish the part worth watching.
+	-- Both ends bypass `BlockTypes.MAX_CHANCE` (0.4) the same way the Roulette
+	-- gamemode's number does — see `blockTypeChance` in Gamemodes.luau.
+	SPECIAL_CHANCE_START = 0.2,
+	SPECIAL_CHANCE_END = 0.3,
+	-- How far through the match the ramp arrives at SPECIAL_CHANCE_END, as a
+	-- fraction of MATCH_SECONDS. Short of 1 on purpose: "near the end" has to be
+	-- long enough to actually play in, and a ramp that only landed on the final
+	-- whistle would deliver its top rate to nobody. At 0.85 of a 180-second match
+	-- the last ~27 seconds run flat out.
+	SPECIAL_CHANCE_FULL_AT = 0.85,
 
 	-- ------------------------------------------------------------- the zones --
 	-- How long a zone lasts before the next one is rolled. The classic game
@@ -97,6 +113,45 @@ return {
 	-- The first zone of a match is always the plain one, so the first thirty
 	-- seconds are spent learning the mode rather than the weather.
 	FIRST_ZONE_NORMAL = true,
+	-- The roll window: how long the next zone is *announced* before it becomes
+	-- true in the world. The HUD spends it spinning a reel through the zone names
+	-- (see `ZoneReel`) and lands on the answer at the far end of it.
+	--
+	-- The delay is the whole point rather than a cost of the animation: without
+	-- it the sky would change while the reel was still spinning, which spoils the
+	-- reveal and — worse — moves the ground under a piece somebody is aiming with
+	-- no notice. Both realms hold off for the same window, and the exact moment
+	-- rides the packet as `zoneAt` so a slow connection lands with everyone else.
+	--
+	-- Kept short. It's a beat of anticipation, not an interruption, and every
+	-- second of it is a second of the zone's own 35 that nobody is playing.
+	ZONE_ROLL_SECONDS = 2,
+
+	-- ------------------------------------------------------------- the storm --
+	-- Lightning, while a Stormy zone is up. The match runs its own driver rather
+	-- than the classic one (see `PvpService.updateStrikes`), for one reason:
+	-- **every lane is struck on the same clock**. Six players are building at
+	-- once, and a storm that picked one spot on the board would be a coin toss
+	-- deciding a match — one player losing two floors to weather while the lane
+	-- beside them never hears thunder. Same beat, same count, one bolt each,
+	-- somewhere random inside their own lane.
+	--
+	-- Its own cadence numbers rather than the classic ones, because it's pacing
+	-- something different. `Constants.LIGHTNING_*` are written against a
+	-- five-minute stage: a ten-second warning and a 14-22 second gap. A PVP zone
+	-- lasts ZONE_SECONDS (35), so that cadence would spend most of a Stormy zone
+	-- waiting and land about one bolt in it.
+	--
+	-- How long the red column stands before the bolt does. Shorter than the
+	-- classic ten: there's no turn queue to sit through here, so five seconds is
+	-- two or three pieces' worth of time to build somewhere else or to decide the
+	-- tower is worth defending.
+	STRIKE_WARNING_SECONDS = 5,
+	-- The randomised gap between bolts, measured from the last one — the warning
+	-- sits inside it, so raising a marker doesn't quietly slow the storm down.
+	-- About two or three strikes per Stormy zone.
+	STRIKE_MIN_SECONDS = 9,
+	STRIKE_MAX_SECONDS = 14,
 
 	-- ------------------------------------------------------------ the camera --
 	-- Extra air around the whole board in the map shot (the HUD's camera button).
@@ -145,3 +200,23 @@ return {
 		hud = true,
 	},
 }
+
+-- The odds a piece dealt `progress` of the way through the match is a special.
+-- 0 is the whistle, 1 is time. Linear from SPECIAL_CHANCE_START to
+-- SPECIAL_CHANCE_END, which it reaches at SPECIAL_CHANCE_FULL_AT and holds for
+-- the rest of the match.
+--
+-- A function next to the numbers rather than arithmetic at the call site, for the
+-- reason `BlockTypes.chanceAt` lives next to its own: the rate and the roll can't
+-- drift apart if reading the rate is reading this.
+--
+-- Clamped at both ends, so a caller that hands it a progress off the clock — a
+-- piece dealt during the countdown, or one dealt a tick after time — gets an end
+-- of the ramp rather than an extrapolation off it.
+function PvpConstants.specialChanceAt(progress: number): number
+	local ramp = math.clamp(progress / PvpConstants.SPECIAL_CHANCE_FULL_AT, 0, 1)
+	local span = PvpConstants.SPECIAL_CHANCE_END - PvpConstants.SPECIAL_CHANCE_START
+	return PvpConstants.SPECIAL_CHANCE_START + span * ramp
+end
+
+return PvpConstants

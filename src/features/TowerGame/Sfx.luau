@@ -24,6 +24,13 @@ local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 
 local Sfx = {}
 
+-- Warm this client's asset cache with the whole cue library, impact takes and
+-- all. **Yields** — see `audio.preloadCues`; `TowerFeedbackController` spawns it
+-- at start.
+function Sfx.preload()
+	audio.preloadCues()
+end
+
 -- Fire and forget, heard only where it's called (2D on the client).
 function Sfx.play(name: string, volumeScale: number?)
 	audio.playCue(name, { volumeScale = volumeScale })

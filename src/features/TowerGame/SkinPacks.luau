@@ -64,6 +64,7 @@ local Constants = require(script.Parent.Constants)
 -- point of use so the pack and the skin can't drift apart silently — if the
 -- skin is ever renumbered this stops resolving in one obvious place.
 local NEEDOH_SKIN_ID = 2
+local DUCK_SKIN_ID = 8
 
 local SkinPacks = {}
 
@@ -128,7 +129,7 @@ SkinPacks.List = {
 		currency = Constants.CURRENCY_ID,
 		variant = "yellow",
 		order = 3,
-		-- The one pack that sets *both* halves. Foil is what makes it read as metal
+		-- Sets surface and hue both, the way Duck does. Foil is what makes it metal
 		-- rather than as another yellow — the hue alone would land it next to the
 		-- sixty-coin Yellow pack, which is exactly what a reward for surviving the
 		-- game's steepest drop-off must not do.
@@ -142,6 +143,35 @@ SkinPacks.List = {
 		valueJitter = 0.08,
 		-- Earned, never bought — the first-checkpoint quest is the only way in.
 		-- See Constants.FIRST_CHECKPOINT_PACK, which is the id this row answers to.
+		forSale = false,
+	},
+	{
+		id = "skins.duck",
+		name = "Duck Blocks",
+		description = "Rubber ducks, all the way up. Every landing quacks.",
+		icon = assets.Icons.wheel,
+		-- Inert: `forSale` is false and nothing prices it. Kept at the Needoh band
+		-- only so the row is the same shape as the others.
+		price = Constants.NEEDOH_SKIN_PRICE,
+		currency = Constants.CURRENCY_ID,
+		variant = "yellow",
+		order = 4,
+		-- Both halves, same as Gold and for the same reason: the skin owns the
+		-- surface (the tiled duck texture and the quack) and the pack owns the hue,
+		-- because a duck that rolled a random colour is not a duck.
+		blockSkin = DUCK_SKIN_ID,
+		hue = 0.13,
+		-- The tightest family in the file — tighter than Gold's. The texture is
+		-- what's doing the work here, so the blocks have to read as one material
+		-- under slightly different light rather than as a colour pack; anything
+		-- wider and the shade starts competing with the pattern for attention.
+		-- (Hue is already held to ±0.02 for every pack, so only these two need it.)
+		saturation = 0.8,
+		saturationJitter = 0.06,
+		value = 0.97,
+		valueJitter = 0.05,
+		-- Never for sale and never rolled. It's handed to the two people named in
+		-- Constants.DUCK_OWNERS and to nobody else — see DuckSkinService.
 		forSale = false,
 	},
 } :: { SkinPack }

@@ -31,6 +31,13 @@ theme.thinStrokeThickness = 2
 ------------------------------------------------------------------------------
 -- Translucent dark glass background transparency (Panel, TextField).
 theme.glassTransparency = 0.8
+-- The corner a surface gets when a caller asks for a rounded one (`Panel`'s
+-- `rounded` prop). The gem look is square by default — its outline is what reads
+-- as the edge — so this is the answer to "round this one", not a default applied
+-- everywhere. Generous rather than a hairline: at 4 or 6 a rounded panel just
+-- looks like a square panel someone sanded, and the point of asking is to get a
+-- surface that reads as soft.
+theme.cornerRadius = UDim.new(0, 16)
 
 ------------------------------------------------------------------------------
 -- Padding & spacing (all in pixels)

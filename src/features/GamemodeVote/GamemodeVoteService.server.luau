@@ -42,6 +42,15 @@ local votes: { [number]: string } = {}
 -- read at the count, so buying the pass mid-poll doesn't retroactively reweigh a
 -- stamp that's been sitting on a panel — re-vote and it counts double.
 local weights: { [number]: number } = {}
+-- userId -> how many times that player has stamped this poll.
+--
+-- Nothing in the tally reads it: one player is one vote however many times they
+-- press it. It exists so a *repeat* press is visible on the wire at all. Clicking
+-- the panel you already hold changes neither the option nor the weight, so the
+-- payload would be byte-identical to the last one and every client would decide
+-- nothing had happened — no slam, no thud, a button that ate the press. This
+-- counter is the difference between the two packets.
+local stamps: { [number]: number } = {}
 
 -- How much one player's vote counts for. One stamp either way: the screen shows
 -- presence, and a second headshot for the same player would read as a second
@@ -56,7 +65,12 @@ end
 local function payload()
 	local voters = {}
 	for userId, optionId in votes do
-		table.insert(voters, { userId = userId, optionId = optionId, weight = weights[userId] or 1 })
+		table.insert(voters, {
+			userId = userId,
+			optionId = optionId,
+			weight = weights[userId] or 1,
+			stamps = stamps[userId] or 1,
+		})
 	end
 	-- Stable order so a client re-render can't shuffle the headshots around a
 	-- panel for no reason.
@@ -93,21 +107,26 @@ function GamemodeVoteService.castVote(player: Player, optionId: string)
 		return
 	end
 
-	-- Reported before the un-vote branch below: taking a vote back is still a
-	-- player who engaged with the ballot, and the step is "they participated".
-	-- `step` dedupes within the poll's session, so switching picks four times
-	-- counts once.
+	-- `step` dedupes within the poll's session, so switching picks four times —
+	-- or pressing the same panel four times — counts once.
 	AnalyticsService.step(player, "vote", "Vote Cast", { optionId })
 
-	-- Voting for what you already picked takes it back, so the screen needs no
-	-- separate un-vote affordance.
-	if votes[player.UserId] == optionId then
-		votes[player.UserId] = nil
-		weights[player.UserId] = nil
-	else
-		votes[player.UserId] = optionId
-		weights[player.UserId] = weightOf(player)
-	end
+	-- **A vote can be moved but not taken back.** Pressing the panel you already
+	-- hold used to clear the vote, which made the ballot's most obvious gesture —
+	-- press the thing you want, press it again because it felt good — quietly
+	-- destructive: a player could end a poll having voted for nothing without ever
+	-- meaning to, and the screen has no affordance saying so. Now every press ends
+	-- with your stamp on the panel you pressed. It just lands again.
+	--
+	-- The weight is re-read on every press rather than only on a change, which is
+	-- what makes "buy the pass mid-poll, press your pick again, it counts double"
+	-- work without having to vote away and back.
+	votes[player.UserId] = optionId
+	weights[player.UserId] = weightOf(player)
+	-- Wrapped to the uint8 it travels as, so the number on the wire is the number
+	-- here. What the clients read off it is "did this change", never "how many",
+	-- so 255 → 0 lands a stamp exactly like 3 → 4 does.
+	stamps[player.UserId] = ((stamps[player.UserId] or 0) + 1) % 256
 	broadcast()
 end
 
@@ -202,6 +221,7 @@ function GamemodeVoteService.startVote(): string?
 	end
 	votes = {}
 	weights = {}
+	stamps = {}
 	winnerId = ""
 	endsAt = workspace:GetServerTimeNow() + Constants.VOTE_SECONDS
 	broadcast()
@@ -232,6 +252,7 @@ function GamemodeVoteService.startVote(): string?
 	winnerId = ""
 	votes = {}
 	weights = {}
+	stamps = {}
 	options = {}
 	broadcast()
 
@@ -260,6 +281,7 @@ function GamemodeVoteService.Start()
 		end
 		votes[player.UserId] = nil
 		weights[player.UserId] = nil
+		stamps[player.UserId] = nil
 		broadcast()
 	end)
 end

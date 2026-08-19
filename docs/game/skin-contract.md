@@ -57,6 +57,25 @@ The production root mounts `<SkinProvider skin="gem">` at the top of the tree
   skin-aware token reads inside a component use `ui.useSkin().theme`.
 - **Don't reach past the seam.** Feature code uses `ui.X`; it should not require a
   specific skin's implementation directly.
+- **A pressable's hover swell rides on a centred inner frame, not on the box the
+  caller positioned.** A `UIScale` transforms about its own frame's
+  `AnchorPoint`, so a scale on the outer frame grows the control out of whichever
+  corner it was anchored by — down and right for a list child (the default `0,0`),
+  up and left for anything pinned bottom-right — and only a control the caller had
+  already centred swells about itself. Both skins' `Button` / `IconButton` are two
+  frames for this reason: the outer one takes `size` / `position` / `anchorPoint`
+  / `layoutOrder` and never changes size, and a `Body` at `AnchorPoint 0.5, 0.5`
+  inside it carries the visuals and the scale. Holding the outer size fixed also
+  keeps a hover from shoving its neighbours around, since a `UIScale` changes
+  `AbsoluteSize` as well as what's drawn and that's what a `UIListLayout`
+  measures. (The same trick, hand-rolled at the call site, is what the gamemode
+  ballot's panels and the daily reward's pulsing claim row already do.)
+- **A skin's `Text` honors `fit`.** `TextProps.fit` (defaulting to `wrapped`)
+  means "shrink rather than clip": render a `UITextSizeConstraint` with
+  `MaxTextSize` at the authored `textSize`, so the label can only ever give size
+  back, never grow. It's how copy survives a phone's rounded-up glyph metrics —
+  see [layout-surfaces.md](layout-surfaces.md) § Fitting text on a real device.
+  A skin that ignores it renders text that clips on small viewports.
 
 ## Authoring a new skin
 

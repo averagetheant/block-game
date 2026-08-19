@@ -48,6 +48,29 @@ local FULL_IMPACT_SPEED = 90
 local MIN_STRENGTH = 0.3
 local COOLDOWN = 0.12
 
+-- How far a block must actually have *gone* since its last squish before it is
+-- allowed another one, in studs.
+--
+-- The fractional test above handles the noise of a block in flight. It does not
+-- handle the noise of a block that has stopped, and that turned out to be the
+-- louder problem: a settled part's replicated CFrame still arrives in steps, and
+-- the jitter scales with how many parts the server is replicating. Past about ten
+-- blocks a resting one only has to twitch a fifth of a stud in a frame to clear
+-- `DECEL_FLOOR`, and it re-armed every `COOLDOWN` — so a finished tower sat there
+-- squishing itself over and over.
+--
+-- Travel is what separates the two cases, and speed can't. Jitter oscillates about
+-- a point and goes nowhere; a real landing arrives from `SPAWN_CLEARANCE` (14
+-- studs) or gets thrown there by a blast. Two studs is half a cell — far above any
+-- replication wobble, far below anything that actually fell.
+--
+-- Measured in any direction rather than downward only, so a block shoved sideways
+-- into its neighbour still lands properly, and measured only across frames where
+-- the block was *moving* — see the footprint in `step`. A drop from spawn covers
+-- this in the first two hundredths of a second; a stack settling never covers it
+-- at all.
+local MIN_TRAVEL = 2
+
 local KICK = 5.5
 -- Hard clamp on the elongation. The body is exactly the size of the cubes it
 -- covers, so this is also how far it may visibly overhang them.
@@ -74,6 +97,9 @@ type Tracked = {
 	ev: number,
 	axis: number,
 	lastPos: Vector3,
+	-- Where the block was when it last squished. The distance from here is what
+	-- says whether it has been anywhere since; see MIN_TRAVEL.
+	anchorPos: Vector3,
 	lastSpeed: number,
 	lastVelocity: Vector3,
 	lastKickAt: number,
@@ -92,6 +118,24 @@ local function cellsOf(model: Model): { BasePart }
 		end
 	end
 	return cells
+end
+
+-- Carry a textured skin's pattern onto the body.
+--
+-- The body renders *instead of* the cells, so a Texture that only exists on a
+-- cell is a pattern nobody ever sees — the same problem the colour and material
+-- mirroring in `step` solves, except a Texture is a child rather than a property
+-- and so has to be cloned rather than assigned.
+--
+-- Once, at attach, rather than every frame: unlike colour and material, nothing
+-- in the game re-textures a block after it's built. The cells keep their own
+-- copies, which is what the Retro fallback (studded cells, body hidden) draws.
+local function copyTextures(root: BasePart, body: BasePart)
+	for _, child in root:GetChildren() do
+		if child:IsA("Texture") then
+			child:Clone().Parent = body
+		end
+	end
 end
 
 local function attach(model: Model)
@@ -117,6 +161,7 @@ local function attach(model: Model)
 	if body == nil or offset == nil then
 		return
 	end
+	copyTextures(root, body)
 
 	tracked[model] = {
 		model = model,
@@ -129,6 +174,7 @@ local function attach(model: Model)
 		ev = 0,
 		axis = 2,
 		lastPos = root.Position,
+		anchorPos = root.Position,
 		lastSpeed = 0,
 		lastVelocity = Vector3.zero,
 		lastKickAt = 0,
@@ -198,6 +244,29 @@ local function step(entry: Tracked, delta: number, now: number)
 		end
 	end
 
+	-- Point the tells at whichever geometry is actually being *seen*.
+	--
+	-- A Highlight with no Adornee adorns its parent and everything under it, and
+	-- the tells are parented to the model — so they were tracing the rounded body
+	-- and the square cells hidden inside it at the same time. The cells' corners
+	-- sit outside the body's rounded ones, so every special block wore a squared-off
+	-- ghost of itself poking through its own outline. It read worst on a Bomb,
+	-- whose tell is the loudest colour on the board and whose outline is fully
+	-- opaque, but it was never the Bomb's bug — it was every tell's.
+	--
+	-- Retro is the one zone where the cells *are* the block (the body steps aside;
+	-- see `isStudded`), so there the model is the right answer again.
+	--
+	-- By class rather than by name, the same way the skin textures are mirrored:
+	-- nothing here depends on what the server called them, and the second tell a
+	-- glued block wears is handled without this file having heard of it.
+	local adornee: Instance = if studded then entry.model else body
+	for _, child in entry.model:GetChildren() do
+		if child:IsA("Highlight") and child.Adornee ~= adornee then
+			child.Adornee = adornee
+		end
+	end
+
 	-- Rendered velocity, not the replicated one. Anchored pieces are skipped: a
 	-- held piece is anchored and steered by the server, and letting go of the steer
 	-- stick is a hard stop that would otherwise read as a landing.
@@ -205,6 +274,23 @@ local function step(entry: Tracked, delta: number, now: number)
 	local velocity = (position - entry.lastPos) / delta
 	local speed = if root.Anchored then 0 else velocity.Magnitude
 	entry.lastPos = position
+	-- Has it actually *fallen*, or is it just a stack arguing with itself?
+	--
+	-- Every speed test below is a statement about one or two frames, which is the
+	-- exact window a settling stack's noise lives in. This is the test that noise
+	-- cannot pass: it asks for MIN_TRAVEL studs of ground covered *without ever
+	-- slowing down*, which is what a fall is and what a rattle isn't.
+	--
+	-- The two lines do that together. The footprint follows the block for as long
+	-- as it's slow, so a stack that creeps a stud an hour never banks that drift
+	-- into permission to squish; the moment it goes fast the footprint stays put
+	-- and the distance from it starts meaning something. Oscillating in place fails
+	-- on distance however fast the oscillation is, and sliding slowly fails on
+	-- speed however far it goes.
+	local moved = (position - entry.anchorPos).Magnitude >= MIN_TRAVEL
+	if speed < MIN_IMPACT_SPEED then
+		entry.anchorPos = position
+	end
 
 	-- Confirm or discard last frame's candidate before looking for a new one. A
 	-- block that really landed is still slow a frame later; an interpolation
@@ -223,6 +309,10 @@ local function step(entry: Tracked, delta: number, now: number)
 			-- Negative: the first thing a landing does is compress.
 			entry.ev -= KICK * strength
 			entry.lastKickAt = now
+			-- Where it came to rest is where the next MIN_TRAVEL is measured from,
+			-- so sitting still can't earn a second squish however noisy the sitting
+			-- looks.
+			entry.anchorPos = position
 			hit = true
 		end
 	end
@@ -234,6 +324,7 @@ local function step(entry: Tracked, delta: number, now: number)
 		and lost >= entry.lastSpeed * DECEL_FRACTION
 		and entry.lastSpeed >= MIN_IMPACT_SPEED
 		and now - entry.lastKickAt >= COOLDOWN
+		and moved
 	then
 		entry.pendingSpeed = entry.lastSpeed
 		-- The direction it was travelling while it still had speed — by now it has
@@ -255,7 +346,15 @@ local function step(entry: Tracked, delta: number, now: number)
 	entry.e = math.clamp(entry.e + entry.ev * delta, -MAX_ELONGATION, MAX_ELONGATION)
 
 	local stretch = 0
-	if speed > MIN_IMPACT_SPEED and not hit then
+	-- `moved` here for the same reason it gates the landing: a resting block whose
+	-- replicated position twitches reads as briefly fast, and without this it wore
+	-- a frame of stretch — and a re-rolled `axis` — for every twitch. A whole
+	-- settled tower flickering is the same bug as the repeated squish, one line
+	-- further down.
+	--
+	-- It costs the first two studs of a real fall, which is the slowest and least
+	-- stretched part of one.
+	if speed > MIN_IMPACT_SPEED and moved and not hit then
 		stretch = math.clamp(speed / FALL_FULL_SPEED, 0, 1) * FALL_STRETCH
 		entry.axis = axisFor(entry, velocity.Unit)
 	end

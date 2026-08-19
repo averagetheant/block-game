@@ -17,14 +17,15 @@ return function(props: contract.ButtonProps)
 	local disabled = props.disabled == true
 	local hover = useHoverScale()
 
-	return React.createElement("Frame", {
-		Size = props.size or theme.buttonSize,
-		Position = props.position,
-		AnchorPoint = props.anchorPoint,
+	-- Box outside, body inside, matching the gem skin: the hover scale has to ride
+	-- on a frame anchored at its own centre, or the button swells out of whichever
+	-- corner the caller anchored it by rather than about itself.
+	local body = React.createElement("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		Position = UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundColor3 = theme.surface,
 		BorderSizePixel = 0,
-		LayoutOrder = props.layoutOrder,
-		ZIndex = props.zIndex or 2,
 	}, {
 		UIScale = React.createElement("UIScale", { Scale = 1, ref = hover.scaleRef }),
 		UICorner = React.createElement("UICorner", { CornerRadius = theme.cornerRadius }),
@@ -66,5 +67,17 @@ return function(props: contract.ButtonProps)
 				UICorner = React.createElement("UICorner", { CornerRadius = theme.cornerRadius }),
 			})
 			else nil,
+	})
+
+	return React.createElement("Frame", {
+		Size = props.size or theme.buttonSize,
+		Position = props.position,
+		AnchorPoint = props.anchorPoint,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		LayoutOrder = props.layoutOrder,
+		ZIndex = props.zIndex or 2,
+	}, {
+		Body = body,
 	})
 end

@@ -32,6 +32,11 @@ type Props = {
 	exitTweenInfo: TweenInfo?,
 	-- Override the start/exit UIScale value (defaults to Constants.ENTER_SCALE_FROM).
 	scaleFrom: number?,
+	-- Where this frame sits among its siblings. Frames mounted as their own root
+	-- want `ui.layers.window` so they clear the HUD; a frame that shares a root
+	-- with something else (a scrim under it, a notice over it) uses a plain child
+	-- number instead. Left unset it takes Roblox's default of 1.
+	zIndex: number?,
 	children: { [string]: any }?,
 }
 
@@ -86,6 +91,7 @@ return function(props: Props)
 		Position = UDim2.fromScale(0.5, 0.5),
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundTransparency = 1,
+		ZIndex = props.zIndex,
 		Visible = mounted,
 	}, injectedChildren)
 end

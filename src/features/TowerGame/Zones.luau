@@ -20,8 +20,22 @@ export type Zone = {
 	id: number,
 	kind: Kind,
 	name: string,
-	-- Shown in the warning banner. nil for normal zones, which don't warn.
-	warning: string?,
+	-- The one line a player is ever shown about this zone, in either mode: the
+	-- classic HUD's banner prints it and PVP's reel prints it when it lands (see
+	-- `ZoneReel`). One string rather than two, so a zone cannot say one thing in a
+	-- classic round and another in a match — to reword a zone, edit this and both
+	-- modes follow.
+	--
+	-- Written in the banner's voice, which is the voice this game speaks in:
+	-- short, present tense, about the trouble you are now in.
+	--
+	-- Every zone has one, the normal zone included. It used to be optional and to
+	-- double as the "does this zone announce itself?" flag, which is why Clear
+	-- Skies had none — but the reel lands on Clear Skies as often as on anything
+	-- else and "nothing is out to get you" is an answer worth printing. Whether a
+	-- zone announces itself is now asked of its `kind` instead, where it belongs
+	-- (see TowerZoneController).
+	warning: string,
 	-- Child of `Assets.Zones` holding this zone's Sky. Normal zones leave this
 	-- nil and roll one of the skies in `Assets.Zones.Normal` instead.
 	sky: string?,
@@ -40,16 +54,27 @@ export type Zone = {
 
 local Zones = {}
 
--- Roblox's out-of-the-box gravity, restored by every zone that doesn't name its
--- own. Kept here rather than in Constants so a zone's gravity and its fallback
--- can't drift apart.
-Zones.DEFAULT_GRAVITY = 196.2
+-- The gravity every zone that doesn't name its own is played at. Kept here rather
+-- than in Constants so a zone's gravity and its fallback can't drift apart.
+--
+-- 160, not Roblox's out-of-the-box 196.2. Lower gravity buys time twice over: a
+-- piece reaches its terminal velocity later (see `Constants.FALL_SPEED`), and — the
+-- half that actually decides whether a tower survives — a stack that starts to
+-- lean topples slowly enough to be watched, sometimes slowly enough to be caught
+-- by the next piece. At 196.2 a lean was a collapse before the player had read it
+-- as a lean.
+--
+-- Not lower than this. Much under 150 and pieces hang rather than fall, the drop
+-- clock starts to matter for the wrong reason, and the game stops reading as a
+-- tower under load.
+Zones.DEFAULT_GRAVITY = 160
 
 Zones.List = {
 	{
 		id = 1,
 		kind = "normal",
 		name = "Clear Skies",
+		warning = "Clear skies — nothing bends the rules!",
 		tint = Color3.fromRGB(150, 205, 255),
 		weight = 6,
 	},
@@ -120,6 +145,18 @@ end
 -- Zone 1 (normal) is where every run starts.
 Zones.DEFAULT_ID = 1
 
+-- Whether a zone announces itself when it arrives — the classic HUD's banner and
+-- the sound that goes with it.
+--
+-- Asked of the `kind` rather than of the copy. It used to be "does this zone have
+-- a `warning` string", which worked only for as long as the normal zone had
+-- nothing to say; now that every zone carries a line for the PVP reel to print,
+-- a banner for "clear skies, nothing bends the rules" would be an announcement
+-- that nothing happened, every third checkpoint.
+function Zones.announces(zone: Zone): boolean
+	return zone.kind ~= "normal"
+end
+
 function Zones.get(id: number): Zone
 	return byId[id] or byId[Zones.DEFAULT_ID]
 end
@@ -133,6 +170,42 @@ end
 -- reading as the game's default state, and the plain zones are what give the
 -- players a stretch to build in.
 Zones.NORMALS_PER_SPECIAL = 2
+
+-- A special zone, rolled by weight, avoiding the one that's up.
+--
+-- The shared half of `Zones.next`, and the whole of what a specials-only round
+-- wants (the Wild Weather gamemode — see `Gamemodes.luau`): every zone that bends
+-- a rule, weighted against each other, never the calm one.
+--
+-- `avoidId` keeps the same hazard from landing twice running — repeating one
+-- reads as the game glitching rather than escalating. That matters more here than
+-- anywhere else: a round that only ever picks specials asks this question every
+-- checkpoint instead of every third one.
+function Zones.rollSpecial(avoidId: number?): Zone
+	local specials = {}
+	local total = 0
+	for _, zone in Zones.List do
+		if zone.kind == "normal" or zone.id == avoidId then
+			continue
+		end
+		table.insert(specials, zone)
+		total += zone.weight
+	end
+	-- Only one special exists and we just played it: better to repeat than to
+	-- silently hand back the normal zone the caller ruled out by asking.
+	if #specials == 0 then
+		return byId[avoidId or Zones.DEFAULT_ID] or byId[Zones.DEFAULT_ID]
+	end
+
+	local roll = math.random() * total
+	for _, zone in specials do
+		roll -= zone.weight
+		if roll <= 0 then
+			return zone
+		end
+	end
+	return specials[#specials]
+end
 
 -- The next zone, given how many have already been cleared.
 --
@@ -149,31 +222,10 @@ function Zones.next(cleared: number, avoidId: number?): Zone
 	if (cleared + 1) % (Zones.NORMALS_PER_SPECIAL + 1) ~= 0 then
 		return byId[Zones.DEFAULT_ID]
 	end
-
-	local specials = {}
-	for _, zone in Zones.List do
-		if zone.kind ~= "normal" and zone.id ~= avoidId then
-			table.insert(specials, zone)
-		end
-	end
-	-- Only one special exists and we just played it: better to repeat than to
-	-- silently drop back to a normal zone the cadence promised wouldn't be here.
-	if #specials == 0 then
-		return byId[avoidId or Zones.DEFAULT_ID] or byId[Zones.DEFAULT_ID]
-	end
-
-	local total = 0
-	for _, zone in specials do
-		total += zone.weight
-	end
-	local roll = math.random() * total
-	for _, zone in specials do
-		roll -= zone.weight
-		if roll <= 0 then
-			return zone
-		end
-	end
-	return specials[#specials]
+	-- The cadence decides *whether* a special is due; `rollSpecial` decides which.
+	-- Keeping the two apart is what let a gamemode ask for the second half on its
+	-- own without a second copy of the weighted roll.
+	return Zones.rollSpecial(avoidId)
 end
 
 -- A zone rolled from the whole list, weights and all, avoiding the one that's up.

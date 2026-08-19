@@ -75,10 +75,23 @@ return function(props: Props)
 	end
 
 	local children: { [string]: any } = {
-		UIStroke = React.createElement("UIStroke", {
-			Thickness = props.strokeThickness or theme.strokeThickness,
-			LineJoinMode = Enum.LineJoinMode.Miter,
-		}),
+		-- Opt-out, not opt-in: the outline is what separates dark glass from the
+		-- sky behind it, so a panel without one is a deliberate ask.
+		UIStroke = if props.stroke == false
+			then nil
+			else React.createElement("UIStroke", {
+				Thickness = props.strokeThickness or theme.strokeThickness,
+				-- Mitred corners are the gem look, and they're also what makes a
+				-- *rounded* stroke wrong here — a mitre traced round an arc reads
+				-- as a wobble. A rounded panel that keeps its outline gets the
+				-- round join instead.
+				LineJoinMode = if props.rounded then Enum.LineJoinMode.Round else Enum.LineJoinMode.Miter,
+			}),
+		-- Square by default: the gem surface reads as an edge because of its
+		-- outline, not its corner.
+		UICorner = if props.rounded
+			then React.createElement("UICorner", { CornerRadius = theme.cornerRadius })
+			else nil,
 	}
 	if props.children then
 		for k, v in pairs(props.children) do

@@ -12,8 +12,9 @@ local ByteNet = require(ReplicatedStorage.Packages.ByteNet)
 
 return ByteNet.defineNamespace("GamemodeVote", function()
 	return {
-		-- Client -> Server: "my vote is this one". Sending the id you already
-		-- hold takes the vote back, so there's no separate un-vote packet.
+		-- Client -> Server: "my vote is this one". A vote can be moved but never
+		-- taken back, so there's no un-vote packet — sending the id you already
+		-- hold re-stamps it and changes nothing else.
 		-- Unknown ids and votes cast outside an open poll are dropped server-side.
 		Cast = ByteNet.definePacket({
 			value = ByteNet.struct({
@@ -45,6 +46,16 @@ return ByteNet.defineNamespace("GamemodeVote", function()
 					-- the 2x Votes gamepass. Sent so the screen can say so — the
 					-- count itself is the server's, and always was.
 					weight = ByteNet.uint8,
+					-- How many times this player has pressed a panel this poll,
+					-- from 1. Nothing counts it — one player is one vote however
+					-- many times they press — and it travels for one reason: it's
+					-- what makes a *repeat* press of the panel a player already
+					-- holds a different packet from the one before it. Without it
+					-- that press is byte-identical to the last state, and every
+					-- client concludes nothing happened rather than landing the
+					-- stamp again. The server wraps it to this width itself, and a
+					-- wrap re-stamps like any other change.
+					stamps = ByteNet.uint8,
 				})),
 			}),
 			reliabilityType = "reliable",

@@ -24,6 +24,10 @@ return {
 		height = UILabs.Slider(300, 100, 1000, 10),
 		transparency = UILabs.Slider(0.8, 0, 1, 0.05),
 		strokeThickness = UILabs.Slider(4, 0, 12, 1),
+		-- The two shape props. `stroke` off + `rounded` on is the PVP results
+		-- board's surface; the gem default is the opposite of both.
+		stroke = true,
+		rounded = false,
 	},
 
 	story = function(props)
@@ -35,6 +39,8 @@ return {
 		)
 		local panelProps: { [string]: any } = {
 			size = UDim2.fromOffset(c.width, c.height),
+			stroke = c.stroke,
+			rounded = c.rounded,
 		}
 		if c.variant == "glass" then
 			panelProps.transparency = c.transparency

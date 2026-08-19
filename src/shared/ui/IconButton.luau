@@ -39,14 +39,18 @@ return function(props: Props)
 
 	local hover = useHoverScale()
 
-	return React.createElement("Frame", {
-		Size = props.size or theme.buttonSize,
-		Position = props.position,
-		AnchorPoint = props.anchorPoint,
+	-- Box outside, body inside — the same split Button makes, for the same
+	-- reason: a UIScale transforms about its frame's AnchorPoint, so a swell on
+	-- the outer frame grows out of whatever corner the caller anchored the button
+	-- by. These sit in screen corners more often than Buttons do (the camera
+	-- toggle is pinned bottom-right, the rail's actions to a list), which is
+	-- exactly where an off-centre swell is most obvious.
+	local body = React.createElement("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		Position = UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundColor3 = WHITE,
 		BorderSizePixel = 0,
-		LayoutOrder = props.layoutOrder,
-		ZIndex = props.zIndex or 2,
 	}, {
 		UIScale = React.createElement("UIScale", {
 			Scale = 1,
@@ -101,5 +105,17 @@ return function(props: Props)
 		}, {
 			UIAspectRatioConstraint = React.createElement("UIAspectRatioConstraint", {}),
 		}),
+	})
+
+	return React.createElement("Frame", {
+		Size = props.size or theme.buttonSize,
+		Position = props.position,
+		AnchorPoint = props.anchorPoint,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		LayoutOrder = props.layoutOrder,
+		ZIndex = props.zIndex or 2,
+	}, {
+		Body = body,
 	})
 end

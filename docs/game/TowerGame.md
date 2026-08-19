@@ -77,14 +77,77 @@ The pressure mechanic, running independently of whose turn it is.
 - **Expired** — the storm takes everything. See [When the storm lands](#when-the-storm-lands).
 - On an empty server the clock is held rather than ticking down to nothing.
 
-A checkpoint platform is the same `PLATFORM_SIZE` as the starting base, anchored,
-and enters with a two-part tween: it stretches out from a sliver at the center
-line while glowing white (Neon), then cools from white to near-black before
-dropping back to SmoothPlastic. Because the part is anchored, tweening `Size`
-grows it evenly about its center instead of dragging one face.
+A checkpoint floor is stamped out of a **platform layout** — one or more slabs,
+possibly with gaps — so it isn't necessarily the single `PLATFORM_SIZE` slab it
+used to be, and neither is the base. See [TowerPlatforms.md](TowerPlatforms.md);
+with no layouts authored, both fall back to that slab.
+
+Each slab enters with a two-part tween: it stretches out from a sliver at its own
+center line while glowing white (Neon), then cools from white to near-black before
+dropping back to SmoothPlastic. Because slabs are anchored, tweening `Size` grows
+them evenly about their center instead of dragging one face — so a two-slab floor
+opens as two slivers spreading apart, and the gap is the last thing to appear.
 
 Checkpoints are tracked in their own list, separate from `blocks` — they have no
 physics but still count toward the tower's top.
+
+
+### The approach: the last minute, as weather
+
+The storm was a number on a bar. `TowerStormController` is the minute before it,
+made audible and visible — one ramp, 0 → 1 across `STORM_APPROACH_SECONDS` (60),
+driving three things at once:
+
+| | |
+| --- | --- |
+| **Ambience** | `Assets.Sounds.StormAmbience`, cloned and looped, with **volume *as* the ramp** (`STORM_AMBIENCE_VOLUME` 4x on top of its Studio tuning — a storm arriving over a tower should be the loudest thing in the room by the time it lands). That's what makes "you can't hear it until the last minute" a property of the thing rather than a rule somebody has to keep. It plays from boot at volume 0 rather than starting per approach, because restarting a loop every stage is audible on anything with a recognisable opening. |
+| **Clouds** | A `Clouds` instance on `Terrain`, created client-side if the place has none. `Cover` 0.4 → 1, `Density` 0.25 → 1, colour white → slate. Density opens at a quarter rather than three hundredths: below about 0.2 the layer is mathematically present and visually nothing. **If they don't render at all, check `Lighting.Technology`** — Terrain clouds need ShadowMap or Future, and draw nothing under Legacy or Compatibility. The calm end is a *little* cloud rather than none: a sky that grows its first cloud out of nothing reads as a bug, one that thickens reads as weather. |
+| **Lightning** | Background strikes, hundreds of studs behind the play plane, **measured from the camera**: `BG_LIGHTNING_ABOVE` / `BG_LIGHTNING_BELOW` are offsets from wherever the eye is, so a bolt is in shot at any altitude and stands 440–1040 studs tall. A fixed band was in frame for the first stage and underfoot for the rest of the run, because the camera climbs with the tower. Each strike gets one clap of the `Lightning` cue, played flat and delayed by `distance / BG_LIGHTNING_SOUND_SPEED` — the lag is what makes a bolt read as far away rather than as an effect that fired late. The gap between them interpolates from `BG_LIGHTNING_CALM_GAP` (7–12s) to `BG_LIGHTNING_STORM_GAP` (0.9–2.6s), so the first bolts are lonely and the last minute is a barrage. Nothing below `BG_LIGHTNING_START_RAMP` (0.12), so the window opens on a clear sky. |
+
+**All of it is presentation.** Nothing here touches the clock, the damage or the
+placement rules, and it's all derived from `stormEndsAt` — which every client
+already has — so none of it needs a packet. A client that drew none of it plays
+the identical game.
+
+**The ramp is chased, not jumped to** (`STORM_APPROACH_SMOOTHING`). Rising, the
+window is a minute wide and the smoothing barely shows; the reason it exists is
+the fall. The storm lands, the next stage's clock starts, and the target drops
+from 1 to 0 on a single frame — a sky that snapped back to clear would undo the
+whole effect in the moment it was built for.
+
+**It only runs while a classic run is live.** Three states would otherwise sit at
+full storm forever: a PVP match (no storm at all), the round break (the clock has
+already expired, so "seconds left" is 0 — which reads exactly like "the storm is
+here"), and an idle server. The gate is the phase: `AIMING` or `SETTLING`, and a
+positive number on the clock.
+
+### Bolts that branch
+
+`LightningBolt.strike` draws a bolt by **midpoint displacement**: start with a
+straight line, split every segment and shove the new middle sideways, halve the
+shove, repeat. `BOLT_PASSES` (4) turns two points into sixteen segments that
+wander the way a discharge does — the path a spark takes through air is a random
+walk, and this is the cheap way to draw one. The shove is rolled about the
+segment's own axis, so the wander is 3D: a bolt that only kinked left and right
+would read as a paper cut-out from the fixed side-on camera.
+
+Nodes fork with `BOLT_BRANCH_CHANCE` (0.22). A fork is a shorter, thinner bolt
+built by the same function at an angle, with one pass fewer — and forks don't
+fork, because a fractal that recurses to the leaves is a tree and lightning is a
+bolt with a few branches off it. One background strike measures ~56 parts across
+a 600-stud drop.
+
+Both kinds of lightning go through it: the storm's background VFX and the Stormy
+zone's own strike (`TowerZoneController.drawBolt`), which used to be a single
+straight Neon box and read as a beam next to a branching one. The gameplay bolt
+takes fewer passes (`LIGHTNING_BOLT_PASSES`, 3) because it lands a few dozen
+studs from the camera, where four passes is a scribble rather than a fork, and
+its flash lives on its own invisible part — the bolt is dozens of segments now,
+and hanging the light on whichever came first would put it at a random height up
+the strike.
+
+The parts are anchored, collisionless, unqueryable Neon that fade and delete
+themselves, parented to a `TowerStormSky` folder. Nothing reads them back.
 
 ## Idle turns and the inactivity card
 
@@ -157,8 +220,26 @@ Some notes on why it's shaped this way:
   voice chips; bottom-right the cash counter. Centre-x has no neighbour at any
   size and can only ever overlap the tower — pixels, not buttons.
 
-  `TowerAfkView` adds the **GUI inset** back before positioning it, converted
-  into canvas units by dividing by the viewport scale. The root ScreenGui sets
+  It carries a small green **PLAY** button — the same door the card's "I'm here!"
+  opens (`TowerAfkController.resume`), worded as a switch rather than an answer
+  because the badge is a standing state and not an accusation. Settings is still
+  the other route, and the one that can't be covered; see the note on stacking
+  below.
+
+  **The badge draws behind the rest of the UI** (`ui.layers.underlay`, ZIndex
+  −100), which is why it's its own root — `TowerSpectatorView` — rather than a
+  child of the card's. Roots are siblings under one `ZIndexBehavior.Sibling`
+  ScreenGui, so a root's own ZIndex is the only thing that decides what covers
+  what, and a child can't sit lower than its root however small its number. Two
+  stacking answers need two roots. The reasoning is that the badge is a *state*,
+  up for as long as the player is out, and the thing it would otherwise cover is
+  the HUD they're watching the game through; the card is a *moment with a question
+  in it* and stays on top. The trade is that where another root overlaps the
+  badge, that root takes the clicks and PLAY is unreachable at those pixels —
+  nothing does today, and Settings is the route that can't be.
+
+  `TowerSpectatorView` adds the **GUI inset** back before positioning it,
+  converted into canvas units by dividing by the viewport scale. The root ScreenGui sets
   `IgnoreGuiInset`, so canvas y = 0 is the true top of the display and Roblox's
   own topbar occupies the first stretch of it; and because the inset is a fixed
   number of *screen* pixels while everything in the tree is scaled, a plain
@@ -183,6 +264,18 @@ Some notes on why it's shaped this way:
   in Studio that window is nothing; on a phone it was the whole bug, reported as
   "the popup doesn't show".
 
+**The storm blows the tower left.** `breakTower` shoves every block one way —
+`STORM_BLAST_HORIZONTAL` (130) negative in X, jittered per block, with a smaller
+lift and a little depth — rather than scattering it. A random scatter reads as an
+explosion going off underneath, which is already the Bomb's language and the
+demolition's; a storm is weather, so it comes from a direction and takes the tower
+with it, and the shot ends on an empty arena instead of a cloud of debris.
+
+**Then** the screen goes: `STORM_FADE_DELAY_SECONDS` (1.7) is set to about the
+time the wreck needs to clear the frame at that speed, so the order the players
+see is the tower leaving and only after that the white-out.
+`ROUND_BREAK_WRECK_SECONDS` (3.2) contains both, so no UI opens over the send-off.
+
 **Only the newest platform survives.** When a floor lands, every earlier one goes
 out with the scaffolding under it: `blastPlatformsBelow` un-anchors them, turns
 off their collision and queries (so a tumbling slab can't shove a surviving block
@@ -193,14 +286,25 @@ that nothing can reach, and leaving the stack standing meant the overview shot
 framed the whole dead column instead of the tower being built.
 
 They come out of the `platforms` list *before* they're shoved, for the same
-reason `blastBlocksBelow` empties its list first — that list feeds `restingTopY`,
+reason `blastBlocks` empties its list first — that list feeds `restingTopY`,
 and a slab thrown upward by the blast would otherwise read as the top of the
 tower and fire the next piece's spawn into orbit.
 
 The **base is not a platform** and is never demolished: it's where the run
 restarts after the storm, and in a Studio-built place it's the user's own tagged
 part rather than something the service made. It just ends up permanently out of
-frame, since every shot is now measured from the current floor.
+frame, since every shot is now measured from the current floor. It's tracked
+separately as `baseSlabs` — a list, because a layout base is more than one part —
+and the only thing that ever takes it off the board is a PVP match.
+
+The cutoff itself is the bottom of the **lowest slab in the new floor**, not a
+fixed thickness below its scoreline: a layout may hang slabs below the scoreline,
+and a fixed cutoff would have a floor demolish its own wings on arrival.
+
+Note the asymmetry with the blocks: platforms go by that cutoff, blocks go
+regardless of height. The new floor's own slabs are in the `platforms` list, so
+the cutoff is what saves them — while a block that survived would be scaffolding
+the next stage didn't ask for.
 
 ## The checkpoint cutscene
 
@@ -214,13 +318,23 @@ world over for about five seconds:
 2. The camera pulls back to frame the **whole leg** the players just built, from
    `zoneBaseHeight` to `height`, and holds it for `CHECKPOINT_VIEW_SECONDS`.
 3. The new platform grows in at the top.
-4. **The tower under it is blown apart** — every block whose highest point is at
-   or below the platform is thrown clear with a random shove, an upward kick and a
-   tumble, and destroyed `CHECKPOINT_BLAST_SECONDS` later. A piece still falling
-   *above* the line survives. The checkpoint becomes a clean foundation hanging in
-   the air rather than the cap on a growing pile, which is what keeps a long
-   session from dragging hundreds of physics parts behind it. The height readout
-   doesn't flinch, because the platform's own top is what the measurement lands on.
+4. **The tower is blown apart — all of it.** `blastBlocks(nil)` sweeps every live
+   block, not just the ones under the new floor: each is thrown clear with a
+   random shove, an upward kick and a tumble, and destroyed
+   `CHECKPOINT_BLAST_SECONDS` later. **Nothing carries over into the next stage.**
+
+   It used to sweep by the floor's underside, which spared two things: the last
+   layer of blocks (their tops sit inside the slab band, so they stayed, poking
+   out around the new ground for the rest of the run) and anything still falling
+   above the line. Both are exactly the "previous stage's blocks" a fresh floor is
+   supposed to be free of.
+
+   The checkpoint is a clean foundation hanging in the air rather than the cap on
+   a growing pile, which is also what keeps a long session from dragging hundreds
+   of physics parts behind it. The height readout doesn't flinch: `restingTopY`
+   counts checkpoint platforms as well as blocks, so with the tower gone the
+   measurement lands on the new platform's own top — which is exactly
+   `zoneBaseHeight`.
 5. The zone rolls. The gamemode is **not** re-voted here — that belongs to the
    [round break](#the-round-break), so the mode the players picked holds for every
    stage of the round.
@@ -242,15 +356,19 @@ Between **rounds** the players pick how the next one plays. TowerGame doesn't ow
 the poll — the [GamemodeVote](GamemodeVote.md) feature does — but it owns the
 modes and it's what asks:
 
-- `Gamemodes.luau` is the content: four modes and, for each, a complete set of
+- `Gamemodes.luau` is the content: six modes and, for each, a complete set of
   stage numbers. A modifier is a full set rather than a diff, so there's one
   place to look to know how a round will play and nothing compounds across
   rounds. `DEFAULT` is the un-voted round — what the game did before any of this
   existed, and what a skipped vote falls back to.
 - `Gamemode.luau` is the registration hook GamemodeVote auto-discovers. It just
   hands the list over, so nothing in TowerGame requires GamemodeVote to register.
-- `TowerService.runRoundBreak` calls `GamemodeVoteService.startVote()`, which
-  **yields** for the length of the poll, and feeds the winner to `applyStage`.
+- `settleOnAMode` is the shared half: it calls `GamemodeVoteService.startVote()`
+  (which **yields** for the length of the poll), feeds the winner to `applyStage`,
+  and keeps going while the winner is PVP — so a PVP vote plays a match and then
+  asks again rather than dropping the room into a classic run nobody picked.
+- Two callers use it, and everything that happens *once* per round stays outside
+  it: `runRoundBreak` (after a storm) and `runOpeningVote` (once at server start).
 
 | Mode | What the next round does |
 | ---- | ------------------------ |
@@ -259,6 +377,7 @@ modes and it's what asks:
 | Blitz Builder | Half the turn clock. The storm clock is left alone, so shorter turns buy the players *more* attempts, not fewer. |
 | Roulette | **70%** of pieces are special — a flat `blockTypeChance` that bypasses the curve *and* `MAX_CHANCE`. |
 | Lightning Storm | Lightning strikes in **every** zone, not just Stormy. |
+| Wild Weather | **Only special zones.** The calm zone is out of the game: the round opens in a special and every checkpoint rolls another one (`specialsOnly` → `Zones.rollSpecial`). |
 | PVP | **Replaces the round.** Six lanes, no turns, tallest tower before the clock — see [TowerGamePvp.md](TowerGamePvp.md). |
 
 **PVP is the one mode that isn't a set of numbers.** Its modifier carries
@@ -268,16 +387,21 @@ nobody picked. Everything else in this document describes the classic round; the
 PVP round shares this file's *block engine* (pieces, physics, hazards, the play
 plane) and none of its turn queue, storm or checkpoints.
 
-**Classic is always on the ballot** — it carries `pinned = true`, so GamemodeVote
-keeps it and rolls the remaining slots from the twists. A ballot of nothing but
-twists gives the players no way to decline one; Classic is that answer. It also
-sits first (`order = 0`, and nothing else claims it), so it's the one panel you
-can pick without reading. Its modifier *is* `Gamemodes.DEFAULT` — winning Classic
+**The ballot is four panels: two permanent, two rolled.** Classic (`order = 0`)
+and PVP (`order = 1`) both carry `pinned = true`, so they're always the left-hand
+pair and the two rolled twists are always the right-hand pair — a player who wants
+either of the game's two real ways to play learns one place to look instead of
+reading the ballot every round. PVP is pinned because it's a mode players ask for
+by name, and at two rolled slots against five twists the roll would have offered it
+on about two ballots in five. Classic is pinned for the older reason: a ballot of
+nothing but twists gives the players no way to decline one, and Classic is that
+answer — the one panel you can pick without reading. Its modifier *is*
+`Gamemodes.DEFAULT` — winning Classic
 and skipping the vote have to produce the same round, or one of them is lying.
 
-A ballot is **three panels** (`BALLOT_SIZE`): Classic plus two of the twists,
-re-rolled every vote. Registering a fifth mode makes the ballot more varied, not
-wider.
+Registering another mode makes the ballot more varied, not wider: the two rolled
+panels are drawn from every unpinned mode, so a new twist lengthens the pool and
+nothing else.
 
 **The winner holds for the whole round**, across as many checkpoints as the
 players clear. `runCheckpoint` deliberately doesn't re-vote: changing the rules
@@ -368,6 +492,17 @@ debugging time, so don't "simplify" either away:
 - **It doesn't reset itself either.** The hide has to be explicitly undone in
   `teardown`. Relying on an automatic reset is what once left the first block of
   every round permanently invisible.
+- **It doesn't reach anything that isn't a part.** Two things on a piece are drawn
+  from geometry rather than as geometry, and both have to be `Enabled = false`d by
+  hand alongside the hide: the **name plate** (a GUI) and the **type tell** (a
+  `Highlight`). The plate was handled from the start; the tell was not, so the
+  holder steered a preview wearing its own tell while a second copy hung a frame
+  behind it at the server's position. Two offset outlines of the same block, which
+  reads as the block wearing a crooked clone of itself — obvious on a loud tell
+  like the Bomb's, near-invisible on a quiet one, which is why it looked like a
+  per-type bug rather than a per-piece one. Only the holder's view is touched;
+  everyone else is watching the real piece and should see its tell all the way
+  down.
 
 The other half of that same bug: the server **clears `HELD_ATTRIBUTE` on release**.
 The holder's client finds "its" piece by that attribute, so a released block that
@@ -464,6 +599,13 @@ Skins still own **material and colour**, so a Concrete block is a rounded concre
 block and Needoh is rounded glass. The shape is the house style; the surface is
 still the thing being sold.
 
+The body **mirrors the cells**, which is how every server-side effect reaches the
+screen without knowing bodies exist. Colour, material and transparency are
+assigned every frame in `step`; a skin's `Texture` children are cloned onto the
+body once at attach instead, because unlike the other three nothing in the game
+re-textures a block after it's built. A texture that only lived on a cell would
+be a pattern nobody ever sees — the cells are hidden behind the body.
+
 ## Blocks: skins and types
 
 Every piece rolls two independent things at spawn.
@@ -472,34 +614,60 @@ Colour is **not** one of them: every piece rolls its own random hue at a fixed
 saturation and value, so blocks are vivid and varied without any coming out
 muddy. Shape is read from silhouette, not colour.
 
-**Skins** (`BlockSkins.luau`) are pure flavour — a material and the sounds it
+**Skins** (`BlockSkins.luau`) are pure flavour — a surface and the sounds it
 makes. They come from the ASMR kit in the place, so the asset ids there
 are ones that kit actually ships; don't invent new ones without checking they
 resolve, or a skin goes silent.
 
+Surface is `material`, plus an optional tiled `texture` over it — Duck is the
+only skin that uses one. A `Texture` rather than a bespoke material so the hue
+roll underneath still shows and every effect that repaints a block (a bomb's red
+flash, a burn charring it) keeps working with nothing written for it.
+
 | Skin | Look | Lands like | `squish` | weight |
 | ---- | ---- | ---------- | -------- | ------ |
-| Classic | Concrete, grey | a dry knock | 0.15 | 4 |
+| Classic | Concrete, grey | Needoh's squish folder, at the same 0.7 volume | 0.15 | 4 |
 | Needoh | Glass, pink | squish, plus a release beat as it settles | 1.0 | 3 |
-| Butter | SmoothPlastic, yellow | softer squish, same settle beat | 0.75 | 3 |
+| Butter | SmoothPlastic, yellow | Needoh's squish folder, same settle beat | 0.75 | 3 |
 | Wood | WoodPlanks, brown | a hard thunk | 0.12 | 1 |
 | Grass | Grass, green | a muted thud, with a settle beat | 0.45 | 1 |
 | Concrete | Concrete, grey | the same knock pitched down heavier | 0.06 | 1 |
+| Duck | SmoothPlastic, yellow, **tiled duck texture** | a quack | 0.8 | **0** |
 
-The last three are a deliberate **rare tier** — one weight each against the stock
+**Duck never rolls.** Weight 0 can't be reached by the walk in
+`BlockSkins.random`, which is the point — the only route to it is the
+`skins.duck` pack, and that pack is only ever granted (see
+[The Duck skin](#the-duck-skin)). It stays in `List` because `get`, the cmdr
+`skin` command and the shop card's preview all look skins up there.
+
+The rare tier below is Wood, Grass and Concrete — Duck isn't part of the roll at
+all, so it isn't part of the rarity conversation either.
+
+Those three are a deliberate **rare tier** — one weight each against the stock
 three's 3-4, so each turns up about a third as often as Butter and all three
 together are under a quarter of pieces. They hold the ends of the squish scale
 (0.06 and 0.45) rather than its middle, and a tower built mostly out of the
 extremes stops reading as a range.
 
-Wood, Grass and Concrete carry **placeholder sounds** — ids that resolve because
-they're already in `Assets.Sounds` (`Stamp`, `Drop2`, `NormalBlockCollision`),
-picked so a new skin is never silent, but not auditioned against the ASMR kit.
-Swapping them is a one-line edit each.
+**Classic, Needoh, Butter, Wood and Grass each play from a folder of takes**, not
+from one sample: `impactFolder` names a folder under `Assets.Sounds.Impacts`
+(`Needoh` — 7 squishes, shared by Classic, Needoh *and* Butter, `Wood` — 5 panel
+thunks, `Grass` — 6 footsteps, wet and dry mixed) and
+`BlockSkins.impactIdFor` rolls one **per landing**. Pitch randomisation alone
+wasn't enough at this repetition rate: the ear catches a repeated *sample* long
+before it catches a repeated pitch, and a tower is forty landings of the same
+material.
 
-Note that **Concrete and Classic share a material.** Classic *is* the concrete
-block; the new one is heavier and duller and exists to sit at the bottom of the
-squish scale. If the pair reads as one skin in play, the fix is to re-material
+Their `impactSound` ids stay as the fallback for a place without the folder
+(Rojo doesn't sync it), which is also what **Concrete** still runs on — a
+placeholder that resolves because it's already in `Assets.Sounds`
+(`NormalBlockCollision`, pitched down), picked so a skin is never silent. Giving
+it a folder is a one-line edit plus a folder of Sounds.
+
+Note that **Concrete and Classic share a material** — though no longer a sound,
+now that Classic lands on the squish folder and Concrete is the last skin holding
+that knock. Classic *is* the concrete block; the rare one is heavier and duller
+and exists to sit at the bottom of the squish scale. If the pair reads as one skin in play, the fix is to re-material
 Classic (Plastic, say) rather than to add a third grey.
 
 `squish` is how far the skin deforms on impact, 0 = rigid, 1 = full jelly. It's
@@ -516,7 +684,7 @@ purchase now (see [Skin packs](#skin-packs)), and a stock skin that already
 glowed would have made the thing being sold look like nothing. Ids go over the
 wire — append, don't renumber.
 
-Skins change **material and color only, never geometry**. The kit's meshes are
+Skins change **surface and color only, never geometry**. The kit's meshes are
 lovely but they aren't cubes, and a tetromino cell has to be a cube for the
 stacking to read honestly — the squish is carried entirely by the sound. Impact
 volume scales with the speed the block was travelling, sampled *before* the
@@ -539,22 +707,69 @@ than as escalation.
 
 | Type | Says | Does |
 | ---- | ---- | ---- |
-| **Bomb** | Explodes. | Beeps and flashes red three times on impact, then detonates and consumes itself. |
-| **Glue** | Glues parts together. | Welds to everything it's resting against, on settle. |
-| **Clone** | Duplicates itself. | Drops a plain copy of itself in from `CLONE_RISE` above, on settle. |
+| **Bomb** | Explodes. | Beeps and flashes red three times on impact, then detonates and consumes itself. `EXPLOSION_RADIUS` 36, impulse 95 — a hole in the tower, not the end of the run. |
+| **Glue** | Glues parts together. | Welds to everything it's resting against, on settle. Every *block* it caught wears a faint green Highlight for the rest of the run — the base and the platforms don't, because they aren't blocks. |
+| **Clone** | Duplicates itself. | Drops a copy of itself in from `CLONE_RISE` above, on settle — same shape, skin, pack and colour, minus the type. |
 | **Bouncy** | Bounces! | Lands with `BOUNCY_PHYSICS` instead of the dead default. |
 | **Burning** | Burns blocks, careful! | Arrives alight; chars black over `BURN_SECONDS` (20) and disintegrates, spreading to whatever it touches — up to `BURN_MAX_SPREAD` (3) other blocks per fire. |
 | **Noob** | Places a Noob. | Replaces the tetromino with a Noob that walks and jumps until something lands on it. |
-| **Anvil** | Heavy! | Ten times the density (`ANVIL_PHYSICS`). Ploughs through what it lands on, immovable afterwards. |
+| **Anvil** | Heavy! | Ten times the density (`ANVIL_PHYSICS`). Ploughs through what it lands on, immovable afterwards. Draws speed lines on the way down and lands on its own `Anvil` cue instead of the skin's impact sample. |
 | **Ice** | Nothing sticks. | `ICE_PHYSICS` — friction taken out, high `frictionWeight` kept so the ice wins the contact and things slide *on* it. |
-| **Anchor** | Locks itself in place. | Anchors every one of its parts on settle. Holds itself, welds nothing. |
+| **Anchor** | Locks itself in place. | Anchors every one of its parts on settle, and turns to stone doing it. Holds itself, welds nothing. |
 | **Mystery** | ??? | Lands as a question mark, then rolls one of the landing types and fires it. |
-| **Crate** | Breaks apart! | Cuts its own welds on settle and collapses into the loose cubes it was pretending to be. |
+| **Crate** | Breaks apart! | **Benched** (`disabled = true`). Cuts its own welds on settle and collapses into the loose cubes it was pretending to be. |
 | **Feather** | Takes its time. | Terminal velocity of `FEATHER_FALL_SPEED` (12 studs/s) on the way down, and light enough to shove nothing. |
 | **Ghost** | Falls through the tower. | Phases through every block for `GHOST_SECONDS` (1.2) after release, then turns solid wherever it got to. Still lands on the base and the platforms. |
-| **Magnet** | Pulls blocks in. | On settle, tugs every loose block within `MAGNET_RADIUS` toward itself — `blastAt` pointed the other way. |
+| **Magnet** | Pulls blocks in. | On settle, holds a pull field for `MAGNET_SECONDS` (0.55): everything within `MAGNET_RADIUS` (36) is dragged toward it at `MAGNET_ACCEL`, falling off with distance. |
+| **Sacrifice** | Destroys the block it hits. | On contact, unmakes the block it ran into — which glows, drifts off and fades — and carries on into the hole. Hitting only the base, a platform or air means the sacrifice is spent for nothing. |
+| **Lightning** | Calls down a strike. | On settle, drops the Stormy zone's own bolt on its own position — same flash, same sound, same `LIGHTNING_RADIUS` (26) blast — and is consumed by it. No warning marker. |
 
 Details worth knowing:
+
+- **Glue leaves a mark.** It's the one effect whose result is otherwise invisible:
+  the welds are real and permanent, and the only way to find out which blocks were
+  caught was to knock the tower and see what refused to move. Each glued block now
+  wears a second, fainter Highlight (`GlueTell`) in the Glue type's own tell
+  green, so the piece that did it and the blocks it did it to read as one cluster.
+  Only blocks are marked — the base and the checkpoint platforms get welded too,
+  and `blockByModel` is what tells them apart, so "is it a block" and "is it not
+  the floor" are one question. Idempotent: a block glued twice wears one mark.
+
+- **Anvil is felt on the way down.** Its density is the mechanic, but density is
+  invisible until something gets crushed, so both halves of the tell are about the
+  fall: one narrow `Trail` per cell (`ANVIL_LINE_*`), and its own landing sound
+  (`BlockTypes.impactCue` → the `Anvil` cue), played *instead of* the skin's
+  sample — two impacts on one frame read as a stutter, not as weight. The trails
+  are attached at release rather than at build, or a piece being steered around
+  the sky for a turn would draw speed lines while the player was still deciding. A
+  Trail needs no velocity gate: it only draws while it's moving.
+
+- **Anchor turns the block to stone** (`petrify`): grey `Color` and a Slate
+  `Material` on every cell, skin textures hidden, and a `Statue` attribute that
+  makes `applyZoneLook` skip it — the same carve-out a Noob gets, and for the same
+  reason. Without it the next zone change would hand the statue its skin back.
+  Colour *and* material because the client's rounded body mirrors exactly those
+  two properties off the cell, so that pair is what actually turns the shell a
+  player sees into stone. A block that can never move again has stopped being part
+  of the tower and started being scenery; this is it looking like it.
+
+- **Lightning** — the storm's hazard, handed to a player, through the same
+  `strikeLightning` the storm's own clock calls. What changed to allow that: the
+  function no longer clears `WARN_ATTRIBUTE` (the marker belongs to the storm's
+  state machine, which now clears it beside its own `pendingStrikeX = nil`, so a
+  Lightning block landing mid-warning can't wipe the marker for a strike that is
+  still coming), and it takes an `exclude` so the block that called the bolt isn't
+  thrown before being destroyed.
+
+  Read it against **Bomb**, which is the type it shares a job with. A Bomb is the
+  bigger hole — radius 36 against 26, impulse 95 against 43 — and announces itself
+  with three beeps, so the room watches the damage coming. A strike is over before
+  anyone looks up. Smaller bite, no notice; that trade is the whole type.
+
+  It needs no lane check in PVP: radius 26 against `LANE_SPACING` 120 leaves the
+  nearest neighbouring tower ~94 studs outside anything `blastAt` touches. And the
+  client draws the bolt off `STRIKE_ATTRIBUTE` ungated by mode or zone, so it
+  renders in a match even though the *zone* hazard is switched off there.
 
 - **Bomb** — the fuse *is* the mechanic. `BOMB_BEEPS` red flashes with a beep each
   give the room time to see which block is about to erupt, and are short enough
@@ -569,8 +784,19 @@ Details worth knowing:
   is what glue should feel like.
 - **Clone** waits for the same moment, so the copy has something solid to land on,
   and nudges the copy `CLONE_OFFSET_X` sideways so it can't balance perfectly on
-  its own parent. The copy is deliberately **plain** — a clone that cloned would
-  bury the arena inside two turns.
+  its own parent. The copy carries no **type** — a clone that cloned would bury the
+  arena inside two turns — but it does carry everything else, and the colour is the
+  part that had to be fixed. `buildPiece` rolls a fresh hue per block, so a Clone
+  used to hand back a piece in an unrelated colour: the one type whose whole
+  promise is that what it makes looks like what it came from, and the only one that
+  visibly broke it. It now takes an optional `color`, and Clone is the only caller
+  that passes one — `block.baseColor`, not the current cell colour, so cloning a
+  charring Burning block or a Bomb mid-flash copies the block rather than the state
+  it happens to be in.
+
+  It went unnoticed because a player wearing a **colour pack** never saw it:
+  `SkinPacks.colorFor` returns the same shade for both, so the copy matched by
+  accident.
 - **Burning** is a *state*, not just a type. `igniteBlock` can be called on any
   block, and it is: `spreadBurn` runs from the height poll (not from `Touched`,
   because a block already resting against its neighbour never fires `Touched`
@@ -613,7 +839,12 @@ Details worth knowing:
   hanging in the air. `unanchorModel` is what stops it surviving a demolition:
   neither the checkpoint blast nor the storm is something a block gets to opt out
   of.
-- **Crate** breaks on **settle**, like Glue and Clone, and for the same reason —
+- **Crate** is **benched** — `disabled = true` in `BlockTypes`, so it is never
+  dealt and never revealed by a Mystery. It stays in `List` and in `byId` on
+  purpose: an id that has already gone over the wire has to keep resolving, and
+  `block Crate` still forces one for testing. Delete the one line to put it back.
+  Everything below still describes what it does when you do.
+- Crate breaks on **settle**, like Glue and Clone, and for the same reason —
   a crate that came apart the instant it grazed something would scatter on the way
   down and read as the piece failing to exist. Landing first and *then* falling
   apart is one beat the room can watch. The cells stay inside one model and one
@@ -626,7 +857,8 @@ Details worth knowing:
   `FEATHER_FALL_SPEED` capping downward velocity in the plane poll, folded into
   the write that clamp was already making. Only the downward half is capped, so a
   blast can still throw one. It buys the holder several extra seconds of steering
-  at the cost of the same seconds off their turn clock.
+  at the cost of the same seconds off their turn clock. Every *other* block is
+  capped in the same line at `FALL_SPEED` — see [Landing feel](#landing-feel).
 - **Ghost** is the only type that acts during the **fall** rather than at either
   end of it, and the only one that needed a new mechanism: **collision groups**.
   Every block goes in `BLOCK_COLLISION_GROUP` at `registerBlock`; the base and the
@@ -640,18 +872,85 @@ Details worth knowing:
   guarded against: the physics shoves the two apart and the tower lurches. Aim
   well and it's the best piece in the game; aim badly and you've wedged your own
   tower.
-- **Magnet** is `blastAt` with the sign flipped, sharing its distance falloff and
-  its mass scaling, and departing in one place: **no upward bias**. A blast lifts
-  because an erupting tower reads better than a swept one, but a pull that lifted
-  would hand the room free height for landing a single piece — and height is what
-  the whole game is scored on. It's much weaker and tighter than a Bomb (22/26 vs
-  46/120) because a pull as strong as the blast doesn't gather a tower, it
-  collapses one inward, which is just a slower bomb. Anchored blocks and the
-  platforms ignore impulses on their own, so it can't drag the floor out.
+- **Magnet** is a **field**, not a blast with the sign flipped — and getting there
+  took three tunings, which is the part worth keeping.
+
+  The first two (`22/26`, then `30/60`) were a single `ApplyImpulse` on settle, and
+  both were invisible in play. Raising the number was the wrong lever twice,
+  because the number was never the problem. An impulse is *one* change in velocity
+  and static friction erases it in about a fifth of a second — at half radius the
+  first numbers bought a third of a cell of travel, and nothing at all for a block
+  boxed in by its neighbours. Worse, a Magnet lands on a tower that has been
+  sitting still for a minute, and **a settled Roblox assembly is asleep**; an
+  impulse into a sleeping assembly is not something to rely on.
+
+  So `pullTick` writes `AssemblyLinearVelocity` (which is what reliably wakes an
+  assembly) and re-applies an acceleration **every frame for `MAGNET_SECONDS`**.
+  Friction has to be beaten continuously instead of once, which is the difference
+  between a number on paper and a tower visibly leaning in. Velocity is
+  accumulated rather than set, so a block already moving is steered rather than
+  stopped and the field builds over its window instead of teleporting anything on
+  the first frame. The origin is re-read each frame, so a magnet that gets shoved
+  mid-pull drags its field with it.
+
+  `MAGNET_LIFT` (0.2, against a blast's 0.6) angles a little of the tug upward to
+  unstick a resting block instead of grinding it into the floor it sits on. The
+  earlier argument against any lift — that it would hand the room free height for
+  landing one piece — doesn't survive the tug being *inward*: what a lifted block
+  does next is come down closer in. A pull is self-limiting for the same reason,
+  since everything it moves is moving into the block that pulled it. Anchored
+  blocks are skipped outright rather than left to ignore the write, so a Magnet
+  can't drag the floor out from under anyone.
+- **Sacrifice** is the one type whose effect is a **trade** rather than a hazard.
+  Every other special piece is something to survive; this is a tool, and the tower
+  it's aimed at is usually your own — you spend a turn and a block you already
+  built to unmake a placement the room regrets. Landing it on a badly wedged
+  **Anchor** is the best thing it does, and the reason anchored blocks aren't
+  spared: a bomb can already clear one, so "locks itself in place" was never a
+  promise against demolition.
+
+  It resolves on **contact**, in `watchLanding`, and that's what makes it a piece
+  you *aim*: the block it takes is the one it hit. Steer it into the side of a
+  stack and it takes the block it ran into, rather than whatever it happens to be
+  resting against once it has tumbled to a stop. It's tested ahead of the
+  impact-speed gate the Bomb sits behind, because "you hit the block you were
+  aiming at, but too gently for it to count" is a rule nobody can see. Anything
+  that isn't a live block — the base, a checkpoint platform, the wall — isn't in
+  `blockByModel` and is safe by construction; hitting one of those leaves the piece
+  still armed for the block it was actually aimed at, and hitting nothing at all
+  simply spends it. It fires once (`resolved` is latched before the effect runs),
+  so a Sacrifice that drops through its own hole and clips something on the way
+  doesn't eat the tower a floor at a time.
+
+  **The block that goes gets a send-off.** It's destroyed on the frame it's hit —
+  collision, height, welds and all — and what glows, drifts up and away, and fades
+  out over `SACRIFICE_FADE_SECONDS` (1.1) is a *copy* parented into the arena as
+  `SacrificedBlock`: anchored, `CanCollide`/`CanQuery`/`CanTouch` off, moved by
+  hand from its own pivot. Cloning is what keeps the two halves honest — the
+  removal stays the plain `Destroy` it always was, so nothing can collide with a
+  corpse, count it as height, or be dragged along by a glue weld that outlived its
+  block, while the animation is free to take a second over it. The corpse needs no
+  client code: it carries the shape attribute, so each client bodies it like any
+  block and drives that body from the cells' colour, material and transparency —
+  the same route a burning block chars by. A **Noob** is taken without the
+  send-off; a rag-doll rig drifting up the screen is a different effect than the
+  one this is.
+
+  On the one path that has no impact to read — a **Mystery** revealed as a
+  Sacrifice, which has already landed — it falls back to what it's standing on.
+  `blockUnder` casts one ray per cell from the cell's own **centre** downward,
+  starting at the centre rather than the bottom face because a ray that begins
+  exactly on a surface is free to miss it, and the surface in question is the one
+  it's touching. Nearest hit wins, so a piece bridging two towers takes the one
+  it's actually on, and `SACRIFICE_REACH` (1.5) is short so a piece spanning a gap
+  can't reach *through* it for a block it never touched.
 - **Mystery** is a bluff: you place it exactly as carefully as you'd place the
   worst thing it could be. It rolls from the types flagged `viaMystery` — Bomb,
-  Glue, Clone, Burning, Anchor, Crate, Magnet — weighted by the same `weight` the ordinary
-  roll uses, so a type that's rare as a piece stays rare as a reveal. The physics
+  Glue, Clone, Burning, Anchor, Magnet, and Crate once it's off the bench —
+  weighted by the same `weight` the ordinary
+  roll uses, so a type that's rare as a piece stays rare as a reveal. A `disabled`
+  type is out of this pool as well as out of the deal, so benching one can't reach
+  players through the back door of a reveal. The physics
   types are deliberately excluded: an Anvil reveal would be a word with no event
   behind it, since the block has already fallen at ordinary weight. The reveal
   re-tints the `Highlight` and puts a **fresh name plate** up for
@@ -670,6 +969,45 @@ on **friction and elasticity** (a slippery zone is the whole point of it) but
 **density survives the weather**, because density isn't a surface. Without that,
 an Anvil would stop being heavy the moment it started snowing, which reads as the
 type having broken rather than as the weather.
+
+**The ground is not a block, and uses `FLOOR_PHYSICS`.** Roblox blends a contact
+as `(v1 * w1 + v2 * w2) / (w1 + w2)`, so a weight is a claim about which of the
+two surfaces decides. Bouncy's `elasticityWeight` of 10 and Ice's `frictionWeight`
+of 10 exist to win that claim against the dead, inelastic blocks they land on —
+which is the mechanic. They used to win it against the *floor* too, because the
+base, the checkpoint platforms and the PVP lane platforms all shared
+`BLOCK_PHYSICS`:
+
+| Contact | Was | Now |
+| ------- | --- | --- |
+| Bouncy on the floor | 0.65 elasticity | **0.07** — dead, as ground should be |
+| Ice on the floor | 0.46 friction | **0.82** — grips, as ground should |
+| Bouncy on a block | 0.65 elasticity | 0.65 — unchanged |
+| A block on the Ice | 0.46 friction | 0.46 — unchanged |
+| Anything else on the floor | 0.90 friction | 0.90 — unchanged |
+
+**Every floor wears it, however it got here.** Five paths produce ground - a
+tagged Studio part, an authored base layout, the generated base, checkpoint slabs,
+and PVP lane platforms - and for a long time only the ones that *built* a part set
+its physics. The two that **adopt** one did not, so a Studio-authored base kept
+stock plastic physics (friction 0.3, **elasticity 0.5**) and was therefore bouncy
+and slippery: blocks landed on it, bounced, and slid off. Checkpoint slabs escaped
+it because `playInSlab` sets the properties again a moment later; the base has no
+such second pass, which is why the symptom was the baseplate and nothing else.
+
+`PlatformLayouts.build` now sets it on every slab it stamps out, and `buildBase`
+sets it (and `Anchored`) on a tagged part it adopts - the same argument the
+`Anchored` line there was already making, applied to the other property a floor
+cannot afford to be wrong about.
+
+`FLOOR_PHYSICS` is `BLOCK_PHYSICS` with both weights pinned at 100, so the floor
+decides its own contacts and a type's weight is only ever pitted against blocks.
+Every mechanic survives: Bouncy still bounces off towers, Ice is still slippery to
+build *on*. Only the ground stopped playing along.
+
+It surfaced in PVP, and that's not a coincidence — a lane starts empty and stays
+short, so a large share of a match's pieces land on bare platform rather than on a
+tower. Classic hid the same bug behind one tall shared tower.
 
 Note that adding six types roughly halved how often each *individual* type comes
 up — the overall odds that a piece is special are unchanged (that's the curve
@@ -715,7 +1053,8 @@ Three things about the implementation:
   not a tower one — fifty blocks wearing fifty of them is a wall of text. The
   holder's own plate is the preview clone's; the real piece's is `Enabled = false`
   locally for that one player, for the same reason its parts are hidden (a GUI is
-  out of `LocalTransparencyModifier`'s reach).
+  out of `LocalTransparencyModifier`'s reach). The **type tell** is disabled on the
+  same line and for the same reason — see [Aiming](#aiming).
 
 Three edge cases the input controller handles, all of which come from "held" being
 a state rather than an event:
@@ -793,6 +1132,9 @@ spinning it in place.
 
 **None required to boot** — the server generates the base platform on first run,
 and every Studio asset below degrades to "leave it as it was" when it's missing.
+That includes `ServerStorage.TowerPlatformLayouts`: with no layouts authored, the
+base and every checkpoint are the plain `PLATFORM_SIZE` slab. See
+[TowerPlatforms.md](TowerPlatforms.md).
 
 ### Where the arena sits — building a map around it
 
@@ -836,6 +1178,9 @@ All under `ReplicatedStorage.Assets` (Rojo does **not** sync these).
 > broke the first time.
 
 | `Assets.Sounds.BombBeep` | A short `Sound`, the bomb's warning beep | The fuse still flashes red, just silently |
+| `Assets.Sounds.Anvil` | A `Sound`, the Anvil type's landing clang | The Anvil lands on its skin's ordinary impact sample instead, and the cue library warns once |
+| `Assets.Sounds.StormAmbience` | A looping-friendly `Sound`, the weather coming in. Tune its Volume in Studio — the ramp scales that value | The storm arrives silently (one warning); the clouds and the lightning still run |
+| `Assets.Sounds.Impacts.<Material>` | A folder per material holding interchangeable impact takes — shipped: `Needoh`, `Wood`, `Grass`. Any number of `Sound`s; one is rolled per landing | That skin falls back to its single `impactSound` id, and warns once |
 | `Assets.Zones.Space` | A `Sky` for the Space zone | Space zone keeps whatever sky was up |
 
 (Plus everything the earlier zones already wanted: `Assets.Zones.Retro` / `Snowy`
@@ -968,6 +1313,7 @@ devices.
 | `CheckpointQuest.ui.luau` | shared | The quest line: promises the rare skin, then names it once it lands |
 | `CheckpointQuest.story.luau` | shared | UI Labs story — the only place to see the claimed side, which happens once ever in game |
 | `CheckpointQuestService.server.luau` | server | Hands the rare skin over on a player's first checkpoint, then closes the quest |
+| `DuckSkinService.server.luau` | server | Grants `skins.duck` to the accounts in `Constants.DUCK_OWNERS` and to nobody else |
 | `PlayerData.luau` | shared | Registers the `TowerGame` profile slice |
 | `Gamemodes.luau` | shared | The three votable modes and the stage numbers each one sets |
 | `Gamemode.luau` | shared | Registers those modes into GamemodeVote (auto-discovered) |
@@ -986,12 +1332,13 @@ devices.
 | `TowerView.client.luau` | client | Container: subscribes via `useReplica`, runs the clocks, picks the device |
 | `TowerAfkController.client.luau` | client | Whether the inactivity card is up, and the two answers to it |
 | `TowerAfkView.client.luau` | client | Container for the card; renders nothing while it's down |
-| `TowerAfkPresentation.client.luau` | client | Registers the card as an always-mounted root (`Presentations.afk`) |
+| `TowerSpectatorView.client.luau` | client | Container for the badge, on its own root so it can draw *under* the HUD (`ui.layers.underlay`) |
+| `TowerAfkPresentation.client.luau` | client | Registers both as always-mounted roots (`Presentations.afk` gates the pair) |
 | `AfkNotice.ui.luau` | shared | Dumb card: the copy, the red / green pair, the screen cover |
-| `SpectatorNotice.ui.luau` | shared | The badge that stays up while a player is out of the rotation |
+| `SpectatorNotice.ui.luau` | shared | The badge that stays up while a player is out of the rotation, with the PLAY button back in |
 | `TowerHUD.ui.luau` | shared | Dumb HUD (turn strip, clocks, climb rail, hint, touch controls, Extend Storm, the urgency tick) |
 | `TurnStrip.ui.luau` | shared | Headshot row, current player centered |
-| `ProgressLine.ui.luau` | shared | The climb rail down the right edge: start / goal dots and a marker carrying the height readout |
+| `ProgressLine.ui.luau` | shared | The climb rail down the right edge: start / goal dots and a marker carrying the height readout. Can cap the goal with a deadline (`goalLabel`); TowerGame's HUD doesn't |
 | `ProgressLine.story.luau` | shared | UI Labs story — drag `current` and watch the marker glide |
 | `ControlsHint.ui.luau` | shared | Bottom-left control list that fades out |
 | `StormFade.ui.luau` | shared | The storm's one-shot white-out, played on `PHASE.GAMEOVER` |
@@ -999,14 +1346,17 @@ devices.
 | `SteerStick.story.luau` | shared | UI Labs story — drag it with the mouse, with a live value readout |
 | `TowerHUD.story.luau` | shared | UI Labs story — every prop on a slider, including both clocks |
 | `StormFade.story.luau` | shared | UI Labs story — replays the white-out on demand |
-| `TowerPresentation.client.luau` | client | Registers the HUD as a UIRegistry **root** |
+| `TowerStormController.client.luau` | client | The storm approach: ambience, terrain clouds and background lightning, all off one ramp |
+| `LightningBolt.client.luau` | client | Draws a branching bolt by midpoint displacement. Shared by the background VFX and the Stormy zone's strike |
+| `TowerPresentation.client.luau` | client | Registers the HUD and the cash readout as UIRegistry **roots** |
+| `TowerCashView.client.luau` | client | The cash counter + payout burst, on `ui.layers.flourish` so it draws over any open window |
 
 ## The HUD
 
 ```
           (⚡)  ( o ) (O) ( o )  (◕)        Extend Storm | turn strip | turn clock
-                3:42 until storm!                                    ○
-    Get to the next checkpoint for a RARE skin!                       │  next zone
+                                                      Storm in 3:42
+    Get to the next checkpoint for a RARE skin!                       ○  next zone
                        (new players only)                             │
                                                        24.5 studs ─● │  the tower
                                                                      ●  leg start
@@ -1014,13 +1364,27 @@ devices.
   (fades after 60s)                            $ 1,250   (touch only)
 ```
 
-**The top column is two rows and no surface.** It used to be four — turn strip,
-a panel holding the height beside a best-ever reading, the progress bar, and the
+**The top column is one row and no surface** — a strip of headshots, the storm
+clock under it, and the new-player quest notification under that for six seconds. It used to be four rows: turn strip, a
+panel holding the height beside a best-ever reading, the progress bar, and the
 storm clock — which on a phone is a stack of chrome sitting on top of the thing
 the player is aiming at. The height moved onto the climb rail's marker, the
 best-ever reading was dropped (it's a number nobody can act on mid-drop, and the
-server still keeps it — `state.maxHeight` is what cash is paid against), and the
-panel behind them went with them.
+server still keeps it — `state.maxHeight` is what cash is paid against), the panel
+behind them went with them, and the storm clock moved onto the rail as well.
+
+**The storm clock is in the top column**, under the turn strip. It spent a while
+capping the rail instead, on the argument that how far up the climb is and how long
+is left to finish it are one question and belong on one object — which is still
+true, and still lost to where players actually look. The rail is at the right edge
+and read in glances; a deadline is the one number on this HUD that has to be
+readable without going to find it, so it sits where the eye already is. It goes red
+under `STORM_URGENT_SECONDS` (30) either way.
+
+`ProgressLine.goalLabel` still exists and still reserves its band out of the rail's
+own height when set — the HUD just passes nothing, so the rail is the climb alone
+and gives that band back to the track. Its story is where the capability is
+exercised now.
 
 The **turn clock is a plain circle** (`RadialTimer`), only existing while
 someone is aiming. Two radial-fill treatments were tried first — a filling pie
@@ -1028,6 +1392,20 @@ and a hollow ring, both built from `UIGradient` hacks to fake a radial sweep
 since Roblox has no native one — and neither read well in practice, so the dial
 is a solid circle with the seconds label on top; its colour still shifts red
 under `URGENT_SECONDS`.
+
+**The touch controls are only up on your own turn.** They used to stand there
+greyed out through everybody else's, which is a control saying "not now" where
+the player wanted a screen saying nothing — and on a phone it's the bottom third
+of the display spent saying it. The row renders on `showControls and canAct`;
+nothing inside it carries a `disabled` any more, because that state is now
+unreachable.
+
+The *space* is still reserved for the whole round: the status line's offset is
+keyed on `showControls` (the device answer, fixed for the session) rather than on
+whether the row is up this second — see the rule below. PVP is deliberately left
+alone, because it has no turns: a player there is between pieces for a second or
+two at a time, and a control row that blinked out every few seconds would be
+worse than one that dims.
 
 ### Nothing that comes and goes may move what stays
 
@@ -1066,9 +1444,21 @@ playing rather than for spending. Roughly **70% of new players stop before their
 first checkpoint** — it's the steepest drop-off in the game — so the climb up to
 it is the one stretch worth buying outright.
 
-A gold line under the countdown says **"Get to the next checkpoint for a RARE
-skin!"**, and clearing one hands over `skins.gold` — **Golden Blocks** (see
-[Skin packs](#skin-packs)).
+A gold line under the storm clock says **"Get to the next checkpoint for a RARE
+skin!"** for `QUEST_PROMISE_SECONDS` (6), and clearing a checkpoint hands over
+`skins.gold` — **Golden Blocks** (see [Skin packs](#skin-packs)).
+
+**It's a notification, not a standing line.** It used to sit in the column for as
+long as the player hadn't earned the skin, which is where the storm clock now
+lives — and a permanent call to action was the wrong shape for it regardless. It's
+news the first time and furniture by the tenth, so it announces itself once and
+gets out of the way. Six seconds is long enough to read twice.
+
+It fires **once per profile load**, the moment `useCheckpointQuest` learns the
+player hasn't earned it — which for almost everyone is as they join. Not once per
+round: a player told twice has been told, and the line is asking for something that
+takes a whole stage to do. If it should nag per-round instead, the trigger is the
+`phase` dependency in that hook.
 
 It's a **bare label, not a panel**. A gem surface was tried first and read as a
 separate widget parked on top of the HUD rather than as part of the block of text
@@ -1099,6 +1489,9 @@ Five things keep it honest:
   `isFirstCheckpointFor` reads — flipping it first would close the quest on every
   player a line before paying them. A player whose profile hasn't loaded is
   skipped rather than granted against nothing; they earn it on the next floor.
+- **Earning it takes the promise down early**, whatever is left on its six
+  seconds. The claimed line is about to stand where the promise was, and two of
+  these at once would be the game promising and paying in the same breath.
 - **It's shown to new players only, then held one beat longer.**
   `SeenCheckpoint` on the profile slice (see
   [Stats and saving](#stats-and-saving)) is what qualifies them. The line doesn't
@@ -1110,10 +1503,10 @@ Five things keep it honest:
   watched happen, so a profile that loads already-true never congratulates a
   veteran for a skin they earned months ago.
 
-The line sits **below** the countdown in the top column, which is what keeps it
-inside the rule above: it comes and goes, but everything it could move is above
-it, and the column is anchored at the top. Nothing that stays moves when a new
-player's line appears or a veteran's never does.
+The line sits **below the turn strip** in the top column — the last row of it,
+which is what keeps it inside the rule above: it comes and goes, but everything it
+could move is above it, and the column is anchored at the top. Nothing that stays
+moves when a new player's line appears or a veteran's never does.
 
 Note for an existing place: `profile:Reconcile()` backfills `SeenCheckpoint` as
 `false` for players who predate it, so **veterans get the line and the free skin
@@ -1134,13 +1527,24 @@ of it. `RAIL_TOP` clears Roblox's own topbar (the root ScreenGui sets
 `IgnoreGuiInset`, so y = 0 is the true top of the display) and `RAIL_BOTTOM` is
 derived from the camera toggle and cash counter stacked in the corner below.
 
-**The storm clock and the rail both go during `PHASE.GAMEOVER`** (one flag,
-`stormRunning`, so they can't disagree). The round is over, the tower they
-measured is wreckage, and the server has frozen `stormEndsAt` — but the client
-draws the clock as `stormEndsAt - now`, so leaving it up counted a dead deadline
-down behind the gamemode vote and then snapped back when the next round started.
-They stay up through a checkpoint, where the rail showing the leg just built is
-the point of the moment.
+**The storm clock and the rail both go whenever no stage is running** — `GAMEOVER`
+or `IDLE` — behind one flag, `stormRunning`, so they can't disagree.
+
+`GAMEOVER` is the round break: the round is over, the tower they measured is
+wreckage, and the server has frozen `stormEndsAt` — but the client draws the clock
+as `stormEndsAt - now`, so leaving it up counted a dead deadline down behind the
+gamemode vote and then snapped back when the next round started.
+
+`IDLE` is the same nothing from the other end: nobody is in the queue, so the
+server holds the clock instead of ticking it. That's the phase the **opening vote**
+runs under — the first ballot of a server has no round behind it to end, so it
+never passes through `GAMEOVER` — and the rail used to stand there right through
+it, reading a frozen deadline over an empty platform.
+
+The phase is the right test for this: the HUD never learns that a vote is up (that
+belongs to [GamemodeVote](GamemodeVote.md), and this file doesn't know that feature
+exists), only that no stage is running. Both stay up through a **checkpoint**,
+where the rail showing the leg just built is the point of the moment.
 
 The status line lives at the **bottom**, where the player is already looking when
 they're about to place, and lifts clear of the touch controls when those show.
@@ -1196,7 +1600,9 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | -------- | ------ |
 | `TURN_SECONDS` | The drop clock (15) |
 | `FIRST_CHECKPOINT_PACK` | Which pack the first-checkpoint quest hands over. Must be a `forSale = false` entry in `SkinPacks.List`, or the prize is buyable and the line is lying |
+| `QUEST_PROMISE_SECONDS` | How long the promise line stays up before it clears itself (6) |
 | `QUEST_CLAIMED_SECONDS` | How long the quest line stays up naming the prize after the grant lands (8) |
+| `DUCK_PACK`, `DUCK_OWNERS` | The Duck skin's pack id and the exact usernames it's granted to. The list is the entire access control for it — see [The Duck skin](#the-duck-skin) |
 | `IDLE_TURN_SECONDS`, `IDLE_GRACE_TURNS`, `IDLE_TURNS_BEFORE_AFK` | The short clock for an untouched turn (6), how many of a player's first turns are exempt (1), and how many untouched turns in a row bench them (2) — see [Idle turns](#idle-turns-and-the-inactivity-card) |
 | `EDGE_MARGIN` | How far anything pinned to a screen edge sits in from it (20). Shared by the HUD and the spectator badge so the two can't disagree |
 | `SPECTATOR_NOTICE_WIDTH`, `SPECTATOR_NOTICE_TOP`, `SPECTATOR_NOTICE_COLOR` | The spectator badge. `TOP` hangs it below the HUD's top column; the GUI inset is added on top of it at render |
@@ -1221,10 +1627,15 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `BOUNCY_PHYSICS` | How much a Bouncy block bounces |
 | `ANVIL_PHYSICS`, `ICE_PHYSICS`, `FEATHER_PHYSICS` | The other three physics types. Density survives a Snowy zone; friction and elasticity don't |
 | `FEATHER_FALL_SPEED` | A Feather's terminal velocity (12). The actual mechanic — density can't slow a fall |
+| `FALL_SPEED` | Terminal velocity for every other block (55). Turn it down for softer landings, up towards 70 for the old punch |
 | `CRATE_SCATTER`, `CRATE_LIFT`, `CRATE_SPIN` | How far a broken Crate's cells throw themselves apart. In-plane only |
 | `GHOST_SECONDS`, `GHOST_TRANSPARENCY` | How long a Ghost phases for, and how see-through it is while it does |
 | `BLOCK_COLLISION_GROUP`, `GHOST_COLLISION_GROUP` | The two groups that let a Ghost ignore blocks without ignoring the floor |
-| `MAGNET_RADIUS`, `MAGNET_IMPULSE` | Reach and strength of a Magnet's pull. Read them against `EXPLOSION_RADIUS` / `EXPLOSION_IMPULSE` — same mechanism, opposite sign |
+| `MAGNET_RADIUS`, `MAGNET_ACCEL`, `MAGNET_SECONDS`, `MAGNET_LIFT` | Reach, strength, duration and upward tilt of a Magnet's pull field. It's an acceleration re-applied per frame, not an impulse — see the Magnet note for why two rounds of raising an impulse were invisible |
+| `SACRIFICE_REACH`, `SACRIFICE_VOLUME` | How far under itself a revealed Sacrifice looks for what it's resting on, and how loud unmaking a block is (its own `Sacrifice` cue at **1.5**, a shade under a Bomb's 1.7 — it opened at 0.6, which was set against the explosion it used to borrow and left the softer dedicated cue inaudible under a landing) |
+| `SACRIFICE_FADE_SECONDS`, `SACRIFICE_FLASH_SECONDS`, `SACRIFICE_HOLD` | The send-off's clock: how long the taken block takes to go, how fast it flashes to `SACRIFICE_GLOW`, and how much of the fade it spends at full opacity first |
+| `SACRIFICE_RISE`, `SACRIFICE_DRIFT`, `SACRIFICE_SPIN` | How it leaves — studs/second up, studs/second away from the block that took it, radians/second of tumble about Z |
+| `SACRIFICE_GLOW`, `SACRIFICE_CORPSE_NAME` | The colour it glows (the type's own tell) and what the drifting copy is called in the arena |
 | `MYSTERY_REVEAL_SECONDS` | How long the revealed name hangs over a Mystery block |
 | `NOOB_*` | Walk speed, jump odds, and how long a squashed Noob lies there |
 | `SETTLE_CONFIRM_SECONDS`, `UNSETTLE_SPEED/SPIN` | How long a block has to hold still to count, and what knocks it back out |
@@ -1234,6 +1645,7 @@ Everything is in `Constants.luau`. The knobs worth reaching for first:
 | `PLATFORM_SIZE` | Size of the base *and* every checkpoint — they're the same slab |
 | `PLATFORM_GROW_SECONDS`, `PLATFORM_FADE_SECONDS` | The checkpoint entrance tween |
 | `BLOCK_PHYSICS` | Friction / density / bounce of every block |
+| `FLOOR_PHYSICS` | The same, for the base / checkpoints / PVP lane platforms, with both weights at 100 so the ground wins its own contacts |
 | `CAMERA_DISTANCE`, `CAMERA_AIM_LIFT`, `CAMERA_LERP` | Framing and follow feel on a desktop |
 | `CAMERA_DISTANCE_TOUCH`, `CAMERA_AIM_LIFT_TOUCH` | The same two for a phone — see [Camera](#camera) |
 | `CAMERA_CHECKPOINT_*` | The wide shot: how slowly it eases, how much headroom, and the floor and ceiling on how far back it goes |
@@ -1261,8 +1673,20 @@ broadcasts the id; the server owns the half that can't be faked (how blocks
 | Foggy | unchanged | `Lighting` fog closes in to `FOG_END` |
 | Night | each gains a `PointLight` in its own colour | dark: `Brightness`, `Ambient` and `ClockTime` drop |
 
-Only special zones announce themselves — a normal zone is just a new sky. The
-banner clears itself after `ZONE_WARNING_SECONDS`.
+Only special zones announce themselves — a normal zone is just a new sky. That
+test is `Zones.announces(zone)` (`kind ~= "normal"`), not "does it have copy": it
+used to be the latter, which stopped working the moment every zone needed a line
+for PVP's reel to print. The banner clears itself after `ZONE_WARNING_SECONDS`.
+
+**A zone has exactly one line, its `warning`,** and every surface prints that one:
+this banner, and the card under PVP's zone reel — see
+[TowerGamePvp.md](TowerGamePvp.md) § "The zones". There was a second, longer
+`description` field written mode-neutral; it's gone, because two strings per zone
+is two places for a zone to describe itself and they drifted. Clear Skies has a
+line of its own now ("Clear skies — nothing bends the rules!") for the reel to
+land on; it just doesn't banner. Stormy's line — the one that used to strain,
+because it names lightning — is true in both modes now that
+[a match has its own storm](TowerGamePvp.md#the-storm).
 
 ### The cadence
 
@@ -1274,8 +1698,16 @@ A weighted roll (what this replaced) can hand out four specials in a row or none
 for six floors, and neither is the shape of a run anyone wants. *Which* special
 comes up is still random, and `avoidId` stops the same one landing twice running.
 
-Normal zones therefore never roll, so their `weight` is unread — it's kept only
-so every row of the table reads the same.
+Normal zones therefore never roll *here*, but their `weight` is read elsewhere —
+`Zones.roll` (PVP's clock-driven pick) rolls the whole list, weights and all.
+
+`Zones.rollSpecial(avoidId)` is the second half of `Zones.next` on its own: the
+weighted roll over the specials, with no cadence in front of it. The cadence
+decides *whether* a special is due; this decides *which*. The **Wild Weather**
+gamemode (`specialsOnly`) calls it directly on every checkpoint — and once more
+when the round opens, because the first stage is the longest one and a
+specials-only round that started in Clear Skies would spend it playing like
+Classic. See `applyOpeningZone` in TowerService.
 
 ### Stormy: lightning
 
@@ -1308,8 +1740,19 @@ the play area, so the column was drawn correctly and framed entirely off-screen.
 The blast goes through the same `blastAt` the Bomb type uses, so a strike behaves
 the way players have already learned bombs behave and there's one blast to tune.
 It's deliberately smaller than a bomb (`LIGHTNING_RADIUS` 26 vs `EXPLOSION_RADIUS`
-46): a bomb is a piece the players were handed and can plan around, while this
+36): a bomb is a piece the players were handed and can plan around, while this
 arrives unasked.
+
+**Three of the assumptions above are the classic run's, not the bolt's**, and
+`TowerService.strikeColumn(x, floorY, source)` is the same strike with them made
+into arguments: which floor an empty column falls back to, and which instance
+announces the flash and the marker. A PVP match calls it once per lane from its own
+clock — see [TowerGamePvp.md § The storm](TowerGamePvp.md#the-storm) — which is why
+`highestAt` takes a floor and `strikeLightning` takes an announcer. The driver
+above stays single-lane and stays switched off for a match; it still clears its own
+marker there, because a zone can turn stormy in the last seconds of a round and the
+match that follows must not inherit a column standing over a tower that no longer
+exists.
 
 **Two dials, and they aren't interchangeable.** `LIGHTNING_IMPULSE` (43) is how
 hard it hits — `blastAt` throws every block in range by hand, because
@@ -1344,7 +1787,7 @@ block, otherwise `BLOCK_PHYSICS`) unless the zone is Snowy, which always wins.
 
 **Gravity is the one zone rule that isn't per-block.** The server writes
 `workspace.Gravity` from `Zones.gravityOf`, which replicates; every zone but Space
-names no gravity and gets `Zones.DEFAULT_GRAVITY` (196.2) back. `resetRun` and
+names no gravity and gets `Zones.DEFAULT_GRAVITY` (160) back. `resetRun` and
 `Start` both set it, so a run never inherits the last one's physics — or the place
 file's.
 
@@ -1374,6 +1817,54 @@ All the zone assets live under `ReplicatedStorage.Assets` and are **Studio-
 authored — Rojo doesn't sync them**. Every lookup degrades to "leave it as it
 was": a missing skybox costs you a nice sky, not the game.
 
+## Landing feel
+
+Three numbers decide whether a placement that *looks* right survives, and they
+were all tuned together — moving one without the others undoes the change.
+
+| Lever | Was | Now | What it does |
+| ----- | --- | --- | ------------ |
+| `BLOCK_FRICTION` | 0.9 | **1.2** | Grip. One local at the top of `Constants.luau`, shared by `BLOCK_PHYSICS`, `FLOOR_PHYSICS`, `ANVIL_PHYSICS` and `FEATHER_PHYSICS` — four surfaces that must not disagree, or a block grips differently depending on what it happens to rest on. Ice opts out; sliding is the whole type. |
+| `Zones.DEFAULT_GRAVITY` | 196.2 | **160** | Time. A leaning stack now topples slowly enough to be read as a lean, sometimes slowly enough for the next piece to catch it. |
+| `FALL_SPEED` | — | **55** | Impact. A terminal velocity for every block, applied in the plane poll beside the Feather clamp it generalises. |
+
+The cap is the one doing most of the work, and it is nearly free in time — a
+terminal velocity only bites in the last stretch of a fall:
+
+| Drop | Before | After |
+| ---- | ------ | ----- |
+| From `SPAWN_CLEARANCE` (14 studs) | 74.1 studs/s, 0.378s | **55.0 studs/s, 0.426s** — 55% of the energy, 13% slower |
+| Past the stack, 60 studs | 153.4 studs/s | **55.0 studs/s** — 13% of the energy |
+
+That second row is the case that used to end runs: a piece that missed its landing
+arrived at three times the speed of a placed one and took the tower apart on the
+way down. It now arrives at the same speed as everything else.
+
+**`IMPACT_LOUD_SPEED` is pinned to `FALL_SPEED`** (both 55). It's the speed at
+which a landing plays at full volume, and with a terminal velocity in play nothing
+can ever arrive faster — leaving it at 70 would have muted every landing in the
+game to 74% and thrown away the top of the range for a speed that no longer exists.
+
+### How loud a landing is
+
+Two gains stack on top of whatever the sample was tuned to, and they have
+different scopes on purpose:
+
+| Dial | Scope |
+| ---- | ----- |
+| `BLOCK_VOLUME_SCALE` (2) | Everything a *block* makes a noise about: the landing, the settle, the drop, the glue weld, the bomb's beep. Applied in `attachSound` and `playAtBlock`, so it can't be forgotten at a call site. |
+| `IMPACT_VOLUME_SCALE` (2.5) | The **landing alone** — the skin's impact sample and the cue a type lands on instead. Applied in `playImpact`, to both paths. |
+
+So a landing is 5x its tuned sample and everything else a block does is 2x. The
+landing gets its own dial because it's the game's percussion: it's what the room
+is listening for, it's the one with a folder of takes behind it, and it wants to
+sit above the noises a block makes on the way there. Neither dial touches the
+world SFX (the storm, lightning, a demolition, the nuke) — those aren't a block
+being a block, and they were already the loudest things in the game.
+
+Both multiply rather than replace, so the mix *between* materials — a squish
+against a plank against an anvil's clang — survives any change to either.
+
 ## Cash
 
 | Award | Who | Why |
@@ -1399,6 +1890,24 @@ The bills themselves aren't React-driven — a dozen images moved through state
 would re-render the HUD every frame of the burst. React owns the host frame; the
 bills are plain instances handed to TweenService that clean up after themselves.
 
+**The counter is one component, `CashCounter`, on a root of its own.** It pins
+itself to the bottom-right and owns the `CashFly` target, so the corner and the
+point the bills converge on can't drift apart. `Constants.CASH_WIDTH` /
+`CASH_HEIGHT` live outside it because both HUDs stack their camera toggle directly
+above the counter, and the classic progress rail ends above the pair — layout
+numbers their neighbours need, not the component's private business. PVP had no
+counter at all until it was given this one; a match pays out at the results panel,
+so it is the mode where the number is most worth watching.
+
+**It is mounted by `TowerCashView`, not by either HUD, and it sits on
+`ui.layers.flourish`.** Inside the HUDs it was on the same layer as the game —
+under every window in the experience — so a payout that landed while a window was
+open played out entirely behind it: `CashFly` bursts from the middle of the
+screen, which is exactly where an open window is. Claiming a daily reward was the
+worst case and the most common one, because the moment a player most wants to see
+coins arrive is the moment they pressed a button to get them. On its own root it
+draws over any window, and it stops depending on which HUD happens to be up.
+
 ### Spending it
 
 Cash is registered with the [Store](Store.md) as the **`coins`** currency, whose
@@ -1415,17 +1924,18 @@ thing that pays out, and `StoreService` is the only thing that debits.
 | `skins.needoh` — Needoh Blocks | **not for sale** | Every block **is** the Needoh `BlockSkin` — glass, translucent, squish on every landing |
 | `skins.neon` — Neon Blocks | 100 coins | Every block part becomes `Enum.Material.Neon` |
 | `skins.gold` — Golden Blocks | **not for sale** | `Enum.Material.Foil` **and** a tight gold hue |
+| `skins.duck` — Duck Blocks | **not for sale, not grantable by any quest** | Pins the Duck `BlockSkin` — tiled duck texture, a quack on every landing — **and** a tight yellow hue. See [The Duck skin](#the-duck-skin) |
 | `skins.red` … `skins.black` (10) | 60 coins | Every block you place is a **random shade** of that colour |
 
 A skin pack overrides the look of **the blocks its owner drops**. A pack that
-owns the surface (Neon, Needoh) also overrides whatever the current zone had
-dressed them in — a Retro zone can't dull a neon block or stud a Needoh one.
+owns the surface (Neon, Needoh, Duck) also overrides whatever the current zone
+had dressed them in — a Retro zone can't dull a neon block or stud a Needoh one.
 That override is the product; `SkinPacks.ownsSurface` is the one place that
 decides which packs get it.
 
-**Gold is the one pack that sets both halves.** Every other entry picks a lane:
-Neon sets `material`, Needoh pins a `blockSkin`, the ten colours set `hue`. Gold
-needs Foil *and* the hue, because the hue alone would land it beside the
+**Gold and Duck set both halves.** Every other entry picks a lane: Neon sets
+`material`, Needoh pins a `blockSkin`, the ten colours set `hue`. Gold needs Foil
+*and* the hue, because the hue alone would land it beside the
 sixty-coin Yellow pack — which is exactly what a reward for surviving the game's
 steepest drop-off must not look like. Its jitter is deliberately tight
 (`saturationJitter` 0.1, `valueJitter` 0.08): gold that wanders is brass on one
@@ -1448,6 +1958,47 @@ Needoh is the daily run's grand prize (day 7 — see
 a grand prize you could have bought on day one isn't one. Its `price`
 (`Constants.NEEDOH_SKIN_PRICE`, 250) is only what it *would* cost if it ever went
 on sale; see [Reward-only packs](Store.md#reward-only-packs).
+
+### The Duck skin
+
+A personal cosmetic for two named accounts. It's the only thing in the game with
+**no route in at all**: it isn't rolled (`weight = 0`), it isn't sold
+(`forSale = false`), and no quest, zone or daily reward names it.
+
+`DuckSkinService.server.luau` is the entire supply. On join it checks the
+player's name against `Constants.DUCK_OWNERS`, waits for the profile to land,
+then calls `StoreService.grantPack` — the same blessed path the gold skin uses,
+so ownership is written in one place however it arrived. Granting it to someone
+else is one line in that list.
+
+| Thing | Where |
+| ----- | ----- |
+| Who gets it | `Constants.DUCK_OWNERS` — exact usernames, matched case-insensitively |
+| The pack | `Constants.DUCK_PACK` / `skins.duck` in `SkinPacks.luau` |
+| The look and sound | Skin id 8 in `BlockSkins.luau` |
+| The grant | `DuckSkinService.server.luau` |
+
+Usernames rather than UserIds, matching Cmdr's allow-list, with the same caveat:
+a name change hands the skin to whoever picks the old name up. Acceptable for a
+cosmetic in a way it wouldn't be for admin access — if that stops being true,
+swap both lists to UserIds together.
+
+**Removing a name stops the grant; it doesn't revoke.** A profile that already
+owns the pack keeps it. Taking a cosmetic back off someone who has it equipped is
+a different decision from not handing one out, and `DuckSkinService` doesn't make
+it.
+
+The quack is a **Studio-authored Sound**, not an id in `BlockSkins`. The skin
+names it with `impactCue = "Quack"` and `BlockSkins.impactIdFor` resolves the
+`SoundId` off the instance — looking in `Assets.Sounds` first (the house rule for
+a sound a human tuned) and then in Workspace, memoized on the first hit so it
+costs one lookup rather than one per landing. That resolver has three tiers, each
+falling back to the next: `impactFolder` (a random take), then `impactCue` (one
+named Sound), then the `impactSound` id. Only the *id* is ever taken, never the
+instance — the skin owns its own volume and pitch range, and cloning the Sound
+would put a second, quieter opinion about both onto every block. If the Sound isn't in the place
+the skin falls back to the Classic knock and warns once: a missing asset should
+cost the joke, not the landing.
 
 ### Colour packs roll a shade per block
 
@@ -1475,8 +2026,9 @@ another would only be telling players their favourite colour is worth less.
 A flat icon can't show what a skin sells — the colour packs differ from each
 other *only* by hue, and Neon only by material. So the shop and inventory tiles
 render `BlockPreview`: an actual T-block spinning in a `ViewportFrame`. A pack
-that pins a skin draws as that skin, transparency included: Needoh's card is
-glass, or the tile would advertise a solid block.
+that pins a skin draws as that skin, transparency and texture included: Needoh's
+card is glass, and Duck's is a textured duck block rather than the plain yellow
+that would make it look like the sixty-coin Yellow pack.
 
 Store owns the card and knows nothing about blocks. TowerGame hands it a renderer
 through `Catalog.registerPackPreview(kind, render)`, from
@@ -1535,6 +2087,16 @@ panic-buying at zero. Like the other two it returns false during a checkpoint or
 round break — both sequences set `stormEndsAt` themselves when they end, so time
 added inside one is time thrown away, and a false leaves the receipt for
 redelivery instead of eating it.
+
+`TowerService.setStorm(seconds)` is its dev-only counterpart and the deliberate
+opposite: it **replaces** the deadline, because the point of a console handle is
+to land on a number without doing arithmetic against wherever the clock happens
+to be. Nothing but the `setstorm` command calls it — the products go through
+`extendStorm`. It raises `stormSeconds` when the new time is longer than the
+stage was, since that's the denominator the HUD draws the storm bar against and a
+fraction over 1 would draw the bar past its own end; it never lowers it, because
+a shorter time left is exactly what a partly-drained bar looks like. Zero is
+allowed and means "now".
 
 ### Nuke
 
@@ -1686,6 +2248,7 @@ Registered from `Commands.luau`; the enum arguments (`blockType`, `blockSkin`,
 | `skipstage` (alias `skiplevel`) | — | `TowerService.clearStage()` — the dev-testing handle on a stage clear |
 | `skip` | — | The same call, under the name that reads as "replicate the Skip purchase" |
 | `extendstorm` (alias `extend`) | `[seconds]` | `TowerService.extendStorm(seconds)` — replicates the Extend Storm purchase. Defaults to `EXTEND_STORM_SECONDS`. The only way to exercise that product without spending Robux, since its whole effect is a number on a clock |
+| `setstorm` (alias `stormtime`) | `[seconds]` | `TowerService.setStorm(seconds)` — **sets** the time left on the stage clock rather than adding to it. Defaults to 10. `setstorm 0` lands the storm on the next tick, which is the only way to reach the wreck without waiting out a stage |
 | `block` | `[blocktype]` `[blockskin]` | Pins the **next** piece's type (default: Normal, i.e. no hazard) and/or skin (default: random) via `TowerService.forceNextBlock` — one-shot, consumed by the next `beginTurn` |
 | `zone` | `zoneName` | `TowerService.setZone(id)` — forces the tower straight into a zone, outside the usual "roll one on checkpoint clear" path |
 | `givecash` | `player` `amount` | `CashService.award(player, amount)` — the same path zone/interval awards pay through |
@@ -1702,6 +2265,12 @@ Registered from `Commands.luau`; the enum arguments (`blockType`, `blockSkin`,
 | `BombBeep` | everyone, positionally | each flash of a bomb's fuse |
 | `CashSound` | just you | on the cash value rising |
 | `Explosion` | everyone, positionally | on a throwaway marker, since the block is about to be destroyed |
+
+`TowerFeedbackController` calls `Sfx.preload()` (→ `audio.preloadCues`) once at
+start, which pulls every Sound in the library — impact takes included — into that
+client's cache. An unloaded one-shot plays *after* it downloads, i.e. after the
+landing it belonged to, and a folder of takes is a folder of separate assets each
+with its own first play to get wrong.
 
 Cues are cloned from `Assets.Sounds` rather than referencing raw asset ids, so
 re-tuning a cue's volume or pitch is a Studio edit and not a code change. A
@@ -1811,10 +2380,25 @@ record rather than part of the run, and `TowerStatsService` has already banked i
 into each player's profile. The HUD's "best" is a record; the storm resets the
 game, not the history.
 
+### The opening vote
+
+**A session's first round is voted for like every other one.** `runOpeningVote`
+runs from `TowerService.Start`: `intermission` goes up immediately, so the game is
+parked before it has dealt anything, and the ballot opens as soon as there is
+somebody to vote. Then it's the same `settleOnAMode` the round break uses, followed
+by a fresh storm clock and `PHASE.SETTLING`.
+
+It **waits for a player** (`#queue > 0`) plus `OPENING_VOTE_DELAY` (2.5s) for their
+client to mount its UI. Both waits earn their keep: a poll against an empty server
+is fifteen seconds of nothing followed by the default — the exact un-voted round
+this exists to stop handing out — and a ballot that opens behind a loading screen
+spends its own clock there. There's no wreck, no `resetRun` and no
+`reportRoundLost`, because there is no round behind this one.
+
 ### The round break
 
 The storm landing ends the **round**, and `runRoundBreak` owns everything between
-that and the next one. It is the only moment the whole game is stopped:
+that and the next one. It is the only moment a *running* game is stopped:
 
 1. `intermission` goes true and `PHASE.GAMEOVER` goes out. That flag is what makes
    "paused" real rather than cosmetic — the turn queue parks, the height poll
@@ -1825,7 +2409,9 @@ that and the next one. It is the only moment the whole game is stopped:
    `STORM_FADE_DELAY_SECONDS` (so the blocks are seen flying *first*), fades to
    white, holds, and clears.
 3. **The players vote on how the next round plays** (see
-   [the gamemode vote](#the-gamemode-vote)). `startVote` yields here.
+   [the gamemode vote](#the-gamemode-vote)), through the same `settleOnAMode` the
+   opening vote uses. It yields here — for the poll, and for a whole match each
+   time PVP wins.
 4. The winning modifier is applied, the storm clock is set fresh — so no part of
    the new round is spent on the poll — and `ROUND_BREAK_RESUME_SECONDS` later the
    queue starts again.
@@ -1858,16 +2444,21 @@ pushes `stormEndsAt` back out.
   end-to-end in a real run. The code paths are short, but they haven't been watched.
   Temporarily zeroing the normal zone's `weight` in `Zones.luau` is the quickest way
   to force one.
-- **The block types haven't been watched in a real run either.** All fourteen are
-  wired end-to-end, but the odds curve is deliberately stingy (3% on the first
+- **Most block types haven't been watched in a real run.** All fifteen are wired
+  end-to-end, but the odds curve is deliberately stingy (3% on the first
   floor), so forcing one means the `block` Cmdr command (`block Ghost`,
   `block Magnet` — it matches on the type's name), raising
   `BlockTypes.BASE_CHANCE`, or zeroing every other type's `weight`. Ghost's
   collision-group rule has been verified directly — a ghost-grouped part dropped
   from above a twenty-block tower passed through all of it and came to rest on the
-  base — but neither Ghost nor Magnet has been seen as a *dealt piece*. Magnet's
-  pull strength in particular is a first guess. The six before them
-  (Anvil, Ice, Anchor, Mystery, Crate, Feather) have had no play-testing at all —
+  base. **Magnet has been played twice and reported invisible both times**, which
+  is what the third tuning (a per-frame velocity field, not an impulse — see the
+  Magnet note) is answering. Whether the field now gathers a lean without imploding
+  a good stack is the next thing to watch; it has not been played yet. **Sacrifice
+  has never been played at all** — the ray geometry is the part to check, in
+  particular a piece landing across two towers and a piece landing on the base.
+  **Crate is benched** while its loose-cell behaviour goes unwatched. The rest
+  (Anvil, Ice, Anchor, Mystery, Feather) have had no play-testing at all —
   in particular `ANVIL_PHYSICS`'s density and `FEATHER_FALL_SPEED` are first
   guesses, and a Feather's drift is slow enough that it may want its own turn
   clock.

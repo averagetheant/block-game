@@ -26,6 +26,10 @@ export type Voter = {
 	optionId: string,
 	-- What the vote counts for: 1, or more with the 2x Votes gamepass.
 	weight: number,
+	-- Press count for this player this poll, from 1. Read as an identity, never as
+	-- a number: a change to it means "that stamp just landed again", which is the
+	-- only way a repeat press of an already-held panel is visible at all.
+	stamps: number,
 }
 
 export type State = {
@@ -66,8 +70,9 @@ function GamemodeVoteController.secondsLeft(): number
 	return math.max(0, data.endsAt - workspace:GetServerTimeNow())
 end
 
--- The one intent. Sending the id you already hold takes the vote back — the
--- server reads it that way, so the view has no un-vote button to render.
+-- The one intent. Sending the id you already hold re-stamps it rather than taking
+-- the vote back, so every press of every panel leaves the player voting for the
+-- panel they pressed and the view needs no un-vote affordance either way.
 function GamemodeVoteController.castVote(optionId: string)
 	if typeof(optionId) ~= "string" or optionId == "" then
 		return
@@ -75,12 +80,16 @@ function GamemodeVoteController.castVote(optionId: string)
 	Packets.Cast.send({ optionId = optionId })
 end
 
--- Which option each voter was on as of the last packet, and which poll that was.
--- A stamp *lands* when a voter appears or moves — which is exactly when the view
--- mounts a new one, since it keys stamps by user id and a move is a real
--- unmount. Diffing here rather than in the view keeps the cue off the render
--- path: a re-render for any other reason would otherwise replay it.
-local stamped: { [number]: string } = {}
+-- What each voter's stamp looked like as of the last packet, and which poll that
+-- was. A stamp *lands* when a voter appears, moves, or presses the panel they
+-- already hold — so what's remembered is the pair, `optionId` and the press
+-- count, and any change to either is a landing.
+--
+-- Diffing here rather than in the view keeps the cue off the render path: a
+-- re-render for any other reason would otherwise replay it.
+type Stamp = { optionId: string, stamps: number }
+
+local stamped: { [number]: Stamp } = {}
 local stampedPoll = 0
 
 local function playStamps(next: State)
@@ -98,22 +107,23 @@ local function playStamps(next: State)
 		stampedPoll = next.endsAt
 		table.clear(stamped)
 		for _, voter in next.voters do
-			stamped[voter.userId] = voter.optionId
+			stamped[voter.userId] = { optionId = voter.optionId, stamps = voter.stamps }
 		end
 		return
 	end
 
 	local landed = false
 	for _, voter in next.voters do
-		if stamped[voter.userId] ~= voter.optionId then
-			stamped[voter.userId] = voter.optionId
+		local was = stamped[voter.userId]
+		if was == nil or was.optionId ~= voter.optionId or was.stamps ~= voter.stamps then
+			stamped[voter.userId] = { optionId = voter.optionId, stamps = voter.stamps }
 			landed = true
 		end
 	end
 
-	-- Taking a vote back unmounts a stamp rather than landing one, so it makes no
-	-- sound — but it does have to stop the voter's old choice counting as still
-	-- stamped, or re-voting for it would be silent.
+	-- A vote can't be taken back any more, so the only way a voter leaves the
+	-- board mid-poll is by leaving the server. Their record goes with them: it
+	-- can't be left behind to make a re-join look like a stamp that never moved.
 	local present: { [number]: boolean } = {}
 	for _, voter in next.voters do
 		present[voter.userId] = true

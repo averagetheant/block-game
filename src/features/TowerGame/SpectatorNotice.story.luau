@@ -37,6 +37,9 @@ return {
 
 	controls = {
 		place = UILabs.Choose({ "top-centre", "top-right", "top-left", "bottom-right", "bottom-left" }),
+		-- With the button the badge grows a row and swaps its hint — Settings
+		-- stops being the route it names. Off is the badge as a pure readout.
+		resumeButton = true,
 	},
 
 	story = function(props)
@@ -45,6 +48,7 @@ return {
 		return React.createElement(TowerGame.SpectatorNotice, {
 			position = place.position,
 			anchorPoint = place.anchor,
+			onResume = if props.controls.resumeButton then function() end else nil,
 		})
 	end,
 }

@@ -17,6 +17,9 @@
 -- `id` goes over the wire and is what a name plate looks up — append, don't
 -- renumber.
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
+
 export type Kind =
 	"plain"
 	| "explosion"
@@ -33,6 +36,8 @@ export type Kind =
 	| "feather"
 	| "ghost"
 	| "magnet"
+	| "sacrifice"
+	| "lightning"
 
 export type BlockType = {
 	id: number,
@@ -44,6 +49,14 @@ export type BlockType = {
 	-- glance without fighting whatever skin it rolled.
 	tell: Color3,
 	weight: number,
+	-- A cue from `Assets.Sounds` this type lands on, instead of the skin's own
+	-- impact sample. For a type whose *weight* is the point: an anvil that landed
+	-- on grass footsteps would be the joke told wrong.
+	--
+	-- The cue rather than an id, because it's a Sound a human tuned in Studio —
+	-- and because a missing one then costs the flavour and not the landing (the
+	-- library warns once and no-ops; the skin's sample still plays).
+	impactCue: string?,
 	-- True for types that bring their own model instead of a tetromino. Those
 	-- skip the shape entirely: no cells, no skin dressing, no shape suffix on the
 	-- name plate. TowerService hands the build off to the type's own module.
@@ -53,6 +66,13 @@ export type BlockType = {
 	-- Anvil would have already fallen at ordinary weight, so the reveal would be a
 	-- word with no event behind it. See `rollMystery`.
 	viaMystery: boolean?,
+	-- Benched. The type is never dealt and never revealed by a Mystery, but it
+	-- stays in `List` and in `byId` — deleting the row would renumber nothing but
+	-- would leave a block already standing in the world unable to name itself, and
+	-- would take the `block <Name>` Cmdr command's ability to force one with it.
+	-- Which is exactly what you want while a type is benched: off the table for
+	-- players, still reachable for testing. One line to put it back.
+	disabled: boolean?,
 }
 
 local BlockTypes = {}
@@ -128,6 +148,11 @@ BlockTypes.List = {
 		description = "Heavy!",
 		tell = Color3.fromRGB(128, 136, 152),
 		weight = 3,
+		-- The one type that lands on its own sound rather than the skin's, and it
+		-- draws speed lines on the way down (`Constants.ANVIL_LINE_*`). Both are
+		-- the same argument: this type's whole effect happens during the fall and
+		-- at the moment of contact, so that's where it has to be legible.
+		impactCue = Constants.ANVIL_IMPACT_CUE,
 	},
 	{
 		id = 8,
@@ -163,6 +188,13 @@ BlockTypes.List = {
 		tell = Color3.fromRGB(190, 140, 84),
 		weight = 3,
 		viaMystery = true,
+		-- Benched for now. The shatter works, but a broken crate is the one thing in
+		-- the game that turns a piece into loose cells, and those cells each need
+		-- their own plane clamp for the rest of the run (`clampLooseCell`) — enough
+		-- of a departure from "a piece is one welded assembly" that it wants
+		-- watching in a real run before players meet it. `weight` and `viaMystery`
+		-- are left as they were so re-enabling is deleting this line.
+		disabled = true,
 	},
 	{
 		id = 12,
@@ -193,9 +225,53 @@ BlockTypes.List = {
 		weight = 2,
 		viaMystery = true,
 	},
+	-- Takes the block it hits with it. The one type whose effect is a *trade*:
+	-- you spend a placement and a block of your own tower to unmake a placement
+	-- somebody already regrets, which is why it's the type players will aim
+	-- deliberately rather than survive.
+	{
+		id = 15,
+		kind = "sacrifice",
+		name = "Sacrifice",
+		description = "Destroys the block it hits.",
+		tell = Color3.fromRGB(236, 108, 200),
+		weight = 2,
+		-- Still a legitimate reveal, on the one path that can't read an impact: a
+		-- Mystery that turns out to be a Sacrifice has already landed, so it takes
+		-- what it came to rest on instead. Either way something visible goes.
+		viaMystery = true,
+	},
+	-- The Stormy zone's bolt, handed to a player. Same radius, same pressure, same
+	-- sound and the same flash down the sky — but aimed, and with no warning
+	-- marker in front of it.
+	--
+	-- That trade is the type. A Bomb is the bigger hole (radius 46 against 26) and
+	-- announces itself with three beeps, so the room can watch it coming and read
+	-- the damage before it happens; a strike is already over by the time anyone
+	-- has looked up. Smaller bite, no notice.
+	{
+		id = 16,
+		kind = "lightning",
+		name = "Lightning",
+		description = "Calls down a strike.",
+		-- Bolt yellow. Deliberately greener and brighter than Noob's warm gold
+		-- (255, 214, 82), which is the nearest thing on the board to it.
+		tell = Color3.fromRGB(248, 250, 96),
+		weight = 2,
+		-- Resolves on settle and lands an event with something visible behind it,
+		-- which is the whole bar for the Mystery pool.
+		viaMystery = true,
+	},
 } :: { BlockType }
 
+-- Every type by id, benched ones included: an id that has already gone over the
+-- wire has to keep resolving, or the block standing in the world can't name
+-- itself and a Cmdr-forced one has no plate.
 local byId: { [number]: BlockType } = {}
+-- What the ordinary roll may hand out, and the weight to roll against. Both are
+-- built from the enabled types only, so benching one takes its share of the odds
+-- out of the pool rather than leaving a hole that rolls as nothing.
+local rollPool: { BlockType } = {}
 local totalWeight = 0
 -- What a Mystery block may turn into, and the weight to roll it against. Built
 -- from the same `weight` the ordinary roll uses, so a type that's rare as a
@@ -204,6 +280,10 @@ local mysteryPool: { BlockType } = {}
 local mysteryWeight = 0
 for _, blockType in BlockTypes.List do
 	byId[blockType.id] = blockType
+	if blockType.disabled then
+		continue
+	end
+	table.insert(rollPool, blockType)
 	totalWeight += blockType.weight
 	if blockType.viaMystery then
 		table.insert(mysteryPool, blockType)
@@ -250,15 +330,20 @@ function BlockTypes.roll(checkpoints: number, scale: number?, override: number?)
 	if math.random() > chance then
 		return nil
 	end
+	-- Every type benched at once: an ordinary block is the honest answer, and it
+	-- keeps the weighted walk below from having to mean anything with no weight.
+	if #rollPool == 0 then
+		return nil
+	end
 
 	local roll = math.random() * totalWeight
-	for _, blockType in BlockTypes.List do
+	for _, blockType in rollPool do
 		roll -= blockType.weight
 		if roll <= 0 then
 			return blockType
 		end
 	end
-	return BlockTypes.List[1]
+	return rollPool[1]
 end
 
 return BlockTypes

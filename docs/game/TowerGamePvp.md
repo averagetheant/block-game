@@ -9,7 +9,8 @@ It's a **gamemode**, not a separate place — it wins the ordinary
 [GamemodeVote](GamemodeVote.md) ballot and replaces the round that would have
 followed. Vote it twice and you play it twice.
 
-Prototype status: built end to end and **not yet play-tested**. See
+Prototype status: built end to end and **play-tested solo only** — a full match
+with one lane. Two towers on the board at once has never been run. See
 [Not built yet](#not-built-yet) for what's knowingly missing.
 
 ## How a round becomes a match
@@ -32,6 +33,21 @@ finally settle on.
 board" real rather than cosmetic: the classic turn queue parks, the storm clock
 freezes, and the classic `State` packet stops being broadcast.
 
+**Freezing it means holding it, not ignoring it.** `stormEndsAt` is an absolute
+server time and the HUD draws the bar as the distance from now to it, so a clock
+nothing reads still drains on screen. The poll calls `holdStormClock()` from both
+of its parked branches — the `pvpActive` one and the `checkpointActive or
+intermission` one — which pushes the deadline out a full stage every tick. Without
+it, three minutes of PVP plus the ballot after it left the next classic round's
+bar sitting at about a minute before its first turn.
+
+**The zone goes back to clear skies when the match ends.** A match rolls its own
+zones through `applyZone`, which writes the classic world state directly, so
+`settleOnAMode` calls `restoreDefaultZone()` next to `setBaseOnBoard(true)` — the
+same "PVP borrowed this, put it back" pair, and outside the `pcall` for the same
+reason. The ballot after a match runs under clear skies, and a classic round no
+longer opens in whatever zone the match happened to end in.
+
 ## The lanes
 
 | | |
@@ -44,7 +60,7 @@ freezes, and the classic `State` packet stops being broadcast.
 
 **The spacing is a safety rule, not a look.** A tower is about 52 studs wide
 (`STEER_LIMIT_X` ± half a block), and a bomb throws everything within
-`EXPLOSION_RADIUS` (46) of itself. 120 leaves ~68 studs of air between two towers,
+`EXPLOSION_RADIUS` (36) of itself. 120 leaves ~68 studs of air between two towers,
 which is more than a blast on the near edge of one lane can reach into the next.
 **Nobody may wreck a neighbour's tower** — that is the whole reason lanes are this
 far apart rather than merely not overlapping, and it's the single assumption the
@@ -144,11 +160,35 @@ path has to remember to book the next piece, and neither can book it twice.
 waiting on you, so the clock exists only to stop a piece hanging over a tower
 forever.
 
-**Special blocks are a flat 30%** (`SPECIAL_CHANCE`), fed through the same
-`blockTypeChance` lever Roulette uses — a flat promise that bypasses the
-escalating curve *and* `BlockTypes.MAX_CHANCE`. The curve is a function of
+**Special blocks ramp from 20% to 30%** over the match.
+`PvpConstants.specialChanceAt(progress)` is linear from `SPECIAL_CHANCE_START`
+(0.2) to `SPECIAL_CHANCE_END` (0.3), reaching the top at `SPECIAL_CHANCE_FULL_AT`
+(0.85 of `MATCH_SECONDS`), so the last ~27 seconds run flat at 30%.
+
+Rising rather than flat because the mode's shape is rising — the towers that win
+are tall by the last minute, and a hazard costs more the taller the thing it lands
+on. The ramp stops short of the whistle on purpose: a rate that only arrived at
+time would be delivered to nobody.
+
+It rides the same `blockTypeChance` lever Roulette uses, which bypasses the
+escalating curve *and* `BlockTypes.MAX_CHANCE` (0.4). The curve is a function of
 checkpoints cleared, and a PVP match clears none, so it would sit at its 3% floor
 for the whole three minutes.
+
+**The rate is read per piece, in `dealTo`, not once at the whistle** — that is what
+makes it a ramp rather than a constant chosen at the start. `matchProgress()`
+reads 0 outside `PLAYING`, because `endsAt` belongs to the countdown or the
+results panel then. The number goes to `TowerService.dealPiece`'s `chance`
+argument, which outranks `stage.blockTypeChance` and is itself outranked by the
+`blockrate` console knob. The `pvp` gamemode's `blockTypeChance` is left at the
+opening 20% as the fallback for a piece dealt outside a live match.
+
+**Lane platforms are floors, not blocks** — `Constants.FLOOR_PHYSICS`, the same as
+the classic base. With `BLOCK_PHYSICS` they lost their own contacts to the physics
+types' weights, so a Bouncy piece bounced off the bare platform and an Ice one slid
+across it. PVP is where that showed up: a lane starts empty and stays short, so far
+more pieces land on bare platform here than ever land on the classic base. See
+[TowerGame.md](TowerGame.md#block-types) for the arithmetic.
 
 Pieces come from one shared bag (`nextShape` on the server), so all six lanes draw
 from the same sequence. Invisible today because there's no next-piece preview; if
@@ -199,6 +239,64 @@ to *read* the normal zone's weight, which `Zones.luau` had been carrying unused.
 The first zone of a match is always the plain one (`FIRST_ZONE_NORMAL`), so the
 first thirty seconds are spent learning the mode rather than the weather.
 
+### The roll window, and the reel
+
+A zone is **announced before it is true**. `rollZone` picks the next one, puts it
+on the wire immediately, and defers the part that changes the world by
+`ZONE_ROLL_SECONDS` (2) — the packet carries `zoneAt`, the server-time stamp of
+the moment it lands, the same way `endsAt` carries a clock.
+
+Both realms hold off to that stamp. The server delays `TowerService.applyZone`
+(gravity, snow friction, retro studs); `TowerZoneController` delays the visual
+half (sky, weather, fog, block lights, the `ZoneReached` cue). A stamp rather than
+a local countdown is what makes the sky change at the same instant on a good
+connection and a bad one.
+
+The window is what `ZoneReel` spends spinning. The zone line in the HUD's top
+column flicks through the zone names, easing out as it goes, and stops on the one
+that actually rolled at the instant the world takes it — then puts up a card
+saying what that zone *does* (its `warning`, the same line the classic banner
+shows) for five seconds before
+settling back to a plain muted label.
+
+Two things fall out of doing it this way rather than animating on arrival:
+
+- **The reveal isn't spoiled.** A sky that changed while the reel was still
+  turning would answer the question the reel is asking.
+- **Nothing moves under a piece without notice.** Space dropping gravity to a
+  sixth mid-aim is the change most worth two seconds of warning, and the reel is
+  that warning.
+
+The answer *is* on the wire for the whole window, and that's fine: nothing in the
+world has changed yet, so a client that read ahead would only be spoiling its own
+surprise. The first zone of a match skips the window entirely (it arrives with the
+world during the countdown — nothing to reveal, no tower to disturb), and a match
+that ends mid-roll retires the pending apply on both realms rather than dropping
+the next classic round into somebody else's weather.
+
+**The line is the same one the classic HUD banners** — `zone.warning`, read
+straight off the zone by both surfaces. There is exactly one string per zone: the
+longer `description` field is gone, and with it any way for a zone to say one
+thing in a classic round and another in a match. To reword a zone, edit its
+`warning` in `Zones.luau` and both modes follow. The reel holds it for
+`DETAIL_SECONDS` (10, in `ZoneReel.ui.luau`) against the classic banner's
+`Constants.ZONE_WARNING_SECONDS` (4.5) — the reel is the only place a match
+explains a zone, so it stays up longer than a banner a player will see again next
+round.
+
+**Clear Skies has a line now too**, because the reel lands on it as often as on
+anything else and "nothing is out to get you" is an answer worth printing. That
+used to be what `description` was for. Whether a zone *announces itself* — the
+classic banner and its sound — is asked of `Zones.announces(zone)` (`kind ~=
+"normal"`) rather than of whether it has copy, so a zone can have a line without
+the classic run banging a drum about clear weather every third checkpoint.
+
+**Stormy's line used to be the caveat here**, because it names lightning that a
+match didn't have. It has one now — see [The storm](#the-storm) — so the same
+string is true in both modes, which is the outcome one shared line was betting on.
+If a zone ever does genuinely differ between the modes, a per-mode override goes
+back behind a function on `Zones`; one zone would not have earned it.
+
 Everything a zone does still applies: gravity (Space), snow friction, Retro studs,
 the fog, Night's per-block lights, the sky. The server calls
 `TowerService.applyZone`, which dresses every standing block and every held piece
@@ -210,10 +308,49 @@ instead, and `TowerZoneController` reads whichever packet is live.
 over `PvpLanes.xOf(myLane.slot)` at your own tower's height — snow falling over the
 middle of a six-lane board would be weather nobody is standing in.
 
-**Lightning is off during a match.** The whole mechanism is single-lane by
-construction: one warning column, standing on one floor, announced by one
-attribute on the arena. Striking only the middle lane would be worse than not
-striking at all. See [Not built yet](#not-built-yet).
+**Lightning strikes every lane at once** — see [The storm](#the-storm).
+
+## The storm
+
+Stormy behaves in a match the way it does in a classic round: a red column stands
+where the next bolt will land, and a few seconds later it lands. The difference is
+that there are six of them.
+
+**One clock for the whole board.** `PvpService.updateStrikes` warns every live lane
+together and strikes them together, one bolt each, at a random X inside each lane's
+own `STEER_LIMIT_X` range. Independent per-lane clocks were the obvious shape and
+the wrong one: over a three-minute match they would hand one player three bolts and
+their neighbour none, and weather deciding a match is exactly what a competitive
+mode can't have. Same beat, same count, different spot.
+
+| | |
+| --- | --- |
+| Warning | `STRIKE_WARNING_SECONDS` (5) — shorter than the classic ten; there's no turn queue to sit through, so five seconds is two or three pieces' worth of time to build elsewhere or defend what's there |
+| Gap | `STRIKE_MIN_SECONDS`–`STRIKE_MAX_SECONDS` (9–14), measured from the last bolt with the warning *inside* it, so raising a marker can't quietly slow the storm |
+| Runs while | pieces are being dealt, the zone is Stormy, **and** the zone has landed — `zoneId` goes on the wire up to `ZONE_ROLL_SECONDS` before the world takes it, and a column going up mid-spin would give the reel's answer away |
+
+**Each bolt is announced on its own lane's platform.** The classic run publishes
+`LightningWarnAt` / `LightningAt` as attributes on the arena folder, and one
+attribute can only ever describe one bolt — which is the real reason this was
+unbuilt. A lane platform is a better announcer anyway: it's the floor its lane
+builds from, so the client stands the warning column on the part that announced it
+rather than on a height it would have to be told (`zoneBaseHeight` is frozen for
+the whole match). `TowerZoneController` watches the arena and every lane platform
+through one handler that never asks which mode is running.
+
+**The bolt itself is the classic one**, through `TowerService.strikeColumn(x,
+floorY, source)` — the storm's own driver with its three single-lane assumptions
+turned into arguments. What it hits is resolved when it lands, not when the warning
+went up, so seconds of building under a marker count. It needs no lane check:
+`LIGHTNING_RADIUS` (26) against `LANE_SPACING` (120) means a bolt in one lane
+cannot touch the tower in the next — the same arithmetic that already made a
+Lightning *block* safe in a match.
+
+Two edge cases are handled where they'd otherwise bite. A lane **seated during a
+warning** isn't struck by it (pending bolts are keyed by the platform, so a
+recycled seat can't inherit somebody else's bolt) and joins the next round of them.
+A lane **retired mid-warning** takes its column with it, because the marker lives
+on the platform that just left the world.
 
 ## The camera
 
@@ -222,14 +359,27 @@ The HUD's bottom-right button is the same button it always was, doing the PVP jo
 | Shot | When | Frames |
 | ---- | ---- | ------ |
 | Lane tracking | Default | Your lane's X, your tower's top, stretched up to hold the piece you're aiming — the classic `trackingShot`, given an X |
-| Map | Button on, **or** you have no lane, **or** `RESULTS` | The whole board: `x = 0`, every lane across, the tallest tower up |
+| Map | Button on, **or** you have no lane, **or** `RESULTS` | The lanes **in play**: centred between the outermost taken seats, wide enough to hold them, the tallest tower up |
 
-The map shot is centred on the arena origin because the seats are symmetric about
-it — a framing that re-centred on whoever happened to be playing would swing the
-board sideways every time somebody joined. Width is what decides its distance, so
-it gets its own half-width (`PvpLanes.halfWidth() + MAP_PADDING`) and its own
-ceiling (`MAP_MAX_DISTANCE`, 700 vs the classic 420); six lanes is 600 studs across
-and the classic ceiling would crop the outer two off the sides.
+**The map shot scales to how many lanes there are.** `PvpLanes.spanBetween` takes
+the outermost taken seats and returns the centre line between them plus half the
+width they span; the shot aims at that X and stands back far enough to cover that
+width. A two-player match is two towers filling the screen rather
+than two towers adrift in four empty lanes' worth of sky — and since the low seats
+fill first, a fixed shot on the origin wouldn't even have left them *centred*.
+
+The lanes themselves never move for this. Seats stay fixed (slot 2 is slot 2
+whatever the turnout) so a tower can't slide sideways under the camera watching
+it — the towers hold still and the camera moves. The span is measured across the
+outermost taken slots rather than counted, so a lane retired out of the middle
+doesn't collapse the framing onto the survivors.
+
+Width is what decides the distance, so the shot gets its own half-width (the span
+`+ MAP_PADDING`) and its own ceiling (`MAP_MAX_DISTANCE`, 700 vs the classic 420);
+a full board is 600 studs across and the classic ceiling would crop the outer two
+lanes off the sides. A lane's half-width is `CAMERA_MIN_HALF_WIDTH` (34), not the
+platform's 24: a tower overhangs its slab by the steering limit, and framing to
+the slab would crop that off the outer towers.
 
 A player with **no lane** — spectating, or the match was full when they arrived —
 gets the map. There is no "their" tower to ride, and parking on an empty seat would
@@ -240,9 +390,11 @@ whatever the toggle was set to.
 
 Two classic behaviours are explicitly switched off for the duration: the
 `PHASE.GAMEOVER` wide shot (it would frame a tower demolished three minutes ago)
-and the **storm shake** — `stormEndsAt` is a stale number for the whole match, and
-unguarded it runs out somewhere in the middle and shakes the camera for a deadline
-that doesn't exist.
+and the **storm shake** — `stormEndsAt` belongs to a round that isn't running, and
+unguarded the shake fires for a deadline that doesn't exist. The clock is held for
+the whole match now (see above) so it no longer expires mid-match, but the guard
+stays: the camera shouldn't be reading the classic round's deadline during a match
+whatever that deadline happens to say.
 
 ## Aiming
 
@@ -273,27 +425,120 @@ neither has to know what the other draws. A single component that tried to be bo
 would be a file where every line asks which mode it's in.
 
 ```
-                     [  2:14  ]              match clock (red under 30s)
-                  42.5 studs   2nd           your height and place
-                    Snowy Zone               the zone            (◕) drop clock
-                                             ┌──────────────┐
-                                             │  STANDINGS   │
-                                             │ 1 Goblin  87 │  ← always 6 rows
-                                             │ 2 You     42 │     your row is lit
-                                             │ …            │
-  Move — A / D…            T-Shape           [stick][TURN][DROP]      (🔍)
+        ┌────────────────────────┐              ┌─────────────────┐
+        │ 42.5 studs  2:14   2nd │  (◕)         │    STANDINGS    │
+        └────────────────────────┘  drop        │ ➊ 👤 Goblin  87 │
+              Snowy Zone            clock       │ ➋ 👤 You     42 │ ← your row
+        ┌────────────────────┐                  │ ➌ 👤 Stack   38 │
+        │                    │  what it does,   │ 4  👤 Noot    21 │
+        │ Blocks are         │  for 10s after   │ 5   Empty lane  │
+        │ slippery!          │  the reel lands  │ 6   Empty lane  │
+        └────────────────────┘                  └─────────────────┘
+
+                                                                     (🔍)
+                                                              ┌─────────────┐
+  Move — A / D…            T-Shape       [stick][TURN][DROP]  │  💵   1250  │
+  ↑ controls hint, bottom-left                                └─────────────┘
 ```
 
+- **The corners are the classic HUD's corners.** The controls hint is bottom-left
+  and the money counter bottom-right with the camera toggle stacked above it, at
+  the same offsets and from the same components — a player who learned where those
+  live in a classic round shouldn't have to learn again per mode. Both were wrong
+  here at first: the counter wasn't rendered at all, and the hint was passed no
+  position, so it fell to the frame's origin in the **top**-left under Roblox's own
+  topbar.
+- **The top bar is one line and one panel.** Your height, the clock, your place:
+  the clock is the middle third at twice their tier, because it's the number read
+  constantly and they're what you check between pieces. It used to be two stacked
+  panels — a clock over a stats row, each with its own outline — spending 132px of
+  the sky the towers grow into on three numbers that fit in 64.
 - **The standings board is sized for a full lobby** and holds that size at every
   player count. A board that grew a row every time somebody joined would shuffle
-  the whole right edge mid-match.
-- **The drop dial flanks the column** rather than sitting in it — the same rule as
-  the classic turn dial, for the same reason: a dial that comes and goes with every
+  the whole right edge mid-match. The seats nobody is in are **drawn as empty
+  lanes**, so the reserved height reads as part of the board rather than as a board
+  that failed to fill.
+- **A row is a fill, not a panel.** Place disc (gold / silver / bronze for the top
+  three), headshot, name, height — all drawn on the board's own glass. Six nested
+  panels, each with its own 4px outline, is what made the old board read as a
+  spreadsheet.
+- **Your row is marked with a gold edge and a wash**, rather than painted gold: the
+  yellow gem surface at row height swamped the name it was meant to point at.
+- **The drop dial flanks the bar** rather than sitting in it — the same rule as the
+  classic turn dial, for the same reason: a dial that comes and goes with every
   piece must not be able to resize the readout beside it.
 - **The countdown and the final standings are the only centred things**, and both
   are up while nothing is being aimed, so neither can cover a tower being built.
+- **At RESULTS the top bar and the live board go away.** The results panel says
+  everything they were saying, so the last ten seconds are the towers with one
+  surface over them.
 - A spectator's height reads **"Watching"** rather than 0.0 studs, which would be a
   lie rather than an absence.
+- **The reel is the only animated thing in the column**, and it keeps the row
+  height it had as a plain label. Its description card grows *downwards*, off the
+  bottom of the column, where there is nothing to push around.
+
+### The final standings
+
+```
+        ┌───────────────────────────────────┐
+        │          FINAL HEIGHTS            │
+        │ ┌───────────────────────────────┐ │
+        │ │ ➊ 👤 Goblin  WINNER 87.5 studs│ │  gold wash, taller
+        │ └───────────────────────────────┘ │
+        │ │ ➋ 👤 You            42.5 studs│ │  gold edge — you
+        │ │ ➌ 👤 Stackmaster    38.0 studs│ │
+        │ │ 4  👤 Nootnoot      21.5 studs│ │
+        └───────────────────────────────────┘
+```
+
+- **The winner's row is the answer to the match**, so it's taller, washed in the
+  gold of its own medal, and says WINNER — or **YOU WIN!** when it's yours.
+- **The panel's height is measured, not automatic.** `ui.Panel` draws a fixed-size
+  surface: handed height 0 with an auto-sizing list inside it, it painted a sliver
+  of glass and let every row hang off the bottom, unbacked, over the towers. The
+  list and the surface are sized off the same arithmetic now — title, winner row,
+  one row per remaining lane, padding — so a three-player match gets a
+  three-player panel.
+- **It's the one rounded, outline-less surface in the game** (`rounded = true`,
+  `stroke = false` on `ui.Panel`). Every other panel is chrome at the edge of the
+  screen, where the outline is what holds it apart from the sky. This one lands
+  dead centre with the match over and nothing being aimed behind it, and a
+  hard-cornered outline made the last thing anyone looks at read as one more HUD
+  panel. Its padding is plain `theme.padding` rather than the usual
+  `padding + strokeThickness`, because that sum exists to clear a stroke this
+  panel doesn't draw.
+
+### On a phone
+
+The HUD is authored in plain offsets against the 1280×720 reference and rides the
+one root `ScaleLayer`, so it needs nothing per-device: no aspect constraints, no
+second scale layer, no breakpoints. `SteerStick` reads `AbsolutePosition` but only
+ever as a *ratio* against its own track, which is scale-free — see
+[layout-surfaces.md](layout-surfaces.md).
+
+**Landscape is clear at every size tested; portrait phones are not.** The scale
+clamps at `0.5` and the canvas comes out ~720–780 units wide instead of 1280, and
+this HUD spends its width from both edges at once — a 360-wide bar centred with
+the 74 drop dial flanking it, against a 268-wide standings board pinned right.
+Those meet when the canvas drops below **1124 units**:
+
+| Canvas | What overlaps |
+| --- | --- |
+| 1280 and up | nothing |
+| 1558 (phone landscape) | nothing |
+| 780 (portrait, 390×844) | drop dial over the board by 172; top bar by 78 |
+| 720 (portrait, 360×800) | dial by 202, bar by 108, touch row over the camera toggle by 11 |
+
+Not fixed, because both fixes are decisions rather than plumbing: reflow the board
+below the top column (costs ~200 units of sky on every device, since the column
+grows while the zone reel is rolling), or lock the place to landscape with
+`ScreenOrientation`. The second is the honest one for a mode with a fixed side-on
+camera and a 578-wide thumb row, but it's a place-wide call.
+
+Worth knowing either way: the camera toggle is 62 units, which is **31 device
+pixels** at the 0.5 floor — under the ~44px a thumb reliably hits. TURN and DROP
+are 88 tall, so they land right on it.
 
 ## Rewards
 
@@ -342,17 +587,20 @@ whether a hazard can reach across a lane boundary.
 | `PvpPackets.luau` | shared | ByteNet: one `State` packet carrying every lane |
 | `PvpHUD.ui.luau` | shared | Dumb HUD: clock, your height and place, standings, countdown, results |
 | `PvpHUD.story.luau` | shared | UI Labs story — every prop on a slider, all three phases |
+| `ZoneReel.ui.luau` | shared | The zone line: spins through the names for the roll window, lands, says what the zone does |
+| `ZoneReel.story.luau` | shared | UI Labs story — `autoRoll` runs the spin/land/describe loop on its own |
 | `PvpService.server.luau` | server | The match: lanes, the poll, the zone clock, the standings, the payout |
 | `PvpController.client.luau` | client | Match store + `myLane` / `laneOriginX` / `standings` |
 | `PvpView.client.luau` | client | Container: subscribes, runs the clocks, resolves names |
 | `PvpPresentation.client.luau` | client | Registers the HUD as a UIRegistry root |
 
 Touched in TowerGame: `TowerService` (the block engine API, `heldBy`, the round
-break hand-off), `Gamemodes` (the ballot entry), `Zones` (`Zones.roll`),
+break hand-off), `Gamemodes` (the ballot entry), `Zones` (`Zones.roll`, the shared `warning` line),
 `TowerStatsService` (`recordPlayerHeight`), `TowerController` / `TowerAimController`
 / `TowerInputController` / `TowerPointerController` (lane-relative aiming),
 `TowerCameraController` (the two shots), `TowerZoneController` (two packet sources,
-lane-local weather), `TowerView` (stands down), `Commands` (`gamemode`).
+lane-local weather, the deferred paint), `TowerView` (stands down), `Commands`
+(`gamemode`).
 
 ## Studio setup
 
@@ -362,28 +610,34 @@ when missing.
 
 Two things to know if you're building a map:
 
-- **The board occupies `x −324 … +324`** at the classic base's altitude, and the
-  map shot stands up to 700 studs back on +Z. Nothing may sit between `z = +6` and
-  `z = +700` across that whole width, or a map shot will frame it instead of the
-  towers.
-- **The classic base sits between slots 2 and 3** (it's at `x = 0` and the seats
-  are symmetric about it). It's harmless — the same altitude, out of every lane's
-  steering range — but it's visible in the map shot.
+- **The board occupies `x −324 … +324`** at the classic base's altitude (the map
+  shot frames a little wider than that, to `±334`), and it stands up to 700 studs
+  back on +Z. Nothing may sit between `z = +6` and `z = +700` across that whole
+  width, or a map shot will frame it instead of the towers.
+- **The classic base is taken off the board for the length of a match** and put
+  back after — `setBaseOnBoard` in `TowerService`, called around `runMatch`. It
+  sits at `x = 0`, which with symmetric seats is the gap between slots 2 and 3: a
+  seventh slab at lane altitude that nobody is building on. It's parented away
+  rather than hidden, so it takes its shadow, its collisions and anything you've
+  hung off it with it, and comes back the same part, tag and all. `baseTopY` is
+  untouched — the lanes are built at that altitude and every client's camera reads
+  it off the arena attribute for the whole match.
 
 Set **`Players.MaxPlayers` to 6** in Game Settings; a script can't.
 
 ## Not built yet
 
-- **Never play-tested.** Written end to end, run zero times. The numbers most
-  likely to be wrong first are `LANE_SPACING` (does a bomb really stay in its
-  lane?), `MATCH_SECONDS` and `PIECE_GAP_SECONDS`.
-- **No lightning.** Stormy still rains and still destroys struck blocks, but the
-  strike mechanism is single-lane and is switched off for a match. Making it work
-  means a warning column per lane, which means the warning stops being one
-  attribute on the arena.
-- **No zone banner.** The classic HUD's warning card is TowerHUD's; the PVP HUD
-  names the zone in its top column instead. A banner for special zones is worth
-  adding.
+- **Only ever play-tested solo — one lane.** A full match has been run start to
+  finish with a single player: lanes build, the clock runs, the standings pay out,
+  the camera frames the lane, and the classic base leaves and comes back on cue.
+  Nothing with **two or more towers on the board** has been exercised, so the
+  numbers most likely to be wrong first are still `LANE_SPACING` (does a bomb
+  really stay in its lane?), `MATCH_SECONDS` and `PIECE_GAP_SECONDS`.
+- **The storm has never been seen with two lanes in it.** Strikes are built (see
+  [The storm](#the-storm)) and verified against a solo lane — warnings raised in
+  the right column, bolts resolving onto the tower's top — but "six markers on
+  screen at once" is exactly the kind of thing that reads differently with a board
+  full of them.
 - **No spectator lane picker.** A player with no lane watches the map and can't
   choose a tower to follow.
 - **Pieces come from one shared bag**, so all six lanes draw the same sequence.

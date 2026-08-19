@@ -10,14 +10,28 @@ return {
 	FRAME_ID = "GamemodeVote",
 
 	-- How long the poll is open.
+	--
+	-- The whole game is parked behind this — the turn queue, the storm clock, the
+	-- board — so it's a beat to read four panels and stamp one, not a debate.
+	-- There's no early close: the poll always runs its full length even once
+	-- everyone has stamped, so this number *is* the wait every round pays.
+	--
+	-- Two other places are written against it and go stale if it moves:
+	-- FavouritePrompt's `PROMPT_DELAY` note (it has to clear VOTE_SECONDS +
+	-- RESULT_SECONDS to ask after the ballot rather than over it) and the table in
+	-- docs/game/GamemodeVote.md.
 	VOTE_SECONDS = 15,
 
 	-- How many panels a ballot holds. Every `pinned` mode is always on it; the
 	-- rest of the slots are filled at random from what's left, re-rolled per
 	-- vote. Registering a tenth gamemode should make the ballot more varied, not
-	-- wider — three panels is what fits a phone in landscape, and a wall of
-	-- options is a worse choice than a short one.
-	BALLOT_SIZE = 3,
+	-- wider — a wall of options is a worse choice than a short one.
+	--
+	-- Four, of which two are the permanent pair (Classic and PVP, both `pinned`)
+	-- and two are rolled. Two rolled slots rather than one is what stops the
+	-- ballot being a referendum on a single twist: with one slot the question was
+	-- "this twist or not", and the answer to that is mostly "not".
+	BALLOT_SIZE = 4,
 
 	-- How long the winner stays on screen after the clock ends, before the frame
 	-- closes and play resumes.

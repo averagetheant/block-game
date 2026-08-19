@@ -42,6 +42,8 @@ export type State = {
 	matchSeconds: number,
 	zoneId: number,
 	zoneSky: number,
+	-- Server time the announced zone takes effect. See `zoneRolling`.
+	zoneAt: number,
 	lanes: { Lane },
 }
 
@@ -59,6 +61,7 @@ local data: State = {
 	matchSeconds = PvpConstants.MATCH_SECONDS,
 	zoneId = 1,
 	zoneSky = 1,
+	zoneAt = 0,
 	lanes = {},
 }
 
@@ -107,6 +110,18 @@ function PvpController.secondsLeft(): number
 		return 0
 	end
 	return math.max(0, data.endsAt - workspace:GetServerTimeNow())
+end
+
+-- Whether the zone on the packet is still being rolled — announced, but not yet
+-- true in the world.
+--
+-- The server hands out the next zone `ZONE_ROLL_SECONDS` before it takes effect
+-- and puts the moment it lands on the wire, so this is the one question the HUD's
+-- reel and `TowerZoneController`'s repaint both hang off. Reading the stamp
+-- rather than counting from when the packet arrived is what makes the reel stop,
+-- the sky change and the cue play at the same instant on every machine.
+function PvpController.zoneRolling(): boolean
+	return data.zoneAt > workspace:GetServerTimeNow()
 end
 
 -- The lanes tallest first, which is the order the standings are read in. Sorted

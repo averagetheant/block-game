@@ -56,6 +56,7 @@ local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 -- Server-realm siblings (ServerScriptService.Features.TowerGame.*).
 local CashService = require(script.Parent.CashService)
 local CheckpointQuestService = require(script.Parent.CheckpointQuestService)
+local PlatformLayouts = require(script.Parent.PlatformLayouts)
 local TowerStatsService = require(script.Parent.TowerStatsService)
 
 -- Whose skin pack is on the piece. Read once per turn, on the server, so the
@@ -179,7 +180,18 @@ local PHASE = Constants.PHASE
 local CLASSIC_LANE = 0
 
 local arena: Folder
-local base: BasePart
+-- The base's slabs and where each of them hangs when it's on the board.
+--
+-- A list rather than one part because the base is stamped out of a *layout* now
+-- (see PlatformLayouts) and a layout is one or more slabs — Split is two with a
+-- gap down the middle. The parent is kept per slab because a PVP match takes the
+-- base off the board (see `setBaseOnBoard`) and has to put it back exactly where
+-- it was, and a Studio-authored base is tagged rather than parented by us, so it
+-- may live anywhere.
+--
+-- Note the base is deliberately *not* in `platforms`: that list is the checkpoint
+-- floors, and everything in it is demolished when the next floor lands.
+local baseSlabs: { { part: BasePart, parent: Instance? } } = {}
 local baseTopY = 0
 
 local queue: { Player } = {}
@@ -334,6 +346,23 @@ local function applyStage(modifier: Gamemodes.Modifier)
 	-- `restartStormClock` owns it. Every applyStage call is followed by one.
 end
 
+-- Park the storm clock at a full stage, for as long as the poll keeps calling it.
+--
+-- `stormEndsAt` is an absolute server time and the HUD draws the bar as the
+-- distance from now to it, so a clock that is merely *not read* still drains on
+-- screen. Not reading it is what stops the storm firing; this is what stops it
+-- looking like it's about to. Without it a PVP match and the ballot after it
+-- handed the next classic round a bar that had spent both counting down — the
+-- storm was never going to arrive, and every player watching it saw a minute
+-- left on a round that hadn't started.
+--
+-- `state.stormSeconds` rather than the gamemode's, so a stage reached deep into a
+-- run is held at its own grown length rather than snapping back to the first
+-- stage's.
+local function holdStormClock()
+	state.stormEndsAt = workspace:GetServerTimeNow() + state.stormSeconds
+end
+
 -- Start the current stage's clock, and publish how long it runs.
 --
 -- The length grows with the floors already cleared, matching the gap growing
@@ -347,7 +376,7 @@ end
 -- the deadline out without lengthening the stage it belongs to.
 local function restartStormClock()
 	state.stormSeconds = stage.stormSeconds + state.checkpoints * Constants.STORM_TIME_GROWTH
-	state.stormEndsAt = workspace:GetServerTimeNow() + state.stormSeconds
+	holdStormClock()
 end
 
 -- The Stormy zone's lightning. `nextStrikeAt` is when the next bolt is due;
@@ -597,13 +626,43 @@ end
 
 -- ---------------------------------------------------------------- the arena --
 
--- A Studio-authored platform wins if one is tagged; otherwise we generate the
--- prototype slab so the game is playable in an empty place.
-local function findOrBuildBase(): BasePart
+-- The ground the run starts on, and the altitude a height of 0 means.
+--
+-- Three answers, in order of how much the place has asked for:
+--
+--   1. A part tagged BASE_TAG. Someone built their own base in Studio and this
+--      file's opinion is not wanted — including its opinion about layouts.
+--   2. A layout eligible for floor 0 (see PlatformLayouts). This is where Split
+--      and the rest come in, and it's why a run doesn't always open on a slab.
+--   3. The generated prototype slab, so the game is playable in an empty place.
+--
+-- Returns the slabs and the scoreline. The scoreline is the layout's *pivot*,
+-- not the top of whichever slab happens to be highest: the author decides which
+-- surface is the ground, which is what lets a layout have a wall above it or a
+-- pit below it without either one moving the score.
+local function buildBase(): ({ BasePart }, number)
 	for _, tagged in CollectionService:GetTagged(Constants.BASE_TAG) do
 		if tagged:IsA("BasePart") then
-			return tagged
+			-- Adopted, not built — so the two things a floor cannot be wrong about
+			-- are asserted here rather than trusted. A stock Studio part is
+			-- unanchored with plastic physics (friction 0.3, elasticity 0.5), which
+			-- is a floor that both falls away and bounces what lands on it.
+			-- Everything else about the part is the author's: size, position,
+			-- colour, material, whatever they hung off it.
+			tagged.Anchored = true
+			tagged.CustomPhysicalProperties = Constants.FLOOR_PHYSICS
+			return { tagged }, tagged.Position.Y + tagged.Size.Y / 2
 		end
+	end
+
+	-- Where the prototype slab's top surface has always sat, so a layout base and
+	-- a generated base put the ground at the same altitude and a map built around
+	-- the arena works with either.
+	local floorY = Constants.BASE_POSITION.Y + Constants.PLATFORM_SIZE.Y / 2
+
+	local layout = PlatformLayouts.pick("base", 0)
+	if layout then
+		return PlatformLayouts.build(layout, floorY, arena, "Base"), floorY
 	end
 
 	local part = Instance.new("Part")
@@ -615,10 +674,11 @@ local function findOrBuildBase(): BasePart
 	part.Material = Enum.Material.SmoothPlastic
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
+	-- The ground decides its own contacts; see FLOOR_PHYSICS.
+	part.CustomPhysicalProperties = Constants.FLOOR_PHYSICS
 	part.Parent = arena
 	CollectionService:AddTag(part, Constants.BASE_TAG)
-	return part
+	return { part }, floorY
 end
 
 -- Where streaming is centred, for every player at once.
@@ -663,27 +723,68 @@ local function buildArena()
 		arena.Parent = workspace
 	end
 
-	base = findOrBuildBase()
-	baseTopY = base.Position.Y + base.Size.Y / 2
+	local slabs, floorY = buildBase()
+	baseSlabs = {}
+	for _, slab in slabs do
+		table.insert(baseSlabs, { part = slab, parent = slab.Parent })
+	end
+	baseTopY = floorY
 	-- Published for the client camera; see Constants.BASE_TOP_ATTRIBUTE.
 	arena:SetAttribute(Constants.BASE_TOP_ATTRIBUTE, baseTopY)
 
 	streamingFocus = buildStreamingFocus()
 end
 
+-- Take the classic base off the board, or put it back.
+--
+-- A PVP match builds a platform per lane and the base belongs to none of them: it
+-- stands at `x = 0`, which with symmetric seats is the gap between slots 2 and 3
+-- — a seventh slab, at lane altitude, that nobody is building on and that the map
+-- shot frames along with the towers. So the mode that doesn't use it doesn't have
+-- it.
+--
+-- Parented away rather than made invisible, so it takes its shadow, its
+-- collisions and anything a map-builder has hung off it with it. It's the same
+-- part on the way back, tag and all, so a Studio-authored base survives a match
+-- unchanged.
+--
+-- `baseTopY` is deliberately untouched. It's the altitude a height of 0 means,
+-- the lanes are built at that same altitude (`PvpConstants.LANE_Y`), and every
+-- client's camera reads it off the arena attribute for the whole match — so the
+-- number has to outlive the part.
+local function setBaseOnBoard(onBoard: boolean)
+	for _, slab in baseSlabs do
+		slab.part.Parent = if onBoard then slab.parent else nil
+	end
+end
+
 -- --------------------------------------------------------------- the pieces --
 
 -- Sounds live on the piece itself so they're positional and replicate with it —
 -- the server calls :Play() and every client hears it from the right place.
+--
+-- Block-only, which is why BLOCK_VOLUME_SCALE is applied in here rather than at
+-- the two call sites: every Sound this function has ever made hangs off a block.
 local function attachSound(part: BasePart, name: string, soundId: string, volume: number): Sound
 	local sound = Instance.new("Sound")
 	sound.Name = name
 	sound.SoundId = soundId
-	sound.Volume = volume
+	sound.Volume = volume * Constants.BLOCK_VOLUME_SCALE
 	sound.RollOffMaxDistance = Constants.SOUND_RANGE
 	sound.RollOffMode = Enum.RollOffMode.InverseTapered
 	sound.Parent = part
 	return sound
+end
+
+-- A cue coming out of a block: the drop, the glue weld, the bomb's beep, and the
+-- landing sample for a type that owns its own.
+--
+-- Wrapped rather than calling `Sfx.playAt` directly so BLOCK_VOLUME_SCALE lands
+-- on all of them from one place. `Sfx.playAt` itself stays honest about what it
+-- is — a positional one-shot on any part — because the day something that isn't
+-- a block wants one, it should not inherit the block mix.
+local function playAtBlock(cue: string, part: BasePart, volumeScale: number?)
+	Sfx.playAt(cue, part, (volumeScale or 1) * Constants.BLOCK_VOLUME_SCALE)
 end
 
 -- A fresh colour per piece. Random hue at a fixed saturation and value, rather
@@ -796,11 +897,56 @@ end
 -- in place when it reveals what it turned out to be.
 local TYPE_TELL_NAME = "TypeTell"
 
+-- The second, fainter Highlight a block wears once something has been glued to
+-- it. Its own name so it can't be confused with the type tell above — a block can
+-- carry both, and the Mystery reveal re-tints only the one it owns.
+local GLUE_TELL_NAME = "GlueTell"
+-- What one wears when the gluing block can't say (a Cmdr-forced glue with the
+-- type stripped, say). The real colour comes off the block doing the gluing —
+-- see `markGlued` — so the two always read as one thing.
+local GLUE_TELL_FALLBACK = Color3.fromRGB(126, 240, 138)
+
+-- The tiled pattern a skin can wear over its material (Duck's, and only Duck's).
+-- Named so it's findable in the explorer; the client mirrors these onto the
+-- rounded body by class rather than by name, so nothing depends on the string.
+local SKIN_TEXTURE_NAME = "SkinTexture"
+
+-- Dress a cell in the skin's texture, if it has one.
+--
+-- All six faces, because a block is seen from every side as the tower turns and
+-- a pattern that stopped at the silhouette would read as a bug. Tiled at exactly
+-- one tile per cell face rather than stretched: a piece is one to four cells
+-- depending on the shape, and stretching would make the pattern a different size
+-- on an I than on an O.
+--
+-- A Texture rather than the material itself, so the hue roll underneath still
+-- comes through and every effect that repaints a block — a bomb's red flash, a
+-- burn charring it — keeps working with nothing written for it here.
+local function applySkinTexture(part: BasePart, skin: BlockSkins.Skin)
+	local id = skin.texture
+	if id == nil then
+		return
+	end
+	for _, face in Enum.NormalId:GetEnumItems() do
+		local texture = Instance.new("Texture")
+		texture.Name = SKIN_TEXTURE_NAME
+		texture.Texture = id
+		texture.Face = face
+		texture.StudsPerTileU = Constants.BLOCK_SIZE
+		texture.StudsPerTileV = Constants.BLOCK_SIZE
+		texture.Parent = part
+	end
+end
+
+-- `color` names the shade instead of rolling one. Only the Clone type passes it:
+-- a copy has to come out the colour of the block it copied, and every other caller
+-- wants a fresh shade.
 local function buildPiece(
 	shape: Shapes.Shape,
 	skin: BlockSkins.Skin,
 	blockType: BlockTypes.BlockType?,
-	pack: SkinPacks.SkinPack?
+	pack: SkinPacks.SkinPack?,
+	color: Color3?
 ): (Model, BasePart, Color3)
 	local model = Instance.new("Model")
 	model.Name = `Piece_{shape.name}`
@@ -808,7 +954,7 @@ local function buildPiece(
 	-- colour pack rolls within its own family instead of across the whole wheel
 	-- — still a fresh shade per block, so the pieces stay legible as separate
 	-- blocks rather than merging into one flat mass.
-	local color = SkinPacks.colorFor(pack) or randomColor()
+	local color = color or SkinPacks.colorFor(pack) or randomColor()
 
 	-- A colour pack sets no material, so the rolled skin's own surface (and its
 	-- sounds) survive underneath the tint.
@@ -844,6 +990,7 @@ local function buildPiece(
 		cube.Anchored = true
 		cube.CFrame =
 			CFrame.new(cell.X * Constants.BLOCK_SIZE, cell.Y * Constants.BLOCK_SIZE, Constants.PLANE_Z)
+		applySkinTexture(cube, skin)
 		cube.Parent = model
 		if root == nil then
 			root = cube
@@ -1071,6 +1218,15 @@ local function applyZoneLook(
 		return
 	end
 
+	-- A statue is scenery, which is the same argument from the other end: an
+	-- Anchor block has been turned to stone (`petrify`) and is never moving again,
+	-- so there's no skin left to re-dress and no physics left to matter. Without
+	-- this the next zone change would hand it its old material back and the stone
+	-- would last until the weather turned.
+	if model:GetAttribute(Constants.STATUE_ATTRIBUTE) then
+		return
+	end
+
 	local zone = Zones.get(state.zoneId)
 	-- A pack that owns the surface keeps it through every zone, so Retro only gets
 	-- to stud the blocks whose placer wasn't wearing one. A colour pack doesn't
@@ -1111,6 +1267,17 @@ local function applyZoneLook(
 			setSurfaces(part, Enum.SurfaceType.Smooth)
 		end
 		part.CustomPhysicalProperties = physics
+		-- A textured skin steps aside under Retro for the same reason the rounded
+		-- body does: studs and a tiled pattern on the same face are two looks
+		-- fighting, and the zone's is the one that's meant to win. Only reachable
+		-- when the skin arrived without its pack — a pack that pins a skin owns the
+		-- surface, so `retro` is already false for a real Duck block — but the cmdr
+		-- `skin` command can put one there, and that shouldn't look broken.
+		for _, texture in part:GetChildren() do
+			if texture:IsA("Texture") then
+				texture.Transparency = if retro then 1 else 0
+			end
+		end
 	end
 end
 
@@ -1128,6 +1295,17 @@ local function applyZoneToTower()
 	for _, piece in heldBy do
 		applyZoneLook(piece.model, piece.skin, piece.blockType, piece.pack)
 	end
+end
+
+-- Back to clear skies and default gravity, re-dressing whatever is standing.
+--
+-- Two paths hand the world to a classic round that hasn't started yet — the end
+-- of a run and the end of a PVP match — and neither may hand it back wearing the
+-- last one's weather.
+local function restoreDefaultZone()
+	state.zoneId = Zones.DEFAULT_ID
+	state.zoneSky = math.random(1, 255)
+	applyZoneToTower()
 end
 
 -- Force the tower straight into a given zone, outside the usual "roll one on
@@ -1225,8 +1403,36 @@ local function playImpact(block: Block, speed: number)
 		0,
 		1
 	)
+	-- A type may own the landing outright (`BlockTypes.impactCue`), and the Anvil
+	-- does: what it lands on is the point of it, and a five-ton block landing on a
+	-- grass footstep is the joke told wrong. Played *instead of* the skin's sample
+	-- rather than over it — two impacts on the same frame read as a stutter, not
+	-- as weight.
+	--
+	-- Through the cue library rather than the block's own Sound, because it's a
+	-- Sound a human tuned in Studio: `playAt` clones it with that tuning and the
+	-- landing speed scales it, the same way the skin's own sample is scaled below.
+	local blockType = block.blockType
+	local cue = if blockType then blockType.impactCue else nil
+	if cue ~= nil then
+		playAtBlock(cue, block.root, (0.35 + 0.65 * loudness) * Constants.IMPACT_VOLUME_SCALE)
+		return
+	end
+
+	-- A fresh take per landing for a skin that has a folder of them; the same id
+	-- back for one that doesn't, which makes this a no-op write. Pitch alone
+	-- isn't enough variety at this repetition rate — the ear catches a repeated
+	-- *sample* long before it catches a repeated pitch, and a tower is forty
+	-- landings of the same material.
+	sound.SoundId = BlockSkins.impactIdFor(block.skin)
+
 	local range = block.skin.pitchRange
-	sound.Volume = block.skin.volume * (0.35 + 0.65 * loudness)
+	-- Overwrites what `attachSound` set, so the scale has to be re-applied here —
+	-- this is the same Sound, re-tuned for how hard this particular landing was.
+	sound.Volume = block.skin.volume
+		* Constants.BLOCK_VOLUME_SCALE
+		* Constants.IMPACT_VOLUME_SCALE
+		* (0.35 + 0.65 * loudness)
 	sound.PlaybackSpeed = range[1] + math.random() * (range[2] - range[1])
 	sound:Play()
 end
@@ -1239,10 +1445,42 @@ end
 -- it just clipped nearby, so welding then glues it to whatever it happened to
 -- graze on the way down. Waiting until it stops means the contacts we find are
 -- the ones it's actually resting on.
+-- The mark a glued block wears for the rest of the run.
+--
+-- Glue is the only effect in the game whose result is *invisible*: the welds are
+-- real and permanent, and the only way to find out which blocks were caught in
+-- the cluster was to knock the tower and see what refused to move. This is that
+-- answer, drawn on the blocks themselves.
+--
+-- Idempotent by name — a block glued twice, or glued by two different pieces,
+-- wears one mark rather than a stack of them.
+--
+-- `tell` is the gluing block's own colour, handed down rather than looked up, so
+-- the piece that did it and the blocks it did it to are the same green by
+-- construction — including when a Mystery turns out to have been Glue.
+local function markGlued(model: Model, tell: Color3)
+	if model:FindFirstChild(GLUE_TELL_NAME) then
+		return
+	end
+	local highlight = Instance.new("Highlight")
+	highlight.Name = GLUE_TELL_NAME
+	highlight.FillColor = tell
+	highlight.OutlineColor = tell
+	highlight.FillTransparency = Constants.GLUE_TELL_TRANSPARENCY
+	highlight.OutlineTransparency = Constants.GLUE_TELL_OUTLINE_TRANSPARENCY
+	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
+	highlight.Parent = model
+end
+
 local function glueBlock(block: Block)
 	local params = OverlapParams.new()
 	params.FilterType = Enum.RaycastFilterType.Exclude
 	params.FilterDescendantsInstances = { block.model }
+
+	-- Collected as a set and marked after the sweep, because the box overlap
+	-- returns *cells*: a four-cell neighbour comes back four times and would be
+	-- marked four times, and an I-piece welded along its length four more.
+	local glued: { [Model]: true } = {}
 
 	for _, part in block.model:GetChildren() do
 		if not part:IsA("BasePart") then
@@ -1254,12 +1492,31 @@ local function glueBlock(block: Block)
 			weld.Part0 = part
 			weld.Part1 = other
 			weld.Parent = part
+
+			-- Only blocks get marked. Glue welds to whatever it's touching, and
+			-- that routinely includes the base and the checkpoint platform it's
+			-- standing on — but those aren't in `blockByModel`, so "is it a block"
+			-- and "is it not the floor" are the same question, answered once.
+			--
+			-- `blockByModel` directly rather than `blockOf`, which is a local
+			-- declared further down the file and would still be nil here.
+			local model = other:FindFirstAncestorOfClass("Model")
+			local neighbour = if model then blockByModel[model] else nil
+			if neighbour ~= nil and neighbour ~= block then
+				glued[neighbour.model] = true
+			end
 		end
+	end
+
+	local blockType = block.blockType
+	local tell = if blockType then blockType.tell else GLUE_TELL_FALLBACK
+	for model in glued do
+		markGlued(model, tell)
 	end
 
 	-- Once for the block, not once per weld: a piece settling against four
 	-- neighbours would otherwise fire this four times on the same frame.
-	Sfx.playAt("Glue", block.root)
+	playAtBlock("Glue", block.root)
 end
 
 -- Every explosion in the game goes through here — the Bomb type, the Stormy
@@ -1308,20 +1565,31 @@ local function blastAt(
 	end
 end
 
--- The blast pointed the other way: everything in reach is tugged *toward* the
--- origin instead of away from it, with the same distance falloff.
+-- One frame of a Magnet's field: everything in reach is dragged *toward* the
+-- origin, with the same distance falloff a blast uses pointed the other way.
 --
--- No upward bias, which is the one place it deliberately departs from `blastAt`.
--- A blast lifts because a tower erupting reads better than one swept sideways; a
--- pull that lifted would hand the room free height for landing one piece, and
--- height is the thing the whole game is scored on.
+-- **A velocity write, not `ApplyImpulse`, and once per frame rather than once.**
+-- Both departures come from the same failure. A blast lands on blocks that are
+-- already moving or about to be; a Magnet lands on a tower that has been sitting
+-- still for a minute, and a settled Roblox assembly is *asleep*. One impulse into
+-- a sleeping stack is the whole effect, spent in a frame, against static friction
+-- that erases it in a fifth of a second — which is why two rounds of raising the
+-- number changed nothing anybody could see. Writing `AssemblyLinearVelocity` is
+-- what reliably wakes an assembly, and re-applying it every frame for
+-- MAGNET_SECONDS means friction has to be beaten continuously instead of once.
 --
--- Blocks that have been anchored (the Anchor type, and the platforms) ignore
--- impulses on their own, so a Magnet can't drag the floor out from under anyone.
-local function pullAt(origin: Vector3, radius: number, impulse: number, exclude: Block?)
+-- Accumulating velocity rather than setting it, so a block already moving is
+-- steered rather than stopped, and so the field builds over its window instead of
+-- teleporting anything on the first frame.
+--
+-- Anchored blocks are skipped outright (the Anchor type, the platforms, the
+-- checkpoint floors): a Magnet must not drag the floor out from under anyone, and
+-- an anchored part silently ignoring a velocity write is a coincidence to rely on
+-- rather than a rule.
+local function pullTick(origin: Vector3, radius: number, accel: number, deltaTime: number, exclude: Block?)
 	for _, other in blocks do
 		local root = other.root
-		if root.Parent == nil or other == exclude then
+		if root.Parent == nil or root.Anchored or other == exclude then
 			continue
 		end
 		local offset = origin - root.Position
@@ -1333,12 +1601,253 @@ local function pullAt(origin: Vector3, radius: number, impulse: number, exclude:
 			continue
 		end
 		local falloff = 1 - distance / radius
-		root:ApplyImpulse(offset.Unit * impulse * falloff * root.AssemblyMass)
+		-- Normalised after the lift is added, so the bias tilts the pull rather
+		-- than adding strength to it — the same shape `blastAt` uses. The lift is
+		-- what unsticks a resting block instead of grinding it into the floor it
+		-- sits on; because the tug is inward, what a lifted block does next is come
+		-- down closer in.
+		local direction = (offset.Unit + Vector3.new(0, Constants.MAGNET_LIFT, 0)).Unit
+		root.AssemblyLinearVelocity += direction * accel * falloff * deltaTime
 	end
 end
 
+-- A Magnet has *settled*: it holds a field for MAGNET_SECONDS, pulling the tower
+-- in around it, and then it's an ordinary block forever.
+--
+-- The origin is re-read each frame rather than captured, so a magnet that gets
+-- shoved while it's pulling drags its field along with it — the block is the
+-- magnet, not the spot it landed on.
 local function magnetiseBlock(block: Block)
-	pullAt(block.root.Position, Constants.MAGNET_RADIUS, Constants.MAGNET_IMPULSE, block)
+	task.spawn(function()
+		local elapsed = 0
+		while elapsed < Constants.MAGNET_SECONDS do
+			local deltaTime = task.wait()
+			elapsed += deltaTime
+			-- Burned, blasted, stormed or sacrificed in the meantime: the field goes
+			-- with the block that was making it.
+			if block.root.Parent == nil then
+				return
+			end
+			pullTick(
+				block.root.Position,
+				Constants.MAGNET_RADIUS,
+				Constants.MAGNET_ACCEL,
+				deltaTime,
+				block
+			)
+		end
+	end)
+end
+
+-- The live block a part belongs to, or nil for anything that isn't one: the base,
+-- a checkpoint platform, the wall, a sacrifice corpse on its way out. Everything
+-- in the tower is a cell of some model, and `blockByModel` is the only list that
+-- says which of those models the game is still keeping books on — which is what
+-- makes "not a block" safe by construction rather than by enumeration.
+local function blockOf(part: BasePart): Block?
+	local model = part:FindFirstAncestorOfClass("Model")
+	return if model then blockByModel[model] else nil
+end
+
+-- What a settled block is standing on: the nearest block under any of its cells,
+-- within SACRIFICE_REACH of that cell's underside.
+--
+-- One ray per cell, from the cell's own centre straight down. Starting at the
+-- centre rather than on the bottom face is deliberate — a ray that begins exactly
+-- on a surface is free to miss it, and a settled block's underside is *touching*
+-- the thing this is looking for. The block's own model is excluded, so starting
+-- inside itself costs nothing.
+--
+-- Nearest wins, so a piece bridging two towers takes the one it's actually
+-- resting on rather than whichever cell happened to be walked first. Anything the
+-- ray hits that isn't a live block — the base, a checkpoint platform, the wall —
+-- simply isn't in `blockByModel` and is therefore safe by construction.
+local function blockUnder(block: Block): Block?
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { block.model }
+
+	local found: Block? = nil
+	local nearest = math.huge
+
+	for _, part in modelParts(block.model) do
+		local reach = part.Size.Y / 2 + Constants.SACRIFICE_REACH
+		local hit = workspace:Raycast(part.Position, Vector3.new(0, -reach, 0), params)
+		if hit == nil or hit.Distance >= nearest then
+			continue
+		end
+		local other = blockOf(hit.Instance)
+		if other == nil or other == block then
+			continue
+		end
+		found = other
+		nearest = hit.Distance
+	end
+
+	return found
+end
+
+-- The visible half of a sacrifice: the block that was taken glows, drifts away
+-- and fades out.
+--
+-- What flies away is a **copy**. The victim itself is destroyed on the same frame
+-- it's hit, and that ordering is the whole trick: the moment a block is
+-- sacrificed it has to stop being part of the tower — no collision, no height, no
+-- weld dragging a glued neighbour after it, nothing for a bomb or a burn to find
+-- — and a corpse that is still the real block is a block every one of those
+-- systems can still see. Cloning keeps the removal exactly what it always was (a
+-- Destroy) and leaves the animation as pure furniture: anchored, uncollidable,
+-- unqueryable, in the arena for a second and then not.
+--
+-- It needs no telling to look right, either. Each client bodies any model in the
+-- arena carrying a shape attribute (see TowerBodyController) and drives that body
+-- from the cells' colour, material and transparency — the same route a burning
+-- block chars and a ghost goes see-through by — so the corpse wears the shell the
+-- block wore and this drives it from the server without knowing bodies exist.
+local function playSacrificeFx(model: Model, away: Vector3)
+	-- A Noob is a character rig rather than a tetromino, and a rag-doll corpse of
+	-- one drifting up the screen is a different effect than the one being asked
+	-- for here. It's taken without the send-off.
+	if model:GetAttribute(Constants.SHAPE_ATTRIBUTE) == nil then
+		return
+	end
+
+	local corpse = model:Clone()
+	corpse.Name = Constants.SACRIFICE_CORPSE_NAME
+	-- Everything that made it a block rather than a picture of one: the welds
+	-- holding it to the tower, the sounds it would play on the way out, the type
+	-- tell and the name plate.
+	for _, descendant in corpse:GetDescendants() do
+		if
+			descendant:IsA("WeldConstraint")
+			or descendant:IsA("Sound")
+			or descendant:IsA("Highlight")
+			or descendant:IsA("BillboardGui")
+		then
+			descendant:Destroy()
+		end
+	end
+
+	-- Anchored, so no weld is needed to hold the cells together and no physics
+	-- can touch them; every cell is moved by hand from the pivot below.
+	local pivot = corpse:GetPivot()
+	type Cell = { part: BasePart, offset: CFrame, color: Color3, transparency: number }
+	local cells: { Cell } = {}
+	for _, part in corpse:GetChildren() do
+		if not part:IsA("BasePart") then
+			continue
+		end
+		part.Anchored = true
+		part.CanCollide = false
+		part.CanQuery = false
+		part.CanTouch = false
+		part.Massless = true
+		part.CastShadow = false
+		part.Material = Enum.Material.Neon
+		table.insert(cells, {
+			part = part,
+			offset = pivot:Inverse() * part.CFrame,
+			color = part.Color,
+			transparency = part.Transparency,
+		})
+	end
+	if #cells == 0 then
+		corpse:Destroy()
+		return
+	end
+
+	corpse.Parent = arena
+
+	task.spawn(function()
+		local elapsed = 0
+		while elapsed < Constants.SACRIFICE_FADE_SECONDS do
+			elapsed += RunService.Heartbeat:Wait()
+			if corpse.Parent == nil then
+				return
+			end
+
+			local t = math.clamp(elapsed / Constants.SACRIFICE_FADE_SECONDS, 0, 1)
+			-- Glow first, go second. The flash is what says *this was taken* while
+			-- the block is still solid enough to be recognised as the one that
+			-- went; the fade is the leaving.
+			local glow = math.clamp(elapsed / Constants.SACRIFICE_FLASH_SECONDS, 0, 1)
+			local fade = math.clamp(
+				(t - Constants.SACRIFICE_HOLD) / (1 - Constants.SACRIFICE_HOLD),
+				0,
+				1
+			)
+			-- Up, and away from whatever took it. Slow on purpose: this is a block
+			-- being spent, and a corpse that shoots off reads as an explosion.
+			local drift = (Vector3.new(0, Constants.SACRIFICE_RISE, 0) + away * Constants.SACRIFICE_DRIFT)
+				* elapsed
+			-- Spun about Z only. Every piece is axis-aligned in the play plane, so
+			-- the piece's own Z is the world's, and a tumble on any other axis
+			-- would turn the shape edge-on to the camera.
+			local moved = CFrame.new(drift) * pivot * CFrame.Angles(0, 0, Constants.SACRIFICE_SPIN * elapsed)
+
+			for _, cell in cells do
+				local part = cell.part
+				part.CFrame = moved * cell.offset
+				part.Color = cell.color:Lerp(Constants.SACRIFICE_GLOW, glow)
+				-- Measured from what the cell already wore: a skin can be
+				-- translucent to begin with (Needoh is), and fading from 0 would
+				-- make it briefly *more* solid on its way out.
+				part.Transparency = cell.transparency + (1 - cell.transparency) * fade
+			end
+		end
+
+		corpse:Destroy()
+	end)
+end
+
+-- Sacrifice blocks: the block they hit is unmade, and they carry on into the hole
+-- it leaves.
+--
+-- The only type whose effect is a *trade* rather than a hazard. Every other
+-- special piece is something to survive; this one is a tool, and the tower it's
+-- aimed at is usually your own — you spend a turn and a block you already built
+-- to undo a placement the room regrets. Taking a badly wedged Anchor with it is
+-- the best thing it does, and the reason anchored blocks aren't spared here: a
+-- bomb can already clear one, so "locks itself in place" was never a promise
+-- against demolition.
+--
+-- **Resolved on contact** (see `watchLanding`), which is what makes it a piece
+-- you aim: the block it takes is the one it *hit*, so a Sacrifice steered into
+-- the side of a stack takes the block it ran into rather than whatever it happens
+-- to be resting on once it has tumbled to a stop. It fires once — the caller
+-- latches `resolved` first — so a piece that drops through its own hole and hits
+-- something else on the way doesn't eat the tower a floor at a time.
+--
+-- `victim` is nil only on the Mystery-reveal path, which has no impact left to
+-- read: a piece that turns out to be a Sacrifice after it has already come to
+-- rest takes what it's standing on (`blockUnder`), because that's the one honest
+-- answer available that late.
+--
+-- Nothing to do when it hits the base, a checkpoint platform, or nothing at all
+-- off the side: the sacrifice is spent and the piece is an ordinary block. A miss
+-- is a real outcome for a piece you have to aim.
+local function sacrificeBlock(block: Block, victim: Block?)
+	local target = victim or blockUnder(block)
+	if target == nil then
+		return
+	end
+
+	local position = target.root.Position
+	-- Which way the corpse leaves: away from the block that took it, flattened
+	-- onto the play plane so it can't drift in front of the tower or behind it.
+	-- A hit from directly underneath or dead on top leaves it going straight up.
+	local sideways = position.X - block.root.Position.X
+	local away = if math.abs(sideways) > 0.01 then Vector3.new(math.sign(sideways), 0, 0) else Vector3.zero
+
+	-- On a marker at the victim's position rather than on either block: the target
+	-- is about to be destroyed and would take a sound parented to it, and the
+	-- sacrifice itself is still falling.
+	Sfx.playAtPosition("Sacrifice", position, Constants.SACRIFICE_VOLUME)
+	playSacrificeFx(target.model, away)
+	-- Destroying the model is the whole removal: `sweepBlocks` drops the entry and
+	-- the `blockByModel` mapping on its next pass, the same way a burnt-out block
+	-- leaves the list. The corpse above is a copy and is not in either.
+	target.model:Destroy()
 end
 
 -- A Ghost falls through the tower for GHOST_SECONDS and then turns solid
@@ -1417,11 +1926,17 @@ local function chooseStrike()
 	arena:SetAttribute(Constants.WARN_ATTRIBUTE, pendingStrikeX)
 end
 
--- The top of whatever stands in `x`'s column, or the base if nothing does. This
+-- The top of whatever stands in `x`'s column, or `floorY` if nothing does. This
 -- is what the bolt actually hits — resolved at strike time, not when the warning
 -- went up, so ten seconds of building under the marker counts.
-local function highestAt(x: number): Vector3
-	local best = baseTopY
+--
+-- `floorY` is a parameter rather than `baseTopY` because a PVP lane stands on its
+-- own platform: the classic run measures from the arena base, a match measures
+-- from the slab the lane is building on. The column test is what keeps this lane-
+-- safe either way — a cell has to be within half a block of `x` to count, and
+-- lanes are LANE_SPACING (120) apart.
+local function highestAt(x: number, floorY: number): Vector3
+	local best = floorY
 	for _, block in blocks do
 		if block.root.Parent == nil then
 			continue
@@ -1446,21 +1961,59 @@ local function highestAt(x: number): Vector3
 	return Vector3.new(x, best, Constants.PLANE_Z)
 end
 
-local function strikeLightning(origin: Vector3)
-	local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
-	if arena then
-		-- Warning off first, bolt second. A client that saw both attributes change
-		-- in the same frame should be left with a flash and no marker, never the
-		-- other way round.
-		arena:SetAttribute(Constants.WARN_ATTRIBUTE, nil)
+-- One bolt, wherever it was aimed. Two things call this: the storm's own clock,
+-- and a Lightning block resolving on settle.
+--
+-- Deliberately says nothing about the *warning*. The marker belongs to the storm's
+-- state machine, which is the only thing that ever raises one, and it clears it
+-- beside its own `pendingStrikeX = nil` — a Lightning block landing mid-warning
+-- must not wipe the marker for a strike that is still coming.
+--
+-- `exclude` is spared the impulse, for the block that called the bolt down on
+-- itself: it is about to be destroyed, and throwing it first only means the wreck
+-- lands somewhere the player can't account for.
+local function strikeLightning(origin: Vector3, exclude: Block?, source: Instance?)
+	-- Who announces the bolt. The arena for a classic run, and the lane's own
+	-- platform for a PVP match — six lanes can be struck in the same second, and
+	-- one attribute on one folder can only ever describe one of them. Whoever owns
+	-- the floor the bolt is aimed at is the thing that says it was.
+	local announcer = source or workspace:FindFirstChild(Constants.ARENA_NAME)
+	if announcer then
 		-- Every client draws the bolt off this attribute. The server says only
 		-- *where* it struck; attributes replicate, so the flash costs no packet
 		-- of its own and a client that misses it simply doesn't draw one.
-		arena:SetAttribute(Constants.STRIKE_ATTRIBUTE, origin)
+		announcer:SetAttribute(Constants.STRIKE_ATTRIBUTE, origin)
 	end
 
 	Sfx.playAtPosition("Lightning", origin, Constants.LIGHTNING_VOLUME)
-	blastAt(origin, Constants.LIGHTNING_RADIUS, Constants.LIGHTNING_PRESSURE, Constants.LIGHTNING_IMPULSE)
+	blastAt(
+		origin,
+		Constants.LIGHTNING_RADIUS,
+		Constants.LIGHTNING_PRESSURE,
+		Constants.LIGHTNING_IMPULSE,
+		exclude
+	)
+end
+
+-- Lightning blocks: the bolt comes down on the piece the moment it comes to rest.
+--
+-- No warning marker, because there was nothing to warn about until the player put
+-- it there — the piece *is* the announcement, and it has been visible in their
+-- hand for the whole turn. That's what separates this from the storm's version,
+-- which has to warn precisely because nobody chose it.
+--
+-- The block goes with the strike, the way a Bomb does: it conducted the bolt, and
+-- a piece left standing at the epicentre of its own strike reads as the effect
+-- having missed.
+--
+-- Safe in PVP with no lane check of its own. LIGHTNING_RADIUS (26) against
+-- LANE_SPACING (120) leaves the nearest neighbouring tower some 94 studs away,
+-- well outside anything `blastAt` will touch — so nobody can call a bolt down on
+-- somebody else's lane.
+local function callLightning(block: Block)
+	local origin = block.root.Position
+	strikeLightning(origin, block)
+	block.model:Destroy()
 end
 
 -- Drives the strikes while a Stormy zone is up: choose a spot, warn for ten
@@ -1472,11 +2025,16 @@ local function updateLightning()
 	-- Normally the Stormy zone's hazard; the Lightning Storm gamemode turns it
 	-- on everywhere for the whole round.
 	--
-	-- Off entirely during a PVP match. The whole mechanism is single-lane by
-	-- construction — one warning column, standing on one floor, announced by one
-	-- attribute on the arena — and there is no honest way to point that at six
-	-- towers at once. Striking only the middle lane would be worse than not
-	-- striking at all. See "Not built yet" in docs/game/TowerGamePvp.md.
+	-- Off during a PVP match, because the match runs its own storm: `PvpService`
+	-- drives one clock for the whole board and strikes every lane on it, through
+	-- `TowerService.strikeColumn` below. This driver is single-lane by
+	-- construction — one warning column, standing on the classic run's floor,
+	-- announced by one attribute on the arena — and pointing it at six towers
+	-- would mean striking whichever one happened to be at its X.
+	--
+	-- The marker still has to be cleared here: a zone can turn stormy in the last
+	-- seconds of a classic round, and the match that follows must not inherit a
+	-- red column standing over a tower that no longer exists.
 	if pvpActive then
 		if pendingStrikeX ~= nil then
 			pendingStrikeX = nil
@@ -1511,7 +2069,14 @@ local function updateLightning()
 		nextStrikeAt = now
 			+ Constants.LIGHTNING_MIN_SECONDS
 			+ math.random() * (Constants.LIGHTNING_MAX_SECONDS - Constants.LIGHTNING_MIN_SECONDS)
-		strikeLightning(highestAt(pendingX))
+		-- Marker off first, bolt second. A client that saw both attributes change
+		-- in the same frame should be left with a flash and no marker, never the
+		-- other way round.
+		local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
+		if arena then
+			arena:SetAttribute(Constants.WARN_ATTRIBUTE, nil)
+		end
+		strikeLightning(highestAt(pendingX, baseTopY))
 		return
 	end
 
@@ -1544,7 +2109,7 @@ local function armBomb(block: Block)
 				return
 			end
 			paint(block, Constants.BOMB_FLASH_COLOR)
-			Sfx.playAt("BombBeep", block.root)
+			playAtBlock("BombBeep", block.root)
 			task.wait(Constants.BOMB_BEEP_ON)
 			if block.root.Parent == nil then
 				return
@@ -1588,6 +2153,24 @@ end
 -- because "it landed" is one event.
 local function watchLanding(block: Block)
 	local function onTouched(hit: BasePart)
+		local kind = if block.blockType then block.blockType.kind else nil
+
+		-- A Sacrifice takes the block it *hits*, and it's the only type that cares
+		-- what that was. It's tested before the impact-speed gate below on purpose:
+		-- this is the one piece in the game that is aimed at a particular block, and
+		-- "you hit the block you were aiming at, but too gently for it to count"
+		-- would be an outcome nobody can see the rule behind. Hitting the base, a
+		-- platform or a neighbour's wall isn't in `blockByModel` and is safe by
+		-- construction, and leaves the piece still armed for the block it was
+		-- actually aimed at.
+		if kind == "sacrifice" and not block.resolved then
+			local victim = blockOf(hit)
+			if victim ~= nil and victim ~= block then
+				block.resolved = true
+				sacrificeBlock(block, victim)
+			end
+		end
+
 		local speed = block.speed
 		if speed < Constants.IMPACT_MIN_SPEED then
 			return
@@ -1601,9 +2184,10 @@ local function watchLanding(block: Block)
 			NoobBlock.kill(humanoid.Parent :: Model)
 		end
 
-		-- Only bombs resolve on impact. Glue and Clone wait for the block to come
-		-- to rest, which the height poll handles.
-		if block.resolved or block.blockType == nil or block.blockType.kind ~= "explosion" then
+		-- Bombs resolve on impact too, but on a *hard* one: a bomb that lands
+		-- gently hasn't armed, and gets to settle instead. Glue and Clone wait for
+		-- the block to come to rest, which the height poll handles.
+		if block.resolved or kind ~= "explosion" then
 			return
 		end
 		block.resolved = true
@@ -1612,6 +2196,50 @@ local function watchLanding(block: Block)
 
 	for _, part in modelParts(block.model) do
 		part.Touched:Connect(onTouched)
+	end
+end
+
+-- Speed lines: one narrow Trail per cell, hung on an Anvil for the fall.
+--
+-- A Trail is the right instrument and needs no gate of its own — it draws only
+-- while its attachments are *moving*, so the lines appear when the block is
+-- released, stretch out as it accelerates to `FALL_SPEED`, and are gone a fifth
+-- of a second after it lands. Nothing has to decide when a block counts as
+-- falling, and nothing has to clean up.
+--
+-- Per cell rather than per block, because that's what makes them read as *lines*:
+-- a single ribbon the width of a four-cell I-piece is a smear, four narrow ones
+-- following the cells are speed.
+--
+-- Attached here rather than at build time on purpose. A held piece is steered
+-- left and right for a whole turn before it's dropped, and a trail on that would
+-- draw speed lines across the sky while the player is still deciding.
+local function attachSpeedLines(model: Model)
+	local half = Constants.ANVIL_LINE_WIDTH / 2
+	for _, part in modelParts(model) do
+		local left = Instance.new("Attachment")
+		left.Name = "SpeedLineA"
+		left.Position = Vector3.new(-half, 0, 0)
+		left.Parent = part
+
+		local right = Instance.new("Attachment")
+		right.Name = "SpeedLineB"
+		right.Position = Vector3.new(half, 0, 0)
+		right.Parent = part
+
+		local trail = Instance.new("Trail")
+		trail.Name = "SpeedLines"
+		trail.Attachment0 = left
+		trail.Attachment1 = right
+		trail.Color = ColorSequence.new(Constants.ANVIL_LINE_COLOR)
+		trail.Transparency = Constants.ANVIL_LINE_TRANSPARENCY
+		trail.Lifetime = Constants.ANVIL_LINE_SECONDS
+		trail.LightEmission = 1
+		-- Faces the camera rather than lying in the world plane: the shot is a
+		-- fixed side-on one, and a ribbon edge-on to it would be invisible for the
+		-- exact frames it exists to sell.
+		trail.FaceCamera = true
+		trail.Parent = part
 	end
 end
 
@@ -1641,7 +2269,10 @@ local function registerBlock(
 		blockType = blockType,
 		baseColor = baseColor,
 		custom = custom,
-		impactSound = attachSound(root, "Impact", skin.impactSound, skin.volume),
+		-- Resolved rather than read straight off the skin: Duck's quack is a Sound
+		-- a human put in the place, so its id only exists there. Everything else
+		-- writes its id in BlockSkins and comes back unchanged.
+		impactSound = attachSound(root, "Impact", BlockSkins.impactIdFor(skin), skin.volume),
 		settleSound = if skin.settleSound
 			then attachSound(root, "Settle", skin.settleSound, skin.volume * 0.6)
 			else nil,
@@ -1667,6 +2298,12 @@ local function registerBlock(
 	if blockType and blockType.kind == "burning" then
 		igniteBlock(block)
 	end
+	-- An Anvil draws speed lines for the fall it's about to make. Here rather than
+	-- in `buildPiece`, so the trails start at the drop and not while the piece is
+	-- still being steered around the sky.
+	if blockType and blockType.kind == "anvil" then
+		attachSpeedLines(model)
+	end
 	return block
 end
 
@@ -1680,9 +2317,18 @@ local function spawnCloneOf(block: Block)
 		return
 	end
 
-	-- The copy inherits the original's pack, so a neon block clones into a neon
-	-- one rather than quietly reverting to the stock look mid-tower.
-	local model, root, color = buildPiece(shape, block.skin, nil, block.pack)
+	-- The copy inherits the original's pack *and its colour*, because otherwise it
+	-- isn't a copy. `buildPiece` rolls a fresh hue per block, so a Clone used to
+	-- hand back a piece in an unrelated colour — the one type in the game whose
+	-- whole promise is that the thing it makes looks like the thing it came from,
+	-- and the only one that visibly broke it. It went unnoticed for players wearing
+	-- a colour pack, where `SkinPacks.colorFor` returns the same shade for both and
+	-- the copy matched by accident.
+	--
+	-- `baseColor`, not whatever the cells are wearing now: a charring Burning block
+	-- or a Bomb mid-flash is repainted, and a copy should be of the block, not of
+	-- the state it happens to be in.
+	local model, root, color = buildPiece(shape, block.skin, nil, block.pack, block.baseColor)
 	applyZoneLook(model, block.skin, nil, block.pack)
 
 	-- The block's own root, not the model's pivot: a model's WorldPivot doesn't
@@ -1829,7 +2475,7 @@ function TowerService.dropPiece(player: Player): Block?
 	end
 	-- Everyone hears the drop from where it happened. The holder also gets their
 	-- own confirmation cue locally (Drop2, played client-side).
-	Sfx.playAt("Drop", piece.root)
+	playAtBlock("Drop", piece.root)
 	placerOf[piece.model] = piece.player
 	TowerStatsService.recordBlockPlaced(piece.player)
 
@@ -1873,15 +2519,22 @@ end
 -- clock, the queue, the funnel, the HUD state — belongs to the caller, because
 -- the two modes disagree about all of it.
 --
+-- `chance` replaces the odds this one piece is special, for a caller whose rate
+-- isn't a property of the stage. PVP's is a ramp on its own match clock, and that
+-- clock lives in PvpService — passing the number per piece keeps it there rather
+-- than teaching this file a second mode's sense of time. nil takes the stage's,
+-- which is every classic turn. The `blockrate` console knob still outranks both.
+--
 -- Returns the piece, so a caller that runs its own clock has something to read
 -- the spawn altitude off without going back through the table.
-function TowerService.dealPiece(player: Player, laneX: number, floorY: number): Held
+function TowerService.dealPiece(player: Player, laneX: number, floorY: number, chance: number?): Held
 	local shape: Shapes.Shape? = nextShape
 	nextShape = Shapes.random()
 
 	-- Rolled per piece. Skin is pure flavour; type is the hazard, and it gets
-	-- likelier the more floors the run has cleared. Either can be pinned for
-	-- exactly this one piece by the "block" cmdr command.
+	-- likelier the more floors the run has cleared — or, where the caller passed
+	-- its own `chance`, at whatever rate that caller is running. Either can be
+	-- pinned for exactly this one piece by the "block" cmdr command.
 	local commanded = skinForced
 	local skin = if commanded then forcedSkin :: BlockSkins.Skin else BlockSkins.random()
 	local blockType = if blockTypeForced
@@ -1889,7 +2542,7 @@ function TowerService.dealPiece(player: Player, laneX: number, floorY: number): 
 		else BlockTypes.roll(
 			state.checkpoints,
 			stage.blockTypeScale,
-			devBlockTypeChance or stage.blockTypeChance
+			devBlockTypeChance or chance or stage.blockTypeChance
 		)
 	skinForced = false
 	blockTypeForced = false
@@ -2061,21 +2714,21 @@ local function clampToPlane(deltaTime: number)
 		-- Velocity only needs clamping while there *is* velocity, and writing it
 		-- to a sleeping assembly would wake it every frame for nothing.
 		if not resting then
-			-- A Feather has a terminal velocity: it never falls faster than a
-			-- drift, however far it has to come down. Only the downward half is
-			-- capped, so it can still be thrown by a blast — and only while it's
-			-- falling, so a settled one is never written to.
+			-- Terminal velocity. *Every* block has one now — `Constants.FALL_SPEED`
+			-- — because a tower that gets hit with the full energy of an unclamped
+			-- fall scatters however carefully the piece was aimed. A Feather's is
+			-- far lower and is the entire type rather than a safety net.
+			--
+			-- Only the downward half is capped, so a blast can still throw a block
+			-- as hard as it likes; and only while it's moving, so a settled block is
+			-- never written to.
 			--
 			-- Folded into the Z clamp's write rather than done separately: one
 			-- AssemblyLinearVelocity assignment per block per frame, same as before.
-			local fall = velocity.Y
-			if
-				block.blockType ~= nil
-				and block.blockType.kind == "feather"
-				and fall < -Constants.FEATHER_FALL_SPEED
-			then
-				fall = -Constants.FEATHER_FALL_SPEED
-			end
+			local limit = if block.blockType ~= nil and block.blockType.kind == "feather"
+				then Constants.FEATHER_FALL_SPEED
+				else Constants.FALL_SPEED
+			local fall = math.max(velocity.Y, -limit)
 			if velocity.Z ~= 0 or fall ~= velocity.Y then
 				root.AssemblyLinearVelocity = Vector3.new(velocity.X, fall, 0)
 			end
@@ -2162,10 +2815,15 @@ local function highestPointOf(block: Block): number
 	return highest
 end
 
--- Everything the new platform replaces, thrown clear rather than deleted. The
--- checkpoint spawns at the tower's highest point, so every settled block is
--- underneath it — but a piece dropped a moment ago could still be falling
--- *above* the line, and that one survives.
+-- Live blocks, thrown clear rather than deleted — the caller destroys them once
+-- the wreck has been seen.
+--
+-- `cutoffY` limits the sweep to blocks whose highest point is at or below a line;
+-- **nil takes every block there is**, which is what a checkpoint wants. The
+-- checkpoint used to pass the new floor's underside, and the consequence was that
+-- the tower's top layer — the blocks inside the slab band, plus anything still
+-- falling above it — survived into the next stage and stuck out around the new
+-- floor. A cleared stage is a clean floor now: nothing carries over.
 --
 -- The blocks are taken out of `blocks` immediately, which is what lets them
 -- scatter in 3D: the plane clamp only holds on to live blocks.
@@ -2180,10 +2838,10 @@ local function unanchorModel(model: Model)
 	end
 end
 
-local function blastBlocksBelow(cutoffY: number): { Block }
+local function blastBlocks(cutoffY: number?): { Block }
 	local debris = {}
 	for index = #blocks, 1, -1 do
-		if highestPointOf(blocks[index]) > cutoffY then
+		if cutoffY ~= nil and highestPointOf(blocks[index]) > cutoffY then
 			continue
 		end
 		local block = removeBlockAt(index)
@@ -2216,7 +2874,7 @@ end
 -- stack instead of the tower the players are actually building.
 --
 -- Taken out of `platforms` *before* they're shoved, for the same reason
--- `blastBlocksBelow` empties its list first: that list feeds `restingTopY`, and
+-- `blastBlocks` empties its list first: that list feeds `restingTopY`, and
 -- a slab thrown upward by the blast would otherwise read as the top of the tower
 -- and fire the next piece's spawn into orbit.
 --
@@ -2255,28 +2913,24 @@ local function blastPlatformsBelow(cutoffY: number): { BasePart }
 	return debris
 end
 
-local function spawnCheckpoint(topY: number): BasePart
-	local full = Constants.PLATFORM_SIZE
+-- Dress one slab of a new floor and play it in.
+--
+-- Enters as a sliver at its own centre line and stretches outward to full width;
+-- because the slab is anchored, tweening Size grows it evenly about its position
+-- rather than dragging one face. Per slab rather than per floor, so a Split floor
+-- opens as two slivers spreading apart and the gap is the last thing you see
+-- appear — which is exactly the thing the player needs to notice.
+local function playInSlab(part: BasePart)
+	local full = part.Size
 
-	local part = Instance.new("Part")
-	-- Numbered by the floor it is, not by how many are currently standing —
-	-- previous ones are demolished, so `#platforms` would name every floor after
-	-- the first "Checkpoint2". `state.checkpoints` is still the count *behind*
-	-- this one at spawn time; it's incremented once the demolition finishes.
-	part.Name = `Checkpoint{state.checkpoints + 1}`
-	part.Anchored = true
 	part.Material = Enum.Material.Neon
 	part.Color = Constants.PLATFORM_SPAWN_COLOR
-	part.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
+	-- A floor, and the same floor as the base — a checkpoint is another storey of
+	-- the same building, so it can't be a different surface to land on.
+	part.CustomPhysicalProperties = Constants.FLOOR_PHYSICS
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
-	-- Enters as a sliver at the center line and stretches outward to full width;
-	-- because the part is anchored, tweening Size grows it evenly about its
-	-- position rather than dragging one face.
 	part.Size = Vector3.new(0.5, full.Y, full.Z)
-	part.Position = Vector3.new(0, topY + full.Y / 2, Constants.PLANE_Z)
-	part.Parent = arena
-	table.insert(platforms, part)
 
 	local grow = TweenService:Create(
 		part,
@@ -2298,15 +2952,49 @@ local function spawnCheckpoint(topY: number): BasePart
 			part.Material = Enum.Material.SmoothPlastic
 		end)
 	end)
-
-	return part
 end
 
--- The storm arrives. Everything the players built gets thrown off the plane and
+-- The new floor, standing at `topY`. Returns its slabs — more than one whenever
+-- the layout that won has more than one, which is the whole point of layouts.
+--
+-- Numbered by the floor it is, not by how many are currently standing — previous
+-- ones are demolished, so `#platforms` would name every floor after the first
+-- "Checkpoint2". `state.checkpoints` is still the count *behind* this one at
+-- spawn time; it's incremented once the demolition finishes, which also makes it
+-- the right number to ask `PlatformLayouts.pick` with.
+local function spawnCheckpoint(topY: number): { BasePart }
+	local floor = state.checkpoints + 1
+	local layout = PlatformLayouts.pick("checkpoint", floor)
+
+	local slabs
+	if layout then
+		slabs = PlatformLayouts.build(layout, topY, arena, `Checkpoint{floor}`)
+	else
+		local full = Constants.PLATFORM_SIZE
+		local part = Instance.new("Part")
+		part.Name = `Checkpoint{floor}`
+		part.Anchored = true
+		part.Size = full
+		part.Position = Vector3.new(0, topY + full.Y / 2, Constants.PLANE_Z)
+		part.Parent = arena
+		slabs = { part }
+	end
+
+	for _, slab in slabs do
+		table.insert(platforms, slab)
+		playInSlab(slab)
+	end
+	return slabs
+end
+
+-- The storm arrives. Everything the players built gets blown off the plane and
 -- the run starts over from the base — no checkpoints, first target, fresh clock.
 --
 -- The debris is left to fly for a moment before cleanup rather than blinking
--- out, because the tower coming apart is the whole point of the deadline.
+-- out, because the tower coming apart is the whole point of the deadline. It all
+-- goes one way — left — and the white-out waits for it: `STORM_FADE_DELAY_SECONDS`
+-- is set to about the time the wreck needs to clear the frame, so the order the
+-- players see is the tower leaving and *then* the screen going.
 local function breakTower()
 	local debris = blocks
 	blocks = {}
@@ -2318,12 +3006,20 @@ local function breakTower()
 			continue
 		end
 		unanchorModel(block.model)
-		-- Out of the play plane on purpose: this is the one moment the game stops
-		-- being 2D, so the wreck scatters instead of sliding sideways.
+		-- All of it to the **left**, as one gust. A random scatter read as an
+		-- explosion going off under the tower — which is what a Bomb and a
+		-- checkpoint demolition already look like — and left the wreck milling
+		-- about in frame. A storm is weather: it comes from a direction, it takes
+		-- the tower with it, and the shot ends on an empty arena rather than on a
+		-- cloud of debris.
+		--
+		-- Jittered per block so the tower comes apart on the way out instead of
+		-- sliding off as one sheet, and given a little depth so the wreck stops
+		-- being a flat cut-out the moment it leaves the play plane.
 		local shove = Vector3.new(
-			(math.random() * 2 - 1) * Constants.STORM_BLAST_HORIZONTAL,
+			-Constants.STORM_BLAST_HORIZONTAL - math.random() * Constants.STORM_BLAST_HORIZONTAL_JITTER,
 			Constants.STORM_BLAST_UP * (0.6 + math.random() * 0.8),
-			(math.random() * 2 - 1) * Constants.STORM_BLAST_HORIZONTAL * 0.5
+			(math.random() * 2 - 1) * Constants.STORM_BLAST_DEPTH
 		)
 		root.AssemblyLinearVelocity = shove
 		root.AssemblyAngularVelocity = Vector3.new(
@@ -2357,11 +3053,8 @@ local function resetRun()
 	state.height = 0
 	state.zoneBaseHeight = 0
 	state.targetHeight = Constants.STORM_FIRST_TARGET
-	-- Back to clear skies; a fresh run shouldn't inherit the last one's weather —
-	-- or its gravity.
-	state.zoneId = Zones.DEFAULT_ID
-	state.zoneSky = math.random(1, 255)
-	workspace.Gravity = Zones.gravityOf(state.zoneId)
+	-- A fresh run shouldn't inherit the last one's weather — or its gravity.
+	restoreDefaultZone()
 	-- A run starts un-voted; last run's gamemode doesn't carry over. The round
 	-- break overwrites this with whatever the players then vote for — this is the
 	-- baseline for the paths that reset without a vote (server start).
@@ -2422,18 +3115,36 @@ local function runCheckpoint(height: number)
 		-- A beat of stillness, then the camera has its look.
 		task.wait(Constants.CHECKPOINT_PAUSE_SECONDS + Constants.CHECKPOINT_VIEW_SECONDS)
 
-		local platform = spawnCheckpoint(baseTopY + height)
+		local newFloor = spawnCheckpoint(baseTopY + height)
 		task.wait(Constants.PLATFORM_GROW_SECONDS)
 
-		-- The tower below is scaffolding now: the platform is the new ground, and
+		-- The tower below is scaffolding now: the floor is the new ground, and
 		-- keeping a few hundred settled parts alive under it buys nothing but
-		-- physics cost. Height is measured off the platform's own top, so the
+		-- physics cost. Height is measured off the floor's own top, so the
 		-- readout doesn't move when they go.
-		local cutoff = platform.Position.Y - Constants.PLATFORM_SIZE.Y / 2
-		local debris = blastBlocksBelow(cutoff)
-		-- The floors the run has already climbed past go with it. The new platform
-		-- was pushed onto `platforms` a moment ago and its top sits above the
-		-- cutoff, so it isn't caught by its own demolition.
+		--
+		-- Measured from the *lowest* slab in the new floor rather than from a
+		-- fixed PLATFORM_SIZE thickness below its scoreline. A layout may hang
+		-- slabs below the scoreline — Pedestal's wings sit eight studs down — and
+		-- a cutoff drawn at the scoreline would have the new floor demolish its
+		-- own wings the instant it landed.
+		local cutoff = math.huge
+		for _, slab in newFloor do
+			cutoff = math.min(cutoff, slab.Position.Y - slab.Size.Y / 2)
+		end
+		-- Every block, not just the ones under the new floor. The floor lands on
+		-- the tower's highest point, so a cutoff at its underside spared whatever
+		-- was inside the slab band — the last layer the players placed — and left
+		-- it poking out around the new ground for the rest of the run. It also
+		-- spared anything still in the air. A cleared stage starts on a bare floor.
+		--
+		-- The platforms below still go by the cutoff: the new floor's own slabs are
+		-- in that list, and they're the one thing that has to survive.
+		local debris = blastBlocks(nil)
+		-- The floors the run has already climbed past go with it. The new floor's
+		-- slabs were pushed onto `platforms` a moment ago and every one of their
+		-- tops sits above the cutoff, so they aren't caught by their own
+		-- demolition.
 		local oldFloors = blastPlatformsBelow(cutoff)
 		Sfx.playAtPosition("Explosion", Vector3.new(0, cutoff, Constants.PLANE_Z), Constants.EXPLOSION_VOLUME)
 
@@ -2451,7 +3162,13 @@ local function runCheckpoint(height: number)
 		-- Clearing a checkpoint is what moves the run into a new zone. The count
 		-- has just been incremented, so this asks for the zone *after* the ones
 		-- already cleared — which is what puts the specials on the cadence.
-		local zone = Zones.next(state.checkpoints, state.zoneId)
+		--
+		-- Unless the round took the cadence out: Wild Weather has no calm floors
+		-- to count towards the next twist, so every checkpoint rolls a special
+		-- straight away.
+		local zone = if stage.specialsOnly
+			then Zones.rollSpecial(state.zoneId)
+			else Zones.next(state.checkpoints, state.zoneId)
 		state.zoneId = zone.id
 		state.zoneSky = math.random(1, 255)
 		applyZoneToTower()
@@ -2527,6 +3244,40 @@ function TowerService.extendStorm(seconds: number): boolean
 	return true
 end
 
+-- Set how long is left on the stage clock, in seconds from now. Used by the
+-- "setstorm" cmdr command.
+--
+-- The deliberate opposite of `extendStorm`: that one *adds* to the deadline
+-- because a purchase has to stack honestly, and this one *replaces* it because
+-- the whole point of a dev handle is to land on a number without doing the
+-- arithmetic from wherever the clock happens to be. Nothing but the console
+-- should call it — the products go through `extendStorm`.
+--
+-- `stormSeconds` is raised to match when the new time is longer than the stage
+-- was. It's the denominator the HUD draws the storm bar against, so leaving it
+-- alone would hand the bar a fraction over 1 and draw it past its own end. Never
+-- lowered: a shorter time left is exactly what a partly-drained bar looks like,
+-- and shrinking the whole stage to match would make the bar jump back to full.
+--
+-- Zero is allowed and means "now" — the poll fires the storm on its next tick,
+-- which is the only way to reach the wreck without waiting out a stage. Refused
+-- during a checkpoint or a round break for the same reason `extendStorm` is:
+-- both sequences set `stormEndsAt` themselves when they end, so a time written
+-- inside one is a time thrown away.
+function TowerService.setStorm(seconds: number): boolean
+	if checkpointActive or intermission then
+		return false
+	end
+	if seconds < 0 then
+		return false
+	end
+
+	state.stormEndsAt = workspace:GetServerTimeNow() + seconds
+	state.stormSeconds = math.max(state.stormSeconds, seconds)
+	broadcast()
+	return true
+end
+
 -- Pin the very next piece's type and/or skin, overriding the usual roll. Used
 -- by the "block" cmdr command. `blockType = nil` forces a plain piece (the
 -- command's "normal" default); `skin = nil` leaves the skin to roll normally.
@@ -2588,6 +3339,119 @@ local function nextMode(): string?
 	return GamemodeVoteService.startVote()
 end
 
+-- Put the ballot up and hand the players the rounds they pick, until one of those
+-- rounds is a classic one this function can hand back to.
+--
+-- **Yields** for the length of the vote, and again for a whole match every time
+-- PVP wins. PVP isn't a set of numbers for the round that follows — it *is* the
+-- round: the board goes to PvpService and comes back empty, and then the players
+-- vote again rather than being dropped into a classic run nobody picked. Voting
+-- PVP twice running plays two matches, which is the honest reading of the ballot.
+--
+-- Callers keep whatever happens *once* per round — the wreck, the reset, the
+-- fresh clock, the round funnel — outside this. That's what makes PVP a peer of
+-- the other modes rather than an interlude, and it's why the opening vote and the
+-- round break can share one implementation despite agreeing on nothing else.
+-- The zone a round opens in, once its rules are known.
+--
+-- Normally there's nothing to do: `resetRun` has already put the world back to
+-- Clear Skies, which is where a run should start. A specials-only round has no
+-- clear skies to start in — and starting in them anyway would leave the *first*
+-- stage, the longest one and the one before any checkpoint has been cleared,
+-- playing exactly like Classic while the ballot card promised otherwise.
+--
+-- Rolled against the zone that's up, so the mode doesn't open on the weather the
+-- last round ended in.
+local function applyOpeningZone()
+	if not stage.specialsOnly then
+		return
+	end
+	local zone = Zones.rollSpecial(state.zoneId)
+	state.zoneId = zone.id
+	state.zoneSky = math.random(1, 255)
+	-- Dresses the (empty) board and writes `workspace.Gravity`, so a round opening
+	-- in Space opens in Space's gravity rather than picking it up at the first
+	-- checkpoint.
+	applyZoneToTower()
+end
+
+local function settleOnAMode()
+	applyStage(Gamemodes.modifierFor(nextMode()))
+
+	while stage.pvp do
+		pvpActive = true
+		-- The base is the classic game's floor and PVP has six of its own; off it
+		-- goes for the length of the match. Paired with the flag rather than done
+		-- inside `runMatch` because the base is this file's, and because the pcall
+		-- below then guarantees it comes back even if the match throws.
+		setBaseOnBoard(false)
+		local ok, err = pcall(pvp().runMatch)
+		setBaseOnBoard(true)
+		-- A match rolls its own zones through `applyZone`, which makes them true in
+		-- the world rather than only on the PVP packet. Put the weather back before
+		-- the ballot reopens: the vote is played out under clear skies, and a
+		-- classic round following a match used to open in whatever zone that match
+		-- happened to end in — Retro studs and all. Out here with the base rather
+		-- than inside `runMatch` for the same reason the base is: the zone is this
+		-- file's, and a match that throws still has to give it back.
+		restoreDefaultZone()
+		pvpActive = false
+		-- A match that throws must not take the server's rounds with it. The board
+		-- is left to `runMatch`'s own cleanup; what matters here is that control
+		-- reaches the vote again rather than dying inside a `while` with the game
+		-- parked behind it.
+		if not ok then
+			warn(`[TowerGame] PVP match ended in error: {err}`)
+		end
+		applyStage(Gamemodes.modifierFor(nextMode()))
+	end
+
+	-- The round's rules are known now, and one of them can be "there is no calm
+	-- zone". After the loop, so a PVP match that came first isn't handed weather
+	-- picked for the classic round waiting behind it.
+	applyOpeningZone()
+end
+
+-- The game opens on a ballot rather than on a round nobody picked.
+--
+-- Before this, a server's first round was always the un-voted Classic numbers —
+-- the one round of the session the players had no say in, and the round most of
+-- them spend their first minutes in. Everything after it was voted; the first one
+-- being the exception was an accident of the vote living only in the round break.
+--
+-- It waits for somebody to be in the queue. A poll opened against an empty server
+-- is fifteen seconds of nothing followed by the default, which is the exact round
+-- this exists to stop handing out — and the first player through the door should
+-- arrive to a ballot rather than to the tail of one that ran without them.
+--
+-- No wreck, no reset, no `reportRoundLost`: there is no round behind this one.
+-- `intermission` is set for the same reason the round break sets it — the turn
+-- queue parks, the storm clock is ignored, placements are refused — so the vote
+-- isn't a screen over a game already running underneath it.
+local function runOpeningVote()
+	intermission = true
+
+	task.spawn(function()
+		while #queue == 0 do
+			task.wait(Constants.POLL_INTERVAL)
+		end
+		-- A beat for the arriving client to finish mounting its UI, so the ballot
+		-- doesn't open behind a loading screen and lose seconds off its own clock.
+		task.wait(Constants.OPENING_VOTE_DELAY)
+
+		settleOnAMode()
+
+		-- The round's clock starts once its rules are known, so the players don't
+		-- lose any of it to the vote they were made to sit through.
+		restartStormClock()
+		state.phase = PHASE.SETTLING
+		broadcast()
+		reportRoundStarted()
+
+		intermission = false
+	end)
+end
+
 local function runRoundBreak()
 	if intermission then
 		return
@@ -2607,31 +3471,9 @@ local function runRoundBreak()
 		-- Let the wreck read as a consequence before a UI opens over it.
 		task.wait(Constants.ROUND_BREAK_WRECK_SECONDS)
 
-		applyStage(Gamemodes.modifierFor(nextMode()))
-
-		-- PVP isn't a set of numbers for the round that follows — it *is* the
-		-- round. The board goes to PvpService for the length of a match and comes
-		-- back empty, and then the players vote again rather than being dropped
-		-- into a classic run nobody picked. Voting PVP twice running plays two
-		-- matches, which is the honest reading of the ballot.
-		--
-		-- The loop is what makes it a peer of the other modes rather than an
-		-- interlude: everything outside it (the wreck, the reset, the fresh clock,
-		-- the round funnel) happens once, for whichever mode the players finally
-		-- settled on.
-		while stage.pvp do
-			pvpActive = true
-			local ok, err = pcall(pvp().runMatch)
-			pvpActive = false
-			-- A match that throws must not take the server's rounds with it. The
-			-- board is left to `runMatch`'s own cleanup; what matters here is that
-			-- control reaches the vote again rather than the round break dying
-			-- inside a `while` with the game parked behind it.
-			if not ok then
-				warn(`[TowerGame] PVP match ended in error: {err}`)
-			end
-			applyStage(Gamemodes.modifierFor(nextMode()))
-		end
+		-- The vote, plus however many PVP matches the players vote themselves into
+		-- before landing on a classic round. Shared with the opening vote.
+		settleOnAMode()
 
 		-- The new round's clock starts once the rules are known, so the players
 		-- don't lose any of it to the vote they were made to sit through.
@@ -2790,15 +3632,14 @@ local function updateStorm(height: number): boolean
 	local now = workspace:GetServerTimeNow()
 
 	-- Nothing here runs during a checkpoint or a round break: `updateHeight`
-	-- returns before it gets this far, which is also what freezes the storm clock
-	-- through the vote — `runRoundBreak` sets `stormEndsAt` fresh when the new
-	-- round's rules are known, so no part of the round is spent on the poll.
+	-- returns before it gets this far, and holds the storm clock on its way out.
+	-- `runRoundBreak` then sets `stormEndsAt` fresh once the new round's rules are
+	-- known, so no part of the round is spent on the poll either.
 
 	-- Nobody playing: hold the clock rather than letting it expire against an
-	-- empty server. `state.stormSeconds` rather than the gamemode's, so a stage
-	-- reached deep into a run is held at its own grown length.
+	-- empty server.
 	if #queue == 0 then
-		state.stormEndsAt = now + state.stormSeconds
+		holdStormClock()
 		return false
 	end
 
@@ -2817,6 +3658,37 @@ end
 
 -- --------------------------------------------------------------- the height --
 
+-- Turn a block to stone.
+--
+-- The visible half of anchoring. Being permanently anchored makes a block part of
+-- the scenery rather than part of the tower, and it should look like it: the skin
+-- it rolled stops mattering the moment it can never move again, and a piece that
+-- is quietly immovable is the sort of thing a player only discovers by building
+-- against it.
+--
+-- Colour *and* material, because each carries half of it — grey alone reads as a
+-- grey block, Slate alone as a textured one — and because the client's rounded
+-- body mirrors exactly those two properties off the cell (see TowerBodyController),
+-- so this is also what makes the shell a player actually sees turn to stone.
+--
+-- The attribute is what makes it stick: `applyZoneLook` re-dresses every standing
+-- block on a zone change, and without a carve-out the next zone would hand the
+-- statue its skin back.
+local function petrify(model: Model)
+	model:SetAttribute(Constants.STATUE_ATTRIBUTE, true)
+	for _, part in modelParts(model) do
+		part.Color = Constants.STATUE_COLOR
+		part.Material = Constants.STATUE_MATERIAL
+		-- A tiled skin pattern is a decal on top of the material, so it would
+		-- survive the change and leave a duck-print statue.
+		for _, texture in part:GetChildren() do
+			if texture:IsA("Texture") then
+				texture.Transparency = 1
+			end
+		end
+	end
+end
+
 -- Anchor blocks: the moment one comes to rest it stops being physics and starts
 -- being architecture. Anchored rather than welded to its neighbours, so it holds
 -- *itself* and nothing else — a bomb can still clear the blocks around it, and
@@ -2830,6 +3702,7 @@ local function anchorBlock(block: Block)
 	for _, part in modelParts(block.model) do
 		part.Anchored = true
 	end
+	petrify(block.model)
 end
 
 -- Crate blocks: the welds come out and the piece collapses into the loose cubes
@@ -2895,6 +3768,15 @@ local function applySettleEffect(block: Block, blockType: BlockTypes.BlockType)
 		igniteBlock(block)
 	elseif kind == "magnet" then
 		magnetiseBlock(block)
+	elseif kind == "sacrifice" then
+		-- Only reachable through a Mystery reveal, and with no victim to hand it:
+		-- a piece that turns out to be a Sacrifice has already landed, so the
+		-- impact it would have read is gone and what it's resting on is the honest
+		-- answer. A block *dealt* as a Sacrifice never arrives here — it resolves
+		-- against whatever it hit, on contact.
+		sacrificeBlock(block)
+	elseif kind == "lightning" then
+		callLightning(block)
 	elseif kind == "explosion" then
 		-- Only reachable through a Mystery reveal. A block that was *dealt* as a
 		-- Bomb arms on impact instead, and by the time it settles that has already
@@ -2942,12 +3824,14 @@ end
 
 -- The types that resolve when the block comes to rest.
 --
--- Bomb is deliberately absent: it resolves on *impact* (see `watchLanding`), and
--- one that reaches settle without having armed is one that landed too gently to
--- trigger it. Burning is absent for the opposite reason — it arrives already
--- alight, lit in `registerBlock`. The physics types (Bouncy, Anvil, Ice,
--- Feather) have nothing to resolve at all: their whole effect is the
--- PhysicalProperties they were built with.
+-- Two are deliberately absent because they resolve on *impact* instead (see
+-- `watchLanding`): **Bomb**, where one that reaches settle without arming is one
+-- that landed too gently to trigger it, and **Sacrifice**, which takes the block
+-- it hit — the piece is aimed at something, so what it ran into is the answer and
+-- what it later comes to rest against is not. Burning is absent for a third
+-- reason: it arrives already alight, lit in `registerBlock`. The physics types
+-- (Bouncy, Anvil, Ice, Feather) have nothing to resolve at all: their whole
+-- effect is the PhysicalProperties they were built with.
 local SETTLE_RESOLVED: { [string]: boolean } = {
 	glue = true,
 	clone = true,
@@ -2955,6 +3839,16 @@ local SETTLE_RESOLVED: { [string]: boolean } = {
 	crate = true,
 	mystery = true,
 	magnet = true,
+	-- Lightning waits for the settle for Glue's reason: the bolt comes down on
+	-- where the piece *ended up*, not where it first touched something.
+	--
+	-- Missing from this table is what made a dealt Lightning block do nothing at
+	-- all. `applySettleEffect` has had its branch since the type was added, and
+	-- that path is reached two ways — a Mystery reveal calls it directly (so a
+	-- revealed Lightning always worked), and this table is the gate for everything
+	-- else. A type with an effect and no entry here is a piece that lands, keeps
+	-- its name plate, and is an ordinary block.
+	lightning = true,
 }
 
 -- What a block does the moment it comes to rest. Everything here is once-only:
@@ -3142,6 +4036,11 @@ local function updateHeight()
 	-- a storm clock, a stage to clear — and none of it exists during a match.
 	if pvpActive then
 		sweepBlocks(now, baseTopY)
+		-- The classic storm isn't running, and its bar has to say so for the whole
+		-- match rather than only once the match is over: three minutes is long
+		-- enough for a stale deadline to run out on screen, and the vote that
+		-- follows is where the players were reading it.
+		holdStormClock()
 		return
 	end
 
@@ -3149,6 +4048,11 @@ local function updateHeight()
 	-- run. Measuring a tower that's mid-demolition would spike the readout off
 	-- flying debris and could clear the next stage from the wreckage of the last.
 	if checkpointActive or intermission then
+		-- Neither sequence lets the storm fire, so neither may let its bar drain.
+		-- Both set the clock fresh when they end, so this is only ever what the
+		-- players are looking at in the meantime — the wreck, the ballot, and any
+		-- PVP matches voted in before a classic round is settled on.
+		holdStormClock()
 		if os.clock() - lastBroadcast > 1 then
 			broadcast()
 		end
@@ -3374,6 +4278,22 @@ function TowerService.laneHeight(laneX: number, floorY: number): number
 	return measureLane(laneX, floorY)
 end
 
+-- One bolt into the column at `x`, standing on `floorY`, announced on `source`.
+--
+-- The storm's own driver above is the classic run's; this is the same bolt with
+-- its three assumptions made into arguments, so PVP can point one at each lane
+-- from its own clock (see `PvpService`). What it hits is resolved *here*, at
+-- strike time, rather than when the warning went up — seconds of building under
+-- a marker count.
+--
+-- No lane check of its own, and it doesn't need one: `blastAt` reaches
+-- LIGHTNING_RADIUS (26) and lanes are LANE_SPACING (120) apart, so a bolt aimed
+-- into one lane cannot touch the tower in the next. That is the same arithmetic
+-- that lets a Lightning *block* be safe in a match.
+function TowerService.strikeColumn(x: number, floorY: number, source: Instance?)
+	strikeLightning(highestAt(x, floorY), nil, source)
+end
+
 -- How many blocks are standing in one lane. Walks the list rather than keeping a
 -- per-lane counter: blocks leave through six different paths (burnt out, fallen
 -- off, blasted, destroyed with their model) and a counter maintained across all
@@ -3528,6 +4448,12 @@ function TowerService.Start()
 		updateLightning()
 		clampToPlane(deltaTime)
 	end)
+
+	-- The session's first round is voted for like every other one. Parks the game
+	-- (`intermission`) until the ballot resolves, so the poll below and `runTurns`
+	-- both start against rules the players actually picked. Returns immediately —
+	-- the waiting happens on its own thread.
+	runOpeningVote()
 
 	task.spawn(function()
 		while true do

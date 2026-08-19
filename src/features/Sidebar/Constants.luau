@@ -23,6 +23,14 @@ return {
 	-- the label. 0 sits the label flush with the icon's bottom edge — still
 	-- inside its visual bounds, since the art doesn't reach the edge.
 	LABEL_BOTTOM_INSET = 0,
+	-- How far the label may run past each side of its icon. Nav words are
+	-- wider than a 72px square at the body tier ("Inventory" is about twice
+	-- it), so the label has always overflowed — this just makes the overflow a
+	-- declared box instead of an accident. Two things depend on it: the label
+	-- shrinks rather than keep growing once it hits this width, and
+	-- RAIL_MARGIN below is measured from it so the bleed can't run off the
+	-- left edge of the screen.
+	LABEL_BLEED = 40,
 	-- Rotation tilt picked at random on hover-enter (degrees). Magnitude
 	-- comes from [MIN, MAX]; sign is 50/50. Set MAX = 0 to disable.
 	HOVER_TILT_MIN_DEG = 4,
@@ -37,8 +45,13 @@ return {
 	-- ITEM_SPACING on purpose: it's what tells the player that Nuke is a
 	-- different sort of thing from Shop, without drawing a divider.
 	GROUP_GAP = 28,
-	-- Distance from the screen's left edge to the rail (pixels).
-	RAIL_MARGIN = 20,
+	-- Distance from the screen's left edge to the rail (pixels). Measured
+	-- against LABEL_BLEED, not the icon: at 20 the icons cleared the edge but
+	-- every label wider than its icon hung off the side of the screen with its
+	-- first letters cut away — most visible on a phone, where the same margin
+	-- is half as many device pixels and the display's own rounded corners eat
+	-- into it as well. Keep this at least LABEL_BLEED.
+	RAIL_MARGIN = 52,
 	-- Default size of the Window a rail entry opens. Large content surfaces
 	-- (a shop grid, an inventory) are the reason the rail is off-center at all,
 	-- so this is deliberately roomy — override per entry with `windowSize`.

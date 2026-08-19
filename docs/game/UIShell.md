@@ -49,6 +49,7 @@ React.createElement(UIShell.Frame, {
     -- enterTweenInfo = TweenInfo.new(0.8, Enum.EasingStyle.Elastic, Enum.EasingDirection.Out),
     -- exitTweenInfo  = TweenInfo.new(0.1, Enum.EasingStyle.Quad,    Enum.EasingDirection.Out),
     -- scaleFrom = 0.8, -- start/exit UIScale value
+    -- zIndex = ui.layers.window, -- where the frame sits among its siblings
 }, {
     Window = React.createElement(ui.Window, {
         title = "Inventory",
@@ -62,6 +63,14 @@ React.createElement(UIShell.Frame, {
 The window grows from `scaleFrom` (default `0.8`) to `1` on enter with the elastic-out tween, and shrinks back on exit with the quad-out tween. The wrapper stays centered — there's no slide-in mode.
 
 The close button on `<Window>` is wired by the consumer (`onClose = frames.close`). `Frame` does not modify its children's props.
+
+`zIndex` is what stops a frame drawing behind a HUD. Every feature's UI mounts as
+a sibling root under one ScaleLayer, so with nothing set they all sit on Roblox's
+default of 1 and the tie goes to whatever order React mounted them in — a table
+iteration. A frame on its own root wants `ui.layers.window`; a frame sharing a
+root with something else (a scrim under it, a notice over it — see
+[DailyRewards](DailyRewards.md#the-join-prompt)) takes a plain child number
+instead, and the *root* carries the layer.
 
 ### The focus effect (automatic)
 

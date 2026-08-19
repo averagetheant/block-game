@@ -30,7 +30,6 @@ local PvpController = require(script.Parent.PvpController)
 local TowerAimController = require(script.Parent.TowerAimController)
 local TowerCameraController = require(script.Parent.TowerCameraController)
 local TowerController = require(script.Parent.TowerController)
-local TowerFeedbackController = require(script.Parent.TowerFeedbackController)
 local TowerZoneController = require(script.Parent.TowerZoneController)
 -- Prompting a purchase is a client call. The HUD only gets a callback — it
 -- never learns there's a product id behind the button.
@@ -105,6 +104,11 @@ end
 -- veteran's screen is worse than one that arrives a beat late for a new player.
 local function useCheckpointQuest(seen: boolean?): (boolean, boolean)
 	local claimed, setClaimed = React.useState(false)
+	-- Whether the *promise* is still up. It used to be a straight read of `seen` —
+	-- a standing line for as long as the player hadn't earned the skin — and it's a
+	-- notification now, so it needs a clock of its own. See
+	-- `Constants.QUEST_PROMISE_SECONDS`.
+	local promising, setPromising = React.useState(false)
 	-- Whether we've actually seen the "not yet" state. Without it, a profile that
 	-- loads already-true would read as a transition and congratulate a veteran for
 	-- a skin they earned months ago.
@@ -122,8 +126,26 @@ local function useCheckpointQuest(seen: boolean?): (boolean, boolean)
 		end
 		if not seen then
 			wasPending.current = true
-			return
+			-- Fired the moment we learn this player hasn't earned it, which for
+			-- almost everyone is their profile arriving as they join. Once per
+			-- load, not once per round: a player who has been told twice has been
+			-- told, and the line is asking for something that takes a whole stage
+			-- to do.
+			setPromising(true)
+			local ticking = true
+			task.delay(Constants.QUEST_PROMISE_SECONDS, function()
+				if ticking then
+					setPromising(false)
+				end
+			end)
+			return function()
+				ticking = false
+			end
 		end
+		-- Earning it takes the promise down early, whatever is left on its clock:
+		-- the claimed line is about to stand where it was, and two of these at once
+		-- would be the game promising and paying in the same breath.
+		setPromising(false)
 		if not wasPending.current then
 			return
 		end
@@ -141,7 +163,7 @@ local function useCheckpointQuest(seen: boolean?): (boolean, boolean)
 		end
 	end, { phase })
 
-	return seen == false or claimed, claimed
+	return promising or claimed, claimed
 end
 
 -- The first-checkpoint prize's display name, looked up once from the pack id
@@ -275,8 +297,6 @@ return function()
 		-- congratulate them with a name nothing hands over.
 		questRewardName = questRewardName,
 		device = device,
-		cash = if profile then profile.Cash or 0 else 0,
-		cashAwarded = TowerFeedbackController.CashAwarded,
 		zoneWarning = zoneWarning,
 		-- Touch-only: keyboard and gamepad go through ContextActionService, so a
 		-- PC player would just be looking at buttons they never press.

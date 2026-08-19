@@ -37,16 +37,26 @@ Shapes.List = {
 		color = Color3.fromRGB(178, 106, 224),
 		cells = { Vector2.new(0, 0), Vector2.new(1, 0), Vector2.new(2, 0), Vector2.new(1, 1) },
 	},
+	-- These two were named the wrong way round against every other game that has
+	-- ever drawn them. Read the cells with Y pointing up and it's plain: id 4 is
+	--
+	--     XX.        and id 5 is        .XX
+	--     .XX                           XX.
+	--
+	-- which are a Z and an S respectively. Only the labels moved — `id` goes over
+	-- the wire and `cells` are the piece itself, so both stay exactly where they
+	-- were. The colours came along with the names, because S is green and Z is red
+	-- everywhere else too.
 	{
 		id = 4,
-		name = "S",
-		color = Color3.fromRGB(112, 214, 122),
+		name = "Z",
+		color = Color3.fromRGB(232, 96, 96),
 		cells = { Vector2.new(1, 0), Vector2.new(2, 0), Vector2.new(0, 1), Vector2.new(1, 1) },
 	},
 	{
 		id = 5,
-		name = "Z",
-		color = Color3.fromRGB(232, 96, 96),
+		name = "S",
+		color = Color3.fromRGB(112, 214, 122),
 		cells = { Vector2.new(0, 0), Vector2.new(1, 0), Vector2.new(1, 1), Vector2.new(2, 1) },
 	},
 	{

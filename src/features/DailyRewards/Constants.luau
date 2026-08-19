@@ -49,6 +49,41 @@ return {
 	-- Height of the countdown strip under the cards.
 	FOOTER_HEIGHT = 52,
 
+	-- The claim button's pulse: how far it swells, and how long one breath takes.
+	-- A button that sits still is a button a new player reads as a label — the
+	-- run is worth nothing to somebody who never presses it. Sine both ways so
+	-- it breathes rather than ticks, and small enough that six locked days beside
+	-- it don't start to shimmer by association.
+	PULSE_SCALE = 1.07,
+	PULSE_SECONDS = 0.6,
+
+	-- ------------------------------------------------------------- the prompt --
+	-- The nudge a player gets on joining with a reward waiting: the window opens
+	-- itself, and everything behind it goes dark so the only lit thing on screen
+	-- is the card with the live Claim button. See DailyRewardsPrompt.
+	--
+	-- How dark. Enough that the HUD reads as switched off, short of hiding it —
+	-- the game is still there, it's just not the thing to look at.
+	SCRIM_COLOR = Color3.fromRGB(0, 0, 0),
+	SCRIM_TRANSPARENCY = 0.45,
+	SCRIM_FADE_SECONDS = 0.25,
+
+	-- Stacking inside the feature's own root: the scrim under the window, the
+	-- notice over it. The root's own layer (`ui.layers.window`) is what puts the
+	-- whole set above the HUD; these three only sort each other.
+	SCRIM_ZINDEX = 1,
+	WINDOW_ZINDEX = 2,
+	NOTICE_ZINDEX = 3,
+
+	-- After the last waiting reward is claimed: how long the window stays up, and
+	-- how long the notice outlives it. The window goes first so the last thing on
+	-- screen is the sentence that says when to come back.
+	CLOSE_SECONDS = 3,
+	NOTICE_SECONDS = 5,
+	NOTICE_TEXT = "Come back tomorrow for your next daily reward!",
+	NOTICE_WIDTH = 620,
+	NOTICE_HEIGHT = 84,
+
 	-- How often the countdown re-renders. One second: it counts down in hours
 	-- and minutes, so anything finer just burns renders.
 	COUNTDOWN_TICK = 1,

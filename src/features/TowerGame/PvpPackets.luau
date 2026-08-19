@@ -44,6 +44,19 @@ return ByteNet.defineNamespace("TowerGamePvp", function()
 				-- classic packet carries them — TowerZoneController reads either.
 				zoneId = ByteNet.uint8,
 				zoneSky = ByteNet.uint8,
+				-- When that zone becomes true in the world, as a server-time stamp.
+				-- The zone is announced `ZONE_ROLL_SECONDS` before it takes effect,
+				-- and this is the far end of that window: the HUD spins its reel up
+				-- to it and the client holds the sky, fog and lights back until it
+				-- passes, while the server holds the gravity and the block dressing
+				-- back to the same instant.
+				--
+				-- A stamp rather than a "rolling" flag, for the same reason `endsAt`
+				-- is one: every client then lands with the world instead of with
+				-- whenever its own packet happened to arrive. Already past for the
+				-- zone a joiner walks in on, which reads as "no reveal owed" — the
+				-- right answer for a zone that has been up for twenty seconds.
+				zoneAt = ByteNet.float64,
 				-- Every lane in the match, in slot order. A lane appears the moment
 				-- its player is given one (including mid-match) and stays for the
 				-- rest of the match — a player who stops playing keeps their tower

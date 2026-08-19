@@ -28,10 +28,24 @@ export type Props = {
 	anchorPoint: Vector2?,
 	layoutOrder: number?,
 	zIndex: number?,
+	-- Puts the way back on the badge itself. Optional: without it the badge is
+	-- the pure state readout it started as, which is what the story renders.
+	onResume: (() -> ())?,
 }
 
 local TITLE = "Not playing"
+-- Two hints, because the badge says two different things depending on whether the
+-- way back is on it. With the button, Settings is the *other* route and naming it
+-- first would send the player the long way round.
 local HINT = "You're watching. Turn it off in Settings to take turns."
+local HINT_WITH_BUTTON = "You're watching. Take turns again whenever you like."
+-- Breathing room on top of `tier * rows` — see hintHeight below.
+local ROW_SLACK = 8
+-- Small on purpose. This is a standing badge, not a prompt: the button is the
+-- convenience, and a full-width call to action would make a state readout look
+-- like something demanding an answer.
+local BUTTON_WIDTH = 150
+local BUTTON_HEIGHT = 44
 
 return function(props: Props)
 	-- Content sits clear of the panel's outline, not just its edge (see the
@@ -40,8 +54,18 @@ return function(props: Props)
 	local titleHeight = ui.theme.textSizeRegular
 	-- The hint wraps to two lines at this width; sized from the tier so a change
 	-- to the ladder carries the badge with it rather than clipping a descender.
-	local hintHeight = ui.theme.textSizeSmall * 2
-	local height = padding * 2 + titleHeight + hintHeight + ui.theme.tightPadding
+	-- The slack is what absorbs the pixel a line picks up when the viewport
+	-- scale rounds it — at exactly `tier * rows` the second line is dropped
+	-- instead of squeezed.
+	local hintHeight = ui.theme.textSizeSmall * 2 + ROW_SLACK
+	-- One gap per seam between rows, so the button's arrival adds its own height
+	-- and one more gap rather than being crammed into the old box.
+	local resume = props.onResume
+	local height = padding * 2
+		+ titleHeight
+		+ hintHeight
+		+ ui.theme.tightPadding
+		+ (if resume then BUTTON_HEIGHT + ui.theme.tightPadding else 0)
 
 	return React.createElement(ui.Panel, {
 		size = UDim2.fromOffset(Constants.SPECTATOR_NOTICE_WIDTH, height),
@@ -69,7 +93,7 @@ return function(props: Props)
 					}),
 
 					Hint = React.createElement(ui.Text, {
-						text = HINT,
+						text = if resume then HINT_WITH_BUTTON else HINT,
 						textSize = ui.theme.textSizeSmall,
 						color = Color3.fromRGB(198, 204, 226),
 						wrapped = true,
@@ -78,6 +102,21 @@ return function(props: Props)
 						size = UDim2.new(1, 0, 0, hintHeight),
 						layoutOrder = 2,
 					}),
+
+					-- Green like the card's own way back, so the two read as the
+					-- same door — but "PLAY" rather than the card's "I'm here!".
+					-- The card is answering an accusation (you sat out three
+					-- turns); this is a standing switch, and a switch is labelled
+					-- with what it does.
+					Resume = if resume
+						then React.createElement(ui.Button, {
+							text = "PLAY",
+							variant = "green",
+							size = UDim2.fromOffset(BUTTON_WIDTH, BUTTON_HEIGHT),
+							onClick = resume,
+							layoutOrder = 3,
+						})
+						else nil,
 				},
 			}),
 		},

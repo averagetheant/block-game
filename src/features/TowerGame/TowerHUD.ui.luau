@@ -7,16 +7,19 @@
 -- edges rather than following the centered-by-default rule for feature UIs.
 -- Centering a height readout would sit it on top of the tower being aimed at.
 --
---   top center     turn strip → storm clock
+--   top center     the turn strip, the storm clock, and — for six seconds, for a
+--                  new player — the checkpoint quest
 --   flanking those  Extend Storm (left) and the turn dial (right)
---   right edge     the climb, as a vertical rail; the height rides its marker
+--   right edge     the climb, as a vertical rail, with the height riding its
+--                  marker
 --   bottom left    controls hint (fades out on its own)
 --   bottom center  touch controls (touch devices only)
 --
 -- The top column flows through one Stack rather than being positioned by hand,
 -- so a row appearing or disappearing reflows the rest instead of leaving a hole.
 --
--- The column is deliberately thin — a strip of headshots and one line of clock.
+-- The column is deliberately thin — a strip of headshots, and nothing else once
+-- a player has cleared their first checkpoint.
 -- Height used to sit up here in a panel of its own alongside a best-ever
 -- reading, which put three stacked surfaces over the tower on a phone. The
 -- height now travels with the marker on the rail (one fact, one object) and the
@@ -35,7 +38,6 @@ local React = require(ReplicatedStorage.Packages.React)
 local Boil = require(ReplicatedStorage.Shared.Boil)
 local ui = Boil.ui
 local audio = Boil.audio
-local CashFly = require(script.Parent.CashFly)
 local CheckpointQuest = require(script.Parent.CheckpointQuest)
 local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
@@ -71,8 +73,6 @@ local CONTROL_ROW_HEIGHT = 88
 -- and the buttons.
 local CONTROL_ROW_WIDTH = Constants.STICK_TRACK_WIDTH + 110 + 160 + CONTROL_GAP * 4
 
-local STORM_LABEL_TEXT_SIZE = ui.theme.textSizeRegular
-local STORM_LABEL_HEIGHT = STORM_LABEL_TEXT_SIZE + 8
 -- The camera toggle, sitting above the cash panel on the right edge.
 local CAMERA_BUTTON = 62
 -- Extend Storm. Matched to CAMERA_BUTTON rather than given its own size: they
@@ -91,10 +91,10 @@ local DIAL_SIZE = 66
 -- margin, then half the turn strip — so a taller avatar carries both with it.
 local FLANK_Y = TOP_MARGIN + TURN_STRIP_HEIGHT / 2
 
-local CASH_WIDTH = 205
-local CASH_HEIGHT = 58
-local CASH_TEXT_SIZE = 32
-local CASH_ICON = 34
+-- The counter is its own root now (see `TowerCashView`), drawn on the flourish
+-- layer so a payout lands in front of any open window. This HUD only needs to
+-- know how tall it is, to stack the camera toggle and end the rail above it.
+local CASH_HEIGHT = Constants.CASH_HEIGHT
 
 -- The climb, as a vertical rail down the right side of the screen.
 --
@@ -128,9 +128,11 @@ local FADE_Z_INDEX = 100
 local URGENT_SECONDS = 5
 -- Under this many seconds the storm clock turns red.
 local STORM_URGENT_SECONDS = 30
-
--- Where the bills land. Kept in step with the counter's own anchor below.
-local CASH_TARGET = UDim2.new(1, -(EDGE_MARGIN + CASH_WIDTH / 2), 1, -(EDGE_MARGIN + CASH_HEIGHT / 2))
+-- The storm clock's line in the top column. Same tier as the quest line under it
+-- and as the turn strip above: one column, one voice. The row is sized from the
+-- text so bumping the tier can't crop a descender.
+local STORM_TEXT_SIZE = ui.theme.textSizeRegular
+local STORM_LINE_HEIGHT = STORM_TEXT_SIZE + 8
 
 export type Props = {
 	height: number,
@@ -155,7 +157,7 @@ export type Props = {
 	stormSecondsLeft: number,
 	stormSeconds: number,
 	checkpoints: number,
-	-- Whether to show the first-checkpoint quest line under the countdown. True
+	-- Whether to show the first-checkpoint quest line under the turn strip. True
 	-- for a player who has never seen a checkpoint clear (and for a few seconds
 	-- after, while it shows what they won); the profile flag behind it is what
 	-- makes this a new-player line rather than permanent furniture.
@@ -166,9 +168,6 @@ export type Props = {
 	questClaimed: boolean?,
 	questRewardName: string?,
 	device: ControlsHint.Device,
-	cash: number,
-	-- Signal firing with an amount whenever cash arrives; drives the bill burst.
-	cashAwarded: any,
 	-- Zone to warn about, or nil when there's nothing to shout about.
 	zoneWarning: Zones.Zone?,
 	showControls: boolean?,
@@ -248,31 +247,52 @@ return function(props: Props)
 		}),
 	}
 
-	-- Gone during the round break, storm clock and rail alike. The round is over,
-	-- the tower they measured is wreckage, and the server has frozen
-	-- `stormEndsAt` — but the client draws the clock as `stormEndsAt - now`, so
-	-- leaving it up counts a dead deadline down behind the gamemode vote and then
-	-- snaps back when the next round starts. Nothing to show is the honest answer.
-	local stormRunning = props.phase ~= PHASE.GAMEOVER
+	-- Gone whenever no stage is actually running, storm clock and rail alike.
+	--
+	-- `GAMEOVER` is the round break: the round is over, the tower they measured is
+	-- wreckage, and the server has frozen `stormEndsAt` — but the client draws the
+	-- clock as `stormEndsAt - now`, so leaving it up counts a dead deadline down
+	-- behind the gamemode vote and then snaps back when the next round starts.
+	--
+	-- `IDLE` is the same nothing from the other end: nobody is in the queue, so
+	-- the server holds the clock rather than ticking it down. That's the phase the
+	-- **opening** vote runs under — the first ballot of a server has no round
+	-- behind it to end, so it never passes through GAMEOVER — and the rail stood
+	-- there through it against a stage that hadn't started, reading a frozen
+	-- deadline over an empty platform.
+	--
+	-- Nothing to show is the honest answer for both, and the phase is the right
+	-- test for it: the HUD never learns that a vote is up (that's GamemodeVote's
+	-- screen, and this one doesn't know it exists), only that no stage is running.
+	local stormRunning = props.phase ~= PHASE.GAMEOVER and props.phase ~= PHASE.IDLE
 	if stormRunning then
-		column.Countdown = React.createElement(ui.Text, {
-			text = `{clock(props.stormSecondsLeft)} until storm!`,
-			textSize = STORM_LABEL_TEXT_SIZE,
-			weight = Enum.FontWeight.Bold,
+		-- The storm clock, under the turn strip.
+		--
+		-- It rode the progress rail's goal dot before this, on the argument that
+		-- how far up the climb is and how long is left to finish it are the same
+		-- question and belong on the same object. The argument still holds; it just
+		-- lost to where players actually look. The rail is at the right edge and
+		-- read in glances, and a deadline is the one number on this HUD that has to
+		-- be readable without looking for it — so it sits in the column with the
+		-- turn strip, which is where the eye already is.
+		--
+		-- Same tier and colours it wore on the rail, so nothing about it changed
+		-- except where it is.
+		column.Storm = React.createElement(ui.Text, {
+			text = `Storm in {clock(props.stormSecondsLeft)}`,
+			textSize = STORM_TEXT_SIZE,
+			weight = Enum.FontWeight.Heavy,
 			shadow = true,
 			color = if props.stormSecondsLeft <= STORM_URGENT_SECONDS
 				then Color3.fromRGB(255, 138, 122)
 				else Color3.fromRGB(226, 230, 245),
 			xAlignment = Enum.TextXAlignment.Center,
-			size = UDim2.new(1, 0, 0, STORM_LABEL_HEIGHT),
+			size = UDim2.new(1, 0, 0, STORM_LINE_HEIGHT),
 			layoutOrder = 2,
 		})
-
-		-- The first-checkpoint quest, directly under the countdown: that clock is
-		-- the deadline for the climb and this is what the climb is worth, so the
-		-- two belong in the same block of text. It inherits the countdown's rule
-		-- and goes during the round break along with everything else measuring a
-		-- dead run.
+		-- The first-checkpoint quest: what the climb is worth, under the clock it's
+		-- a race against. It inherits the storm's rule and goes during the round
+		-- break along with everything else measuring a dead run.
 		--
 		-- The coins are named on the claimed side only. Two standing gold promises
 		-- compete rather than add up, and the skin is the one a new player can
@@ -282,6 +302,9 @@ return function(props: Props)
 				rewardName = props.questRewardName or "A rare skin",
 				rewardExtra = `+{Constants.CASH_PER_ZONE} Coins`,
 				claimed = props.questClaimed,
+				-- Under the clock that took its old slot. It's a notification now
+				-- (`QUEST_PROMISE_SECONDS`), so it's only ever here for six seconds
+				-- and the column closes back up behind it.
 				layoutOrder = 3,
 			})
 		end
@@ -305,7 +328,11 @@ return function(props: Props)
 			shadow = true,
 			xAlignment = Enum.TextXAlignment.Center,
 			size = UDim2.new(0, COLUMN_WIDTH, 0, STATUS_HEIGHT),
-			-- Clears the touch control row when there is one.
+			-- Clears the touch control row when the device has one. Keyed on
+			-- `showControls` rather than on whether the row is actually up right
+			-- now: the row comes and goes with the turn, and a status line that
+			-- dropped into the gap between turns would move the one thing on this
+			-- edge the player is reading.
 			position = UDim2.new(0.5, 0, 1, -(if props.showControls then CONTROL_ROW_HEIGHT + EDGE_MARGIN * 2 else EDGE_MARGIN)),
 			anchorPoint = Vector2.new(0.5, 1),
 		}),
@@ -322,6 +349,9 @@ return function(props: Props)
 			current = props.height,
 			to = props.targetHeight,
 			label = `{string.format("%.1f", props.height)} studs`,
+			-- No `goalLabel`: the storm clock is in the top column now (see above),
+			-- so the rail is the climb alone and gives its whole height back to the
+			-- track. The height readout still rides the marker.
 			size = UDim2.new(0, RAIL_WIDTH, 1, -(RAIL_TOP + RAIL_BOTTOM)),
 			position = UDim2.new(1, -RAIL_RIGHT, 0, RAIL_TOP),
 			anchorPoint = Vector2.new(1, 0),
@@ -390,36 +420,6 @@ return function(props: Props)
 		})
 	end
 
-	-- Bottom-right, opposite the controls hint. The bills fly here.
-	children.Cash = React.createElement(ui.Panel, {
-		size = UDim2.fromOffset(CASH_WIDTH, CASH_HEIGHT),
-		position = UDim2.new(1, -EDGE_MARGIN, 1, -EDGE_MARGIN),
-		anchorPoint = Vector2.new(1, 1),
-	}, {
-		Row = React.createElement(ui.Row, { gap = 8, size = UDim2.fromScale(1, 1) }, {
-			Icon = React.createElement("ImageLabel", {
-				Image = Constants.CASH_IMAGE,
-				BackgroundTransparency = 1,
-				Size = UDim2.fromOffset(CASH_ICON, CASH_ICON),
-				LayoutOrder = 1,
-			}),
-			Amount = React.createElement(ui.Text, {
-				text = tostring(props.cash),
-				textSize = CASH_TEXT_SIZE,
-				weight = Enum.FontWeight.Heavy,
-				shadow = true,
-				xAlignment = Enum.TextXAlignment.Left,
-				size = UDim2.fromOffset(CASH_WIDTH - CASH_ICON - 34, CASH_HEIGHT),
-				layoutOrder = 2,
-			}),
-		}),
-	})
-
-	children.CashFly = React.createElement(CashFly, {
-		awarded = props.cashAwarded,
-		target = CASH_TARGET,
-	})
-
 	-- Only special zones announce themselves; a normal zone is just a new sky.
 	if props.zoneWarning then
 		children.ZoneWarning = React.createElement(ui.Panel, {
@@ -440,7 +440,10 @@ return function(props: Props)
 					layoutOrder = 1,
 				}),
 				Detail = React.createElement(ui.Text, {
-					text = props.zoneWarning.warning or "",
+					-- The zone's own `warning`, which is what PVP's reel prints too:
+					-- one string per zone, so it can't describe itself differently
+					-- per mode.
+					text = props.zoneWarning.warning,
 					textSize = ui.theme.textSizeRegular,
 					weight = Enum.FontWeight.Bold,
 					shadow = true,
@@ -460,7 +463,17 @@ return function(props: Props)
 		})
 	end
 
-	if props.showControls then
+	-- Only while this player can actually place. On somebody else's turn the row
+	-- used to stand there greyed out, which is a control that says "not now" where
+	-- the player wanted a screen that said nothing at all — and on a phone it's the
+	-- bottom third of the display spent saying it.
+	--
+	-- The *space* is still reserved whenever the device would ever show them
+	-- (`showControls`, which is the touch answer and doesn't change during a
+	-- round): the status line above sits clear of the row either way, so a turn
+	-- ending can't shove the line the player is reading. That's the standing rule
+	-- for this HUD — nothing that comes and goes may move what stays.
+	if props.showControls and canAct then
 		-- Steering is a drag, the two actions are taps, so they're different
 		-- shapes of control and sit apart: the stick on the left where a thumb
 		-- rests, TURN and DROP on the right for the other one. The old LEFT /
@@ -472,8 +485,10 @@ return function(props: Props)
 			position = UDim2.new(0.5, 0, 1, -EDGE_MARGIN),
 			anchorPoint = Vector2.new(0.5, 1),
 		}, {
+			-- Nothing here carries a `disabled` any more: the row only exists on a
+			-- turn this player can act in, so a disabled state inside it would be a
+			-- branch that can't be reached.
 			Steer = React.createElement(SteerStick, {
-				disabled = not canAct,
 				layoutOrder = 1,
 				onSteer = props.onSteer,
 			}),
@@ -481,7 +496,6 @@ return function(props: Props)
 				variant = "purple",
 				text = "TURN",
 				size = BUTTON_SIZE,
-				disabled = not canAct,
 				layoutOrder = 2,
 				onClick = props.onRotate,
 			}),
@@ -489,7 +503,6 @@ return function(props: Props)
 				variant = "red",
 				text = "DROP",
 				size = DROP_SIZE,
-				disabled = not canAct,
 				layoutOrder = 3,
 				onClick = props.onDrop,
 			}),

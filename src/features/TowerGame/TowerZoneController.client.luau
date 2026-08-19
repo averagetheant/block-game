@@ -23,6 +23,7 @@ local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 -- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*). The zone is
 -- announced on whichever mode's packet is live, so both stores are read here.
+local LightningBolt = require(script.Parent.LightningBolt)
 local PvpController = require(script.Parent.PvpController)
 local TowerController = require(script.Parent.TowerController)
 
@@ -235,7 +236,10 @@ local function applyZone(zoneId: number, roll: number)
 	-- The first zone of a session is the world booting up, not an event.
 	if appliedZoneId ~= nil then
 		Sfx.play("ZoneReached")
-		if zone.warning then
+		-- Only a zone that bends a rule announces itself. Asked of the zone rather
+		-- than of its copy: every zone carries a line now (the PVP reel prints one
+		-- whatever it lands on), and "clear skies" is not a banner.
+		if Zones.announces(zone) then
 			TowerZoneController.ZoneWarned:Fire(zone)
 		end
 	end
@@ -269,73 +273,103 @@ end
 -- and the sound are what carry the event, this just gives the eye somewhere to
 -- land first.
 local function drawBolt(at: Vector3)
-	local bolt = Instance.new("Part")
-	bolt.Name = BOLT_NAME
-	bolt.Anchored = true
-	bolt.CanCollide = false
-	bolt.CanQuery = false
-	bolt.CanTouch = false
-	bolt.CastShadow = false
-	bolt.Material = Enum.Material.Neon
-	bolt.Color = Constants.LIGHTNING_BOLT_COLOR
-	bolt.Size = Vector3.new(
-		Constants.LIGHTNING_BOLT_WIDTH,
-		Constants.LIGHTNING_BOLT_HEIGHT,
-		Constants.LIGHTNING_BOLT_WIDTH
-	)
-	-- Sits *on* the struck point with its whole length above, so the bolt reads
-	-- as coming down out of the sky rather than skewering the block.
-	bolt.Position = at + Vector3.new(0, Constants.LIGHTNING_BOLT_HEIGHT / 2, 0)
-	bolt.Parent = workspace
+	-- Ends *on* the struck point with its whole run above, so the bolt reads as
+	-- coming down out of the sky rather than skewering the block.
+	--
+	-- Through the same renderer the storm's background strikes use, so the
+	-- lightning that costs you a tower and the lightning that's only weather are
+	-- the same object at different distances. It used to be a single straight
+	-- Neon box, which read as a beam next to a branching one.
+	--
+	-- Fewer passes than the background bolts get: this one is a few studs from
+	-- the camera rather than half a world away, and at that range four passes of
+	-- displacement is a scribble instead of a fork.
+	LightningBolt.strike({
+		from = at + Vector3.new(0, Constants.LIGHTNING_BOLT_HEIGHT, 0),
+		to = at,
+		width = Constants.LIGHTNING_BOLT_WIDTH,
+		color = Constants.LIGHTNING_BOLT_COLOR,
+		parent = workspace,
+		passes = Constants.LIGHTNING_BOLT_PASSES,
+		fadeSeconds = Constants.LIGHTNING_BOLT_SECONDS,
+	})
+
+	-- The flash the bolt throws on the tower, on a part of its own: the bolt is
+	-- now a few dozen segments rather than one, and hanging a light on whichever
+	-- of them happened to be first would put it at a random height up the strike.
+	local flash = Instance.new("Part")
+	flash.Name = BOLT_NAME
+	flash.Anchored = true
+	flash.CanCollide = false
+	flash.CanQuery = false
+	flash.CanTouch = false
+	flash.CastShadow = false
+	flash.Transparency = 1
+	flash.Size = Vector3.one
+	flash.Position = at + Vector3.new(0, Constants.LIGHTNING_BOLT_HEIGHT / 2, 0)
+	flash.Parent = workspace
 
 	local light = Instance.new("PointLight")
 	light.Range = 60
 	light.Brightness = 6
 	light.Color = Constants.LIGHTNING_BOLT_COLOR
-	light.Parent = bolt
+	light.Parent = flash
 
 	TweenService:Create(
-		bolt,
+		light,
 		TweenInfo.new(Constants.LIGHTNING_BOLT_SECONDS, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-		{ Transparency = 1 }
+		{ Brightness = 0 }
 	):Play()
-	game:GetService("Debris"):AddItem(bolt, Constants.LIGHTNING_BOLT_SECONDS + 0.1)
+	game:GetService("Debris"):AddItem(flash, Constants.LIGHTNING_BOLT_SECONDS + 0.1)
 end
 
--- The blue column standing on the spot the next bolt will hit. Pulses so it reads
--- as a countdown rather than as scenery, and is removed the moment the server
--- clears the attribute — which it does immediately before the strike lands.
-local warning: BasePart? = nil
--- The X the server picked, kept so the column can be re-seated as the floor
--- under it moves without asking the server again.
-local warningX: number? = nil
-
--- The altitude the column stands on: the floor the run is currently building
--- from, which is the checkpoint platform it last cleared. Standing it on the
--- arena's base instead is what made the warning vanish a few stages in — the
--- base ends up hundreds of studs below the play area, and a 400-stud column
--- down there is entirely out of frame.
+-- The blue columns standing where the next bolts will hit. Each pulses so it
+-- reads as a countdown rather than as scenery, and each is removed the moment the
+-- server clears its attribute — which it does immediately before the strike lands.
 --
--- `zoneBaseHeight` is the same number the camera frames its shots from, so the
--- marker is guaranteed to sit inside the shot rather than near it.
-local function floorY(): number
-	local arena = workspace:FindFirstChild(Constants.ARENA_NAME)
-	local baseTop = if arena then arena:GetAttribute(Constants.BASE_TOP_ATTRIBUTE) else nil
+-- Keyed by the instance that announced it, because a PVP match can have six up at
+-- once. A classic run has exactly one announcer (the arena); a match announces
+-- each lane's bolt on that lane's own platform, which is also the floor its column
+-- stands on. `x` is kept beside the part so the column can be re-seated as the
+-- floor under it moves without asking the server again.
+type Marker = { part: BasePart, x: number }
+local markers: { [Instance]: Marker } = {}
+
+-- The altitude a column stands on, asked of whoever announced it.
+--
+-- A **lane platform** is the floor its lane builds from, and it's a part the
+-- client can measure — which is the whole reason PVP announces bolts on the
+-- platform rather than on the arena. It can't use the classic answer below: the
+-- classic packet is frozen for the length of a match, so `zoneBaseHeight` would be
+-- whatever the last classic round left there.
+--
+-- The **arena** means the classic run, where it's the floor the run is currently
+-- building from — the checkpoint platform it last cleared. Standing the column on
+-- the arena's base instead is what made the warning vanish a few stages in: the
+-- base ends up hundreds of studs below the play area, and a 400-stud column down
+-- there is entirely out of frame. `zoneBaseHeight` is the same number the camera
+-- frames its shots from, so the marker is guaranteed to sit inside the shot rather
+-- than near it.
+local function floorFor(source: Instance): number
+	if source:IsA("BasePart") then
+		return source.Position.Y + source.Size.Y / 2
+	end
+	local baseTop = source:GetAttribute(Constants.BASE_TOP_ATTRIBUTE)
 	return (if typeof(baseTop) == "number" then baseTop else 0)
 		+ math.max(TowerController.GetData().zoneBaseHeight, 0)
 end
 
-local function clearWarning()
-	if warning then
-		warning:Destroy()
-		warning = nil
+local function clearWarning(source: Instance)
+	local marker = markers[source]
+	if marker == nil then
+		return
 	end
-	warningX = nil
+	marker.part:Destroy()
+	markers[source] = nil
 end
 
-local function showWarning(x: number)
-	clearWarning()
-	warningX = x
+local function showWarning(source: Instance, x: number)
+	clearWarning(source)
 
 	local part = Instance.new("Part")
 	part.Name = "TowerLightningWarning"
@@ -352,37 +386,73 @@ local function showWarning(x: number)
 	-- the way up through everything built in that column — which is what makes it
 	-- read as "this whole line is about to be hit" rather than as a mark floating
 	-- at one height.
-	part.Position = Vector3.new(x, floorY() + Constants.WARN_HEIGHT / 2, Constants.PLANE_Z)
+	part.Position = Vector3.new(x, floorFor(source) + Constants.WARN_HEIGHT / 2, Constants.PLANE_Z)
 	part.Parent = workspace
-	warning = part
+	markers[source] = { part = part, x = x }
 end
 
 -- The floor only moves when a checkpoint lands, which can happen while a warning
 -- is already standing. Polled with the weather rather than driven per frame:
 -- without it the column spends the rest of its ten seconds under the new floor.
+--
+-- A source that has gone (a PVP lane retired mid-warning, or the whole match
+-- ending) takes its column with it: the server can't clear an attribute on a part
+-- it has already destroyed.
 local function followFloor()
-	local part = warning
-	local x = warningX
-	if part == nil or x == nil then
-		return
+	for source, marker in markers do
+		if source.Parent == nil then
+			clearWarning(source)
+			continue
+		end
+		marker.part.Position =
+			Vector3.new(marker.x, floorFor(source) + Constants.WARN_HEIGHT / 2, Constants.PLANE_Z)
 	end
-	part.Position = Vector3.new(x, floorY() + Constants.WARN_HEIGHT / 2, Constants.PLANE_Z)
 end
 
 function TowerZoneController.Start()
 	local lastZoneId, lastSky = nil, nil
+	-- Bumped by every announcement, so a paint waiting out a roll window can tell
+	-- whether it's still the one that's owed.
+	local pendingZone = 0
 
 	-- Both modes carry the zone on their own packet, and the classic one stops
 	-- being sent for the length of a PVP match — so the zone is read from
 	-- whichever packet arrived, through one handler that doesn't care which. The
 	-- dedupe below is what makes that safe: two sources agreeing on the same zone
 	-- re-apply nothing.
-	local function onZone(zoneId: number, sky: number)
+	--
+	-- `at` is the server time the zone becomes true. In PVP it sits up to
+	-- `ZONE_ROLL_SECONDS` ahead of the packet that announced it, and the whole
+	-- visual half waits for it: the HUD spends that window spinning a reel through
+	-- the zone names (see `ZoneReel`), and a sky that changed while the reel was
+	-- still turning would give the answer away and land the world's change on a
+	-- different beat from the HUD's. The classic packet has no such window and
+	-- passes a time already gone, which paints immediately.
+	local function onZone(zoneId: number, sky: number, at: number)
 		if zoneId == lastZoneId and sky == lastSky then
 			return
 		end
 		lastZoneId, lastSky = zoneId, sky
-		applyZone(zoneId, sky)
+		pendingZone += 1
+		local token = pendingZone
+
+		-- Capped at the window the server is allowed to ask for: a stamp that
+		-- arrived wrong (a clock that hasn't synced yet, a packet from a build
+		-- that means something else by it) should land the zone early, never
+		-- leave the world painted for the zone before it.
+		local wait = math.min(at - workspace:GetServerTimeNow(), PvpConstants.ZONE_ROLL_SECONDS)
+		if wait <= 0 then
+			applyZone(zoneId, sky)
+			return
+		end
+
+		task.delay(wait, function()
+			-- A newer announcement, or the match ending, retires this one.
+			if token ~= pendingZone then
+				return
+			end
+			applyZone(zoneId, sky)
+		end)
 	end
 
 	TowerController.DataChanged:Connect(function(data)
@@ -391,56 +461,101 @@ function TowerZoneController.Start()
 		if PvpController.isActive() then
 			return
 		end
-		onZone(data.zoneId, data.zoneSky)
+		onZone(data.zoneId, data.zoneSky, 0)
 	end)
 
 	PvpController.DataChanged:Connect(function(data)
 		if data.phase == PvpConstants.PHASE.OFF then
+			-- The match can end mid-roll. The server retires its own pending apply
+			-- at the same moment (see `rollZone`), so a reel that never landed must
+			-- not leave the sky painted for a zone the world never took. Forgetting
+			-- what's up as well as cancelling is what lets the next classic packet
+			-- put its own zone back even if it names the one just announced.
+			pendingZone += 1
+			lastZoneId, lastSky = nil, nil
 			return
 		end
-		onZone(data.zoneId, data.zoneSky)
+		onZone(data.zoneId, data.zoneSky, data.zoneAt)
 	end)
 
-	-- The arena carries the strike position as an attribute. Waiting for the
-	-- arena rather than assuming it exists: the client can boot before the server
-	-- has built it.
-	task.spawn(function()
-		local arena = workspace:WaitForChild(Constants.ARENA_NAME)
-
-		arena:GetAttributeChangedSignal(Constants.STRIKE_ATTRIBUTE):Connect(function()
-			local at = arena:GetAttribute(Constants.STRIKE_ATTRIBUTE)
+	-- Bolts and their warnings are read off attributes on whoever announced them:
+	-- the arena for a classic run, and each lane's own platform for a PVP match,
+	-- where six can be in the air at once. One watcher covers both — it never asks
+	-- which mode is running, only which instance spoke.
+	local function watchSource(source: Instance)
+		source:GetAttributeChangedSignal(Constants.STRIKE_ATTRIBUTE):Connect(function()
+			local at = source:GetAttribute(Constants.STRIKE_ATTRIBUTE)
 			if typeof(at) == "Vector3" then
 				drawBolt(at)
 			end
 		end)
 
-		-- nil is the server saying "no bolt pending", which happens both when one
-		-- lands and when the zone changes out from under a warning.
-		arena:GetAttributeChangedSignal(Constants.WARN_ATTRIBUTE):Connect(function()
-			local x = arena:GetAttribute(Constants.WARN_ATTRIBUTE)
+		-- nil is the server saying "no bolt pending", which happens when one
+		-- lands, when the zone changes out from under a warning, and when a match
+		-- ends mid-warning.
+		source:GetAttributeChangedSignal(Constants.WARN_ATTRIBUTE):Connect(function()
+			local x = source:GetAttribute(Constants.WARN_ATTRIBUTE)
 			if typeof(x) == "number" then
-				showWarning(x)
+				showWarning(source, x)
 			else
-				clearWarning()
+				clearWarning(source)
 			end
 		end)
 
 		-- A player who joins mid-warning gets it too; attributes are already set
 		-- by the time they replicate in, so there's no change event to wait for.
-		local existing = arena:GetAttribute(Constants.WARN_ATTRIBUTE)
+		-- Same for a lane platform, which replicates with its attribute already on
+		-- it if it was built during a warning.
+		local existing = source:GetAttribute(Constants.WARN_ATTRIBUTE)
 		if typeof(existing) == "number" then
-			showWarning(existing)
+			showWarning(source, existing)
+		end
+	end
+
+	-- Waiting for the arena rather than assuming it exists: the client can boot
+	-- before the server has built it.
+	task.spawn(function()
+		local arena = workspace:WaitForChild(Constants.ARENA_NAME)
+		watchSource(arena)
+
+		-- The lanes folder comes and goes with each match, and its platforms come
+		-- and go with the players in them, so both are watched rather than read
+		-- once. A retired lane's column is cleaned up by `followFloor`, which
+		-- notices the platform has left the world.
+		local function watchLanes(folder: Instance)
+			for _, child in folder:GetChildren() do
+				if child:IsA("BasePart") then
+					watchSource(child)
+				end
+			end
+			folder.ChildAdded:Connect(function(child)
+				if child:IsA("BasePart") then
+					watchSource(child)
+				end
+			end)
 		end
 
-		-- The pulse. Driven here rather than by a tween so it survives the marker
-		-- being replaced, and costs one property write a frame.
+		local existingLanes = arena:FindFirstChild(PvpConstants.LANES_FOLDER)
+		if existingLanes then
+			watchLanes(existingLanes)
+		end
+		arena.ChildAdded:Connect(function(child)
+			if child.Name == PvpConstants.LANES_FOLDER then
+				watchLanes(child)
+			end
+		end)
+
+		-- The pulse. Driven here rather than by a tween so it survives a marker
+		-- being replaced, and costs one property write per marker per frame.
 		RunService.RenderStepped:Connect(function()
-			local part = warning
-			if part == nil then
+			if next(markers) == nil then
 				return
 			end
 			local wave = (math.sin(os.clock() * Constants.WARN_PULSE_HZ * math.pi * 2) + 1) / 2
-			part.Transparency = Constants.WARN_TRANSPARENCY - wave * 0.18
+			local transparency = Constants.WARN_TRANSPARENCY - wave * 0.18
+			for _, marker in markers do
+				marker.part.Transparency = transparency
+			end
 		end)
 	end)
 

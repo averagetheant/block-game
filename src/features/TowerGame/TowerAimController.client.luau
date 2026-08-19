@@ -102,6 +102,25 @@ local function setServerPieceHidden(hidden: boolean)
 	if label then
 		label.Enabled = not hidden
 	end
+	-- And the tells, for exactly the same reason the plate is here. A Highlight is
+	-- drawn from geometry rather than from how that geometry looks, so
+	-- LocalTransparencyModifier doesn't reach one either: the real piece stayed
+	-- hidden and its tell did not, leaving the holder steering a preview that wore
+	-- its own tell while a second copy hung a frame behind at the server's
+	-- position. Two offset outlines of the same block, which reads as the block
+	-- wearing a crooked clone of itself — and is worst on the loudest tells, so a
+	-- Bomb showed it plainly and a quiet type barely at all.
+	--
+	-- Only the holder's own view is touched. Everyone else is watching the real
+	-- piece and should see its tell the whole way down.
+	--
+	-- By class rather than by name, so the second tell a glued block wears is
+	-- covered without this file having heard of it.
+	for _, child in model:GetChildren() do
+		if child:IsA("Highlight") then
+			child.Enabled = not hidden
+		end
+	end
 end
 
 -- --------------------------------------------------------- the landing ghost --

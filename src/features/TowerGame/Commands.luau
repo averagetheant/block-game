@@ -13,6 +13,13 @@
 -- isolation. `zone` forces the tower straight into a zone. `givecash` credits
 -- Tower Cash directly, the same path CashService pays out through.
 --
+-- The two storm commands are not the same command twice. `extendstorm` is the
+-- Robux product without the Robux, so it *adds* seconds the way a purchase has
+-- to; `setstorm` is a dev handle that *replaces* the number, because reaching a
+-- particular moment on the clock shouldn't mean doing arithmetic against
+-- wherever it happens to be. `setstorm 0` is the only way to reach the wreck
+-- without waiting out a stage.
+--
 -- Shared module, discovered by the Cmdr feature on BOTH realms: the server
 -- registers this with `Run`, the client registers it without so the console
 -- accepts the name. See src/features/Cmdr/CommandRegistry.luau for why.
@@ -85,6 +92,21 @@ local function extendStorm(seconds: number): string
 	return `Storm pushed back {seconds}s.`
 end
 
+-- Put the stage clock on a chosen number instead of nudging it. `extendstorm`
+-- adds, because that's what the product does; this replaces, because landing on
+-- "twenty seconds left" shouldn't mean working out how far it already had to go.
+local function setStorm(seconds: number): string
+	local ServerScriptService = game:GetService("ServerScriptService")
+	local TowerService = require(ServerScriptService.Features.TowerGame.TowerService)
+	if not TowerService.setStorm(seconds) then
+		return "Can't set the storm clock right now — a checkpoint or round break is running."
+	end
+	if seconds == 0 then
+		return "Storm set to land immediately."
+	end
+	return `Storm set to {seconds}s from now.`
+end
+
 return {
 	{
 		Name = "extendstorm",
@@ -101,6 +123,23 @@ return {
 		},
 		Run = function(_context, seconds: number)
 			return extendStorm(seconds)
+		end,
+	},
+	{
+		Name = "setstorm",
+		Aliases = { "stormtime" },
+		Description = "Set how long is left on the stage clock, in seconds. 0 lands the storm now.",
+		Group = "TowerGame",
+		Args = {
+			{
+				Type = "number",
+				Name = "seconds",
+				Description = "Seconds from now until the storm. 0 fires it on the next tick.",
+				Default = 10,
+			},
+		},
+		Run = function(_context, seconds: number)
+			return setStorm(seconds)
 		end,
 	},
 	{

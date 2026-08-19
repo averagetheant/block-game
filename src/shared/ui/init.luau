@@ -51,6 +51,9 @@ ui.contract = require(script.contract)
 -- Tokens + asset registry.
 ui.assets = require(script.assets)
 ui.theme = require(script.theme)
+-- The stacking scale every root sorts itself by. Not a theme token — a skin
+-- decides how a surface looks, never whether it's in front. See layers.luau.
+ui.layers = require(script.layers)
 
 -- Semantic primitives (skin-resolved).
 ui.Button = semantic("Button")

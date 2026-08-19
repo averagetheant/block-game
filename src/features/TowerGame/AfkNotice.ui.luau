@@ -38,6 +38,10 @@ local WIDTH = 560
 -- line break would move the buttons under the player's cursor.
 local TITLE_ROWS = 2
 local BODY_ROWS = 2
+-- Slack on top of `tier * rows`. A box sized to the exact height of its rows
+-- has nowhere to put the pixel a line picks up when the viewport scale rounds
+-- it — and the row that no longer fits isn't squeezed, it's dropped.
+local ROW_SLACK = 8
 local BUTTON_SIZE = UDim2.fromOffset(220, 76)
 local BUTTON_GAP = 16
 
@@ -47,8 +51,8 @@ return function(props: Props)
 
 	-- Line heights track their text tiers, so a change to the ladder carries the
 	-- card with it instead of clipping a descender.
-	local titleHeight = ui.theme.textSizeLarge * TITLE_ROWS
-	local bodyHeight = ui.theme.textSizeRegular * BODY_ROWS
+	local titleHeight = ui.theme.textSizeLarge * TITLE_ROWS + ROW_SLACK
+	local bodyHeight = ui.theme.textSizeRegular * BODY_ROWS + ROW_SLACK
 	local cardHeight = padding * 2
 		+ titleHeight
 		+ bodyHeight

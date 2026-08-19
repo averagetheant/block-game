@@ -29,6 +29,11 @@ export type Props = {
 	-- A skin that isn't solid (Needoh's glass) reads as the wrong material
 	-- entirely when the card draws it opaque, so the tile carries it too.
 	transparency: number?,
+	-- Tiled over every face, for a skin whose look is a pattern rather than a
+	-- material (Duck). Without it that pack's card would be a plain yellow block,
+	-- which is the sixty-coin Yellow pack — the card has to show the difference it
+	-- is selling, same reason the preview is a real block and not an icon.
+	texture: string?,
 	size: UDim2?,
 	position: UDim2?,
 	anchorPoint: Vector2?,
@@ -57,6 +62,7 @@ return function(props: Props)
 	local color = props.color
 	local material = props.material or Enum.Material.SmoothPlastic
 	local transparency = props.transparency or 0
+	local texture = props.texture
 
 	React.useEffect(function()
 		local viewport = viewportRef.current
@@ -77,6 +83,19 @@ return function(props: Props)
 			part.CanCollide = false
 			part.TopSurface = Enum.SurfaceType.Smooth
 			part.BottomSurface = Enum.SurfaceType.Smooth
+			if texture then
+				-- One tile per face, as in game — the cells here are CELL studs
+				-- rather than BLOCK_SIZE, so the tile is measured off that and the
+				-- pattern reads the same size on the card as it does on the tower.
+				for _, face in Enum.NormalId:GetEnumItems() do
+					local decal = Instance.new("Texture")
+					decal.Texture = texture
+					decal.Face = face
+					decal.StudsPerTileU = CELL
+					decal.StudsPerTileV = CELL
+					decal.Parent = part
+				end
+			end
 			part.Parent = model
 		end
 		model.Parent = viewport
@@ -110,7 +129,7 @@ return function(props: Props)
 			model:Destroy()
 			camera:Destroy()
 		end
-	end, { color, material, transparency } :: { any })
+	end, { color, material, transparency, texture } :: { any })
 
 	return React.createElement("ViewportFrame", {
 		ref = viewportRef,

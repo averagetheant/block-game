@@ -69,6 +69,30 @@ Clients never mutate the profile directly — route through a feature-owned Byte
 
 - `Constants.STORE_NAME = "PlayerData_v1"` — ProfileStore key. Bump the suffix when you ship an incompatible schema change you don't want to reconcile.
 - `Constants.REPLICA_CLASS = "PlayerData"` — Replica class token. The client subscribes via `ReplicaController.ReplicaOfClassCreated`.
+- `Constants.EPHEMERAL` — **currently `true`, and temporary.** See below.
+
+## Ephemeral mode (testing)
+
+`Constants.EPHEMERAL = true` makes the profile disposable: sessions come from
+`ProfileStore.Mock` (an in-memory store with no relation to the real DataStore),
+and `resetToTemplate` wipes the loaded data back to the freshly merged template
+after `Reconcile`. Nothing loads, nothing saves, and **every join** — including a
+rejoin inside the same server session — starts as a brand-new player.
+
+It's on to make [DailyRewards](DailyRewards.md) testable. A run gated on the UTC
+calendar can otherwise be exercised about once a day: claim, and the next card is
+shut until tomorrow. With this on, every play test is day 1 with a reward waiting,
+which is also the exact state the join prompt exists for.
+
+The reset clears `profile.Data` **in place** rather than assigning a fresh table:
+`profile.Data` and `replica.Data` must stay the same table or the profile silently
+stops saving, which is the drift the `OnSave` warning in `PlayerDataService`
+watches for.
+
+**Turn it off before shipping** — set `EPHEMERAL = false`. The failure mode is
+silent and expensive: real players would each spend a session on data thrown away
+when they leave. The server prints a loud `warn` on start while it's on, and
+that warning is the reminder.
 
 ## What `Constants.luau` deliberately doesn't have
 

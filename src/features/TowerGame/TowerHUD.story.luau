@@ -3,6 +3,9 @@
 -- slider or a dropdown here, including the turn clock — so you can park the timer
 -- at 3s and check the urgent (red) state without waiting out a real turn.
 --
+-- The touch row also needs a turn this player can act in — it's hidden on anyone
+-- else's — so it shows on the "aiming (yours)" phase and nowhere else.
+--
 -- `showControls` is forced on by default because the touch control row is the
 -- part worth eyeballing in-editor; in game it only renders on touch devices.
 
@@ -13,7 +16,6 @@ local React = require(ReplicatedStorage.Packages.React)
 local ReactRoblox = require(ReplicatedStorage.Packages.ReactRoblox)
 local UILabs = require(ReplicatedStorage.Packages.UILabs)
 
-local Signal = require(ReplicatedStorage.Packages.Signal)
 
 local TowerGame = Features:WaitForChild("TowerGame")
 local Constants = require(TowerGame:WaitForChild("Constants"))
@@ -27,10 +29,6 @@ local questRewardName = if questPack then questPack.name else "A rare skin"
 
 local PHASE_NAMES =
 	{ "aiming (yours)", "aiming (someone else)", "settling", "checkpoint", "game over", "idle" }
-
--- Stands in for TowerFeedbackController.CashAwarded. The story fires it on a
--- timer so the bill burst plays on a loop while you tune it.
-local fakeAward = Signal.new()
 
 local function zoneByName(name: string): Zones.Zone?
 	if name == "none" then
@@ -68,7 +66,6 @@ return {
 		-- Tags the current player's chip "2x" — what a Double Turn owner's
 		-- headshot looks like while their second piece is still coming.
 		doubleTurn = false,
-		cash = UILabs.Slider(1250, 0, 100000, 10),
 		-- The composed piece name, exactly as TowerView builds it from the shape
 			-- and the block type.
 			shapeName = UILabs.Choose({ "T-Shape", "I-Shape", "Bomb T-Shape", "Burning L-Shape", "Noob" }),
@@ -84,21 +81,6 @@ return {
 		local c = props.controls
 		local selected = c.phase
 		local warningZone = zoneByName(c.zoneWarning)
-
-		-- Fire a payout every couple of seconds so the burst is always visible
-		-- while the story is open.
-		React.useEffect(function()
-			local running = true
-			task.spawn(function()
-				while running do
-					task.wait(2)
-					fakeAward:Fire(50)
-				end
-			end)
-			return function()
-				running = false
-			end
-		end, {})
 
 		local phase = Constants.PHASE.AIMING
 		if selected == "settling" then
@@ -130,10 +112,6 @@ return {
 			-- The Double Turn tag on the current player's chip.
 			repeatUserId = if c.doubleTurn then order[1] or 0 else 0,
 			device = c.device,
-			cash = c.cash,
-			-- A stand-in for the controller's signal: the story fires it from the
-			-- button below so the bill burst can be watched without a server.
-			cashAwarded = fakeAward,
 			zoneWarning = warningZone,
 			shapeName = c.shapeName,
 			nextShapeName = "T",

@@ -88,10 +88,39 @@ local endsAt = 0
 local zoneId = Zones.DEFAULT_ID
 local zoneSky = 1
 local zoneRollAt = 0
+-- When the announced zone becomes true in the world, server time. Equal to "now"
+-- for a zone that landed the instant it was rolled; up to ZONE_ROLL_SECONDS ahead
+-- while the reel is spinning on every client.
+local zoneAt = 0
+-- Bumped by every roll, so the deferred apply below can tell whether it is still
+-- the newest one. A pending apply that fires after the match has ended — or after
+-- a second roll somehow overtook it — would be writing gravity for a zone nobody
+-- is in any more.
+local zoneToken = 0
 local lastBroadcast = 0
 -- Set while `runMatch` is winding down, so the poll stops dealing pieces the
 -- instant the clock stops rather than one tick later.
 local dealing = false
+
+-- The storm's clock, while a Stormy zone is up. One clock for the whole board:
+-- every live lane is warned together and struck together, so weather can't be
+-- the thing that decided a match. See STRIKE_* in PvpConstants.
+--
+-- When the next bolt lands (`os.clock`), and the X each pending bolt is aimed at,
+-- keyed by the **platform** that announced it. `pendingStrikes` is empty whenever
+-- no warning is up, which is also the "nothing to clear" test.
+--
+-- Keyed by the platform rather than by the lane's slot because a slot can change
+-- hands inside a warning window: a lane retires, the seat is freed, and the next
+-- player through the door is seated in it. Keyed by slot, that player would take a
+-- bolt from a warning they never saw; keyed by the platform (a fresh part every
+-- time a lane is granted) they simply aren't in this round of strikes.
+local nextStrikeAt = 0
+local strikeDueAt = 0
+local pendingStrikes: { [BasePart]: number } = {}
+-- Whether the storm is currently running. Its rising edge is what starts the
+-- first gap of a Stormy zone rather than the first warning.
+local storming = false
 
 -- ------------------------------------------------------------------- the wire --
 
@@ -102,6 +131,7 @@ local function broadcast()
 		matchSeconds = PvpConstants.MATCH_SECONDS,
 		zoneId = zoneId,
 		zoneSky = zoneSky,
+		zoneAt = zoneAt,
 		lanes = {},
 	}
 
@@ -131,12 +161,16 @@ end
 local function broadcastOff()
 	phase = PHASE.OFF
 	endsAt = 0
+	-- Retires a roll still inside its window (the clock can hand out a zone in the
+	-- last two seconds of a match). See `rollZone`.
+	zoneToken += 1
 	PvpPackets.State.sendToAll({
 		phase = phase,
 		endsAt = 0,
 		matchSeconds = PvpConstants.MATCH_SECONDS,
 		zoneId = zoneId,
 		zoneSky = zoneSky,
+		zoneAt = zoneAt,
 		lanes = {},
 	})
 end
@@ -153,7 +187,10 @@ local function buildPlatform(slot: number): BasePart
 	part.Material = Enum.Material.SmoothPlastic
 	part.TopSurface = Enum.SurfaceType.Smooth
 	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.CustomPhysicalProperties = Constants.BLOCK_PHYSICS
+	-- The same floor the classic base is, for the same reason it is one: a Bouncy
+	-- piece landing on a bare lane used to bounce off the platform itself, and a
+	-- lane is bare far more often than the classic tower ever is. See FLOOR_PHYSICS.
+	part.CustomPhysicalProperties = Constants.FLOOR_PHYSICS
 	-- Left in the Default collision group on purpose, exactly like the classic
 	-- base and the checkpoint platforms: a Ghost falls through blocks and *not*
 	-- through the floor, and a lane platform is floor.
@@ -218,8 +255,30 @@ end
 
 -- ----------------------------------------------------------------- the pieces --
 
+-- How far through the match clock we are: 0 at the whistle, 1 at time.
+--
+-- Any phase but PLAYING reads 0. `endsAt` belongs to the countdown or to the
+-- results panel then, and a piece dealt against that clock would take its odds
+-- from a number that has nothing to do with how far along the match is.
+local function matchProgress(): number
+	if phase ~= PHASE.PLAYING then
+		return 0
+	end
+	local left = endsAt - workspace:GetServerTimeNow()
+	return math.clamp(1 - left / PvpConstants.MATCH_SECONDS, 0, 1)
+end
+
 local function dealTo(lane: Lane)
-	TowerService.dealPiece(lane.player, lane.x, lane.floorY)
+	-- The hazard rate is read here, as the piece is built, rather than once at the
+	-- whistle: the whole point of the ramp is that a piece dealt in the last
+	-- minute rolls against a worse number than one dealt in the first, and six
+	-- lanes are dealing at their own tempos throughout.
+	TowerService.dealPiece(
+		lane.player,
+		lane.x,
+		lane.floorY,
+		PvpConstants.specialChanceAt(matchProgress())
+	)
 	lane.nextPieceAt = 0
 	lane.pieceEndsAt = workspace:GetServerTimeNow() + PvpConstants.PIECE_SECONDS
 end
@@ -307,6 +366,16 @@ end
 
 -- ------------------------------------------------------------------ the zones --
 
+-- Roll the next zone, announce it, and make it true a beat later.
+--
+-- The two halves are deliberately apart. `zoneId` goes on the wire immediately,
+-- which is what starts every client's reel; the world only changes when the reel
+-- lands, ZONE_ROLL_SECONDS later. Nothing can be acted on in between — the
+-- announcement changes no rule, only what the HUD is spinning — so the gap costs
+-- the players nothing and buys the change an entrance.
+--
+-- `first` skips the window: the opening zone arrives with the world during the
+-- countdown, so there is nothing to reveal and no tower yet to disturb.
 local function rollZone(first: boolean)
 	local zone = if first and PvpConstants.FIRST_ZONE_NORMAL
 		then Zones.get(Zones.DEFAULT_ID)
@@ -317,9 +386,144 @@ local function rollZone(first: boolean)
 	-- the folder count. Same contract as the classic packet's.
 	zoneSky = math.random(1, 255)
 	zoneRollAt = os.clock() + PvpConstants.ZONE_SECONDS
+
 	-- Makes it true in the world — gravity, snow friction, retro studs — without
 	-- touching the classic state packet, which is stale for the whole match.
-	TowerService.applyZone(zoneId, zoneSky)
+	local landing, sky = zoneId, zoneSky
+	zoneToken += 1
+	local token = zoneToken
+
+	local window = if first then 0 else PvpConstants.ZONE_ROLL_SECONDS
+	zoneAt = workspace:GetServerTimeNow() + window
+	if window <= 0 then
+		TowerService.applyZone(landing, sky)
+		return
+	end
+
+	task.delay(window, function()
+		-- A newer roll, or the match ending, retires this one. Both bump the
+		-- token, and the classic round takes the world back the moment the match
+		-- is over — a stale apply landing after that would drop the next run into
+		-- low gravity for no reason anybody could see.
+		if token ~= zoneToken then
+			return
+		end
+		TowerService.applyZone(landing, sky)
+	end)
+end
+
+-- ------------------------------------------------------------------ the storm --
+
+-- Lightning, for a board with six towers on it.
+--
+-- The classic driver (`TowerService.updateLightning`) picks one spot on the play
+-- plane and warns it. That is exactly right for one shared tower and exactly
+-- wrong here: whichever lane happened to be under the X would take the damage and
+-- the other five would watch. So the match runs its own clock and strikes **every
+-- live lane at once** — same beat, one bolt each, at a random X inside each
+-- lane's own steering range. The storm is weather everybody is standing in rather
+-- than a coin toss about who loses a tower.
+--
+-- Each bolt is announced on its own lane's platform (see
+-- `TowerService.strikeColumn`), which is what lets six markers and six flashes
+-- exist at once: one attribute on one arena folder can only describe one of them,
+-- and the platform is also the floor the client stands the marker's column on.
+
+-- Take every marker down. Called when the bolts land, when the zone stops being
+-- stormy under a standing warning, and at teardown — a red column outliving the
+-- match it belonged to would stand over the classic round that follows.
+local function clearStrikeMarkers()
+	if next(pendingStrikes) == nil then
+		return
+	end
+	for platform in pendingStrikes do
+		-- A platform destroyed with its lane took its marker with it; the client
+		-- clears any column whose announcer has left the world.
+		if platform.Parent ~= nil then
+			platform:SetAttribute(Constants.WARN_ATTRIBUTE, nil)
+		end
+	end
+	table.clear(pendingStrikes)
+end
+
+local function randomGap(): number
+	return PvpConstants.STRIKE_MIN_SECONDS
+		+ math.random() * (PvpConstants.STRIKE_MAX_SECONDS - PvpConstants.STRIKE_MIN_SECONDS)
+end
+
+local function updateStrikes(now: number)
+	-- Three things have to be true, and each rules out a bolt that would land at
+	-- a moment nobody could read:
+	--
+	--   * pieces are being dealt — a bolt during the countdown would hit bare
+	--     platforms, and one during the results would rearrange the towers the
+	--     standings are being read off;
+	--   * the zone is Stormy;
+	--   * and it has actually *landed*. `zoneId` goes on the wire up to
+	--     ZONE_ROLL_SECONDS before the world takes it, while every client's reel
+	--     is still spinning — a warning column going up mid-spin would give the
+	--     answer away before the reel did.
+	local live = dealing
+		and Zones.get(zoneId).kind == "stormy"
+		and workspace:GetServerTimeNow() >= zoneAt
+
+	if not live then
+		clearStrikeMarkers()
+		storming = false
+		return
+	end
+
+	-- First tick of a Stormy zone: start the gap rather than the warning. The
+	-- clock is carried between zones otherwise, and a zone that arrives with an
+	-- expired one would open with a marker already standing.
+	if not storming then
+		storming = true
+		nextStrikeAt = now + randomGap()
+		return
+	end
+
+	if next(pendingStrikes) ~= nil then
+		if now < strikeDueAt then
+			return
+		end
+
+		-- Markers off first, bolts second: a client that sees both attributes
+		-- change in the same frame should be left with a flash and no column,
+		-- never the other way round.
+		local aimed = table.clone(pendingStrikes)
+		clearStrikeMarkers()
+		nextStrikeAt = now + randomGap()
+
+		for _, lane in lanes do
+			local x = aimed[lane.platform]
+			-- A lane seated *during* the warning isn't in this list and doesn't get
+			-- struck: nobody may be hit by a bolt they were never shown. It'll be
+			-- warned with everyone else on the next one.
+			if x == nil then
+				continue
+			end
+			TowerService.strikeColumn(x, lane.floorY, lane.platform)
+		end
+		return
+	end
+
+	-- Nothing pending: raise the next round of warnings once the gap has run
+	-- down, minus the warning it has to fit inside.
+	if now < nextStrikeAt - PvpConstants.STRIKE_WARNING_SECONDS then
+		return
+	end
+
+	strikeDueAt = now + PvpConstants.STRIKE_WARNING_SECONDS
+	for _, lane in lanes do
+		-- Inside the lane's own steering range, so a bolt always lands somewhere
+		-- its player could have built — and never in the air between two lanes.
+		local x = lane.x + (math.random() * 2 - 1) * Constants.STEER_LIMIT_X
+		pendingStrikes[lane.platform] = x
+		-- Only the X goes out. What the bolt actually hits is resolved when it
+		-- lands, so five seconds of building under the marker counts, and the
+		-- client stands the column on the platform that announced it.
+		lane.platform:SetAttribute(Constants.WARN_ATTRIBUTE, x)
+	end
 end
 
 -- --------------------------------------------------------------- the standings --
@@ -362,6 +566,10 @@ end
 -- ----------------------------------------------------------------- the match --
 
 local function teardown()
+	-- Before the lanes go: the markers live on their platforms, and clearing an
+	-- attribute on a destroyed part is a write nobody reads.
+	clearStrikeMarkers()
+	storming = false
 	for index = #lanes, 1, -1 do
 		retireLane(lanes[index])
 	end
@@ -406,6 +614,11 @@ local function runUntil(deadline: number)
 			rollZone(false)
 			changed = true
 		end
+
+		-- Weather, on the same poll as everything else: the match has one place
+		-- where time passes (see above), and the storm is not the thing to give a
+		-- second one to.
+		updateStrikes(os.clock())
 
 		-- Re-send at least once a second even when nothing moved: a player who
 		-- joined between broadcasts has no other way to learn there's a match on.

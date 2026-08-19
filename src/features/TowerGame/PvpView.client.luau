@@ -25,7 +25,6 @@ local ControlsHint = require(ReplicatedStorage.Features.TowerGame.ControlsHint)
 local PvpConstants = require(ReplicatedStorage.Features.TowerGame.PvpConstants)
 local PvpHUD = require(ReplicatedStorage.Features.TowerGame.PvpHUD)
 local Shapes = require(ReplicatedStorage.Features.TowerGame.Shapes)
-local Zones = require(ReplicatedStorage.Features.TowerGame.Zones)
 
 -- Client-realm siblings (StarterPlayerScripts.Features.TowerGame.*).
 local PvpController = require(script.Parent.PvpController)
@@ -96,6 +95,10 @@ return function()
 	-- PvpPackets): the countdown, then the match, then the results.
 	local phaseClock, setPhaseClock = React.useState(0)
 	local pieceClock, setPieceClock = React.useState(0)
+	-- Whether the zone on the packet is still inside its roll window. Counted here
+	-- with the clocks for the same reason they are: the server broadcasts the
+	-- moment it lands, not a tick, so somebody local has to notice it passing.
+	local zoneRolling, setZoneRolling = React.useState(false)
 
 	React.useEffect(function()
 		local connection = RunService.Heartbeat:Connect(function()
@@ -109,6 +112,9 @@ return function()
 			setPieceClock(function(previous)
 				return if math.ceil(previous) == math.ceil(pieceLeft) then previous else pieceLeft
 			end)
+			-- Unchanged almost every frame, and React bails out of an update to the
+			-- same value — so this costs a comparison, not a render.
+			setZoneRolling(PvpController.zoneRolling())
 		end)
 
 		return function()
@@ -151,7 +157,8 @@ return function()
 		phase = state.phase,
 		secondsLeft = phaseClock,
 		matchSeconds = state.matchSeconds,
-		zoneName = Zones.get(state.zoneId).name,
+		zoneId = state.zoneId,
+		zoneRolling = zoneRolling,
 		standings = standings,
 		myHeight = if mine then mine.height else nil,
 		myRank = PvpController.myRank(),

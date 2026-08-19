@@ -4,6 +4,11 @@
 --
 -- Click handling is wired via the `onClick` prop. The visible visuals are
 -- non-interactive — the Trigger at ZIndex 10 captures the press.
+--
+-- Two frames deep: an outer *box* that holds the caller's size, position and
+-- anchor and never moves, and the `Body` centred inside it that draws the button
+-- and wears the hover scale. See the note above the render for why the swell
+-- can't ride on the box.
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
@@ -46,14 +51,26 @@ return function(props: Props)
 
 	local hover = useHoverScale()
 
-	return React.createElement("Frame", {
-		Size = props.size or theme.buttonSize,
-		Position = props.position,
-		AnchorPoint = props.anchorPoint,
+	-- Two frames, and the split is what keeps the hover swell centred.
+	--
+	-- A UIScale transforms about its own frame's **AnchorPoint**, so when the
+	-- scale rode on the outer frame the button grew out of whichever corner it
+	-- happened to be anchored by: down and to the right for a layout child (the
+	-- default 0,0), up and to the left for anything pinned to a bottom-right
+	-- corner. Only a button the caller had already centred swelled about itself.
+	--
+	-- So the outer frame is the *box*: it takes the caller's size, position,
+	-- anchor and layout order, draws nothing, and never changes size. The `Body`
+	-- inside it is the button, centred in the box, and carries the scale — which
+	-- also stops a hover from shoving its neighbours around, since a UIScale
+	-- changes AbsoluteSize as well as what's drawn and the box's own size is what
+	-- a UIListLayout measures.
+	local body = React.createElement("Frame", {
+		Size = UDim2.fromScale(1, 1),
+		Position = UDim2.fromScale(0.5, 0.5),
+		AnchorPoint = Vector2.new(0.5, 0.5),
 		BackgroundColor3 = Color3.fromRGB(255, 255, 255),
 		BorderSizePixel = 0,
-		LayoutOrder = props.layoutOrder,
-		ZIndex = props.zIndex or 2,
 	}, {
 		UIScale = React.createElement("UIScale", {
 			Scale = 1,
@@ -116,5 +133,17 @@ return function(props: Props)
 			zIndex = 2,
 			shadow = true,
 		}),
+	})
+
+	return React.createElement("Frame", {
+		Size = props.size or theme.buttonSize,
+		Position = props.position,
+		AnchorPoint = props.anchorPoint,
+		BackgroundTransparency = 1,
+		BorderSizePixel = 0,
+		LayoutOrder = props.layoutOrder,
+		ZIndex = props.zIndex or 2,
+	}, {
+		Body = body,
 	})
 end

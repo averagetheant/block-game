@@ -314,6 +314,7 @@ audio.currentTrack()               -- nil | the active music Sound
 audio.currentTrackName()           -- nil | the key passed to playMusic
 audio.playSoundId("rbxassetid://…", 0.6) -- arbitrary one-shot outside the registry
 
+audio.preloadCues()                      -- warm the whole library (yields; client)
 audio.playCue("Stamp")                   -- Studio-authored one-shot, heard locally
 audio.playCue("Stamp", { volumeScale = 0.7 })
 audio.playCueAt("Drop", part)            -- positional; from the server, heard by all
@@ -327,6 +328,7 @@ audio.playCueAtPosition("Explosion", position) -- outlives whatever caused it
 | `playMusic(name, volume?)`            | Swap looping background. No-op when the requested track is already playing. Returns the active Sound.|
 | `stopMusic()`                         | Destroy the current looping Sound.                                                                  |
 | `currentTrack()` / `currentTrackName()` | The active Sound / registry key, or `nil` when no music is playing.                                |
+| `preloadCues()`                       | **Yields.** Pull every Sound in the cue library (subfolders included) into this client's asset cache, so a one-shot's first play isn't late. Spawn it at start.|
 | `playCue(name, options?)`             | Clone a Studio-authored Sound from the cue library and play it 2D (client-side).                    |
 | `playCueAt(name, part, options?)`     | Same, parented to a part so it carries with distance falloff. Server-side use.                      |
 | `playCueAtPosition(name, pos, options?)` | Same, on a throwaway anchored marker, so it survives the thing that caused it being destroyed.   |

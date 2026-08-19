@@ -26,13 +26,44 @@ return function()
 
 	local active = state ~= nil and state.endsAt ~= 0
 
+	-- The ballot claims the shell when a poll opens — taking over whatever window
+	-- the player had up, because the poll is on a clock and it's the one thing
+	-- everyone in the server should be looking at — and **reclaims** it whenever
+	-- the shell goes empty while the poll is still running.
+	--
+	-- The reclaim closes a real hole. The shell holds one open frame, so opening
+	-- another window (Daily Rewards off the topbar, anything off the sidebar)
+	-- over a live ballot swapped the ballot out for it; closing that window left
+	-- the shell empty. Nothing re-opened the vote, because this effect had no
+	-- reason to run again — `active` hadn't changed — so the player spent the
+	-- rest of the poll looking at a HUD with no ballot on it, and the round's
+	-- rules were decided without them.
+	--
+	-- Only when the shell is *empty*, never while some other frame is open: a
+	-- player is allowed to go and look at their rewards mid-poll, and a ballot
+	-- that shoved its way back on top the moment anything else opened would be a
+	-- fight rather than a takeover.
+	local claimed = React.useRef(false)
 	React.useEffect(function()
-		if active then
-			frames.open(Constants.FRAME_ID)
-		elseif frames.openFrameId == Constants.FRAME_ID then
-			frames.close()
+		if not active then
+			claimed.current = false
+			if frames.openFrameId == Constants.FRAME_ID then
+				frames.close()
+			end
+			return
 		end
-	end, { active } :: { any })
+
+		-- First run of this poll: take the shell whatever is in it.
+		if not claimed.current then
+			claimed.current = true
+			frames.open(Constants.FRAME_ID)
+			return
+		end
+
+		if frames.openFrameId == nil then
+			frames.open(Constants.FRAME_ID)
+		end
+	end, { active, frames.openFrameId } :: { any })
 
 	-- The server sends one deadline, not a tick, so the clock runs here. Only
 	-- re-render when the displayed second changes — returning the previous value
@@ -77,6 +108,9 @@ return function()
 	-- voter, not to the option they picked, and the UI only needs it to tag the
 	-- stamp.
 	local voteWeights: { [number]: number } = {}
+	-- Same shape, same reason, and the thing that makes a repeat press visible:
+	-- the UI replays a stamp's slam whenever this number changes under it.
+	local voteStamps: { [number]: number } = {}
 	for _, voter in state.voters do
 		local list = votersByOption[voter.optionId]
 		if list == nil then
@@ -85,6 +119,7 @@ return function()
 		end
 		table.insert(list, voter.userId)
 		voteWeights[voter.userId] = voter.weight
+		voteStamps[voter.userId] = voter.stamps
 	end
 
 	return React.createElement(UIShell.Frame, {
@@ -94,6 +129,7 @@ return function()
 			options = options,
 			votersByOption = votersByOption,
 			voteWeights = voteWeights,
+			voteStamps = voteStamps,
 			secondsLeft = secondsLeft,
 			winnerId = state.winnerId,
 			onVote = GamemodeVoteController.castVote,

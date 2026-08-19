@@ -16,28 +16,47 @@ local UIShell = require(ReplicatedStorage.Features.UIShell)
 local Constants = require(ReplicatedStorage.Features.DailyRewards.Constants)
 local Layout = require(ReplicatedStorage.Features.DailyRewards.Layout)
 
--- Client-realm sibling.
+-- Client-realm siblings.
+local DailyRewardsPrompt = require(script.Parent.DailyRewardsPrompt)
 local DailyRewardsView = require(script.Parent.DailyRewardsView)
 
 return function()
 	local frames = UIShell.useFrame()
 
-	return React.createElement(UIShell.Frame, {
-		id = Constants.FRAME_ID,
+	-- Three things in one root, stacked: the prompt's scrim, the window, the
+	-- prompt's notice. They have to share a root — the scrim goes *under* the
+	-- window and the notice *over* it, and only siblings can be sorted against
+	-- each other.
+	--
+	-- The root itself sits on `ui.layers.window`, which is what puts the whole set
+	-- above every HUD. Left on the default it drew in registration order, so
+	-- whether the window came out in front of the PVP standings board was down to
+	-- how a table iterated that session.
+	return React.createElement(ui.Slot, {
+		name = "DailyRewards",
+		size = UDim2.fromScale(1, 1),
+		zIndex = ui.layers.window,
 	}, {
-		-- Frame clones its children with `scaleRef` / `initialScale`, which
-		-- Window accepts — that's what makes the window scale from its own
-		-- centre on open rather than from the screen's.
-		Window = React.createElement(ui.Window, {
-			-- Derived from the card geometry, so a card size change moves the
-			-- window instead of putting a scrollbar on it.
-			size = Layout.windowSize(),
-			title = Constants.TITLE,
-			icon = Constants.ICON,
-			titleVariant = Constants.TITLE_VARIANT :: any,
-			onClose = frames.close,
+		Prompt = React.createElement(DailyRewardsPrompt),
+
+		Frame = React.createElement(UIShell.Frame, {
+			id = Constants.FRAME_ID,
+			zIndex = Constants.WINDOW_ZINDEX,
 		}, {
-			Content = React.createElement(DailyRewardsView),
+			-- Frame clones its children with `scaleRef` / `initialScale`, which
+			-- Window accepts — that's what makes the window scale from its own
+			-- centre on open rather than from the screen's.
+			Window = React.createElement(ui.Window, {
+				-- Derived from the card geometry, so a card size change moves the
+				-- window instead of putting a scrollbar on it.
+				size = Layout.windowSize(),
+				title = Constants.TITLE,
+				icon = Constants.ICON,
+				titleVariant = Constants.TITLE_VARIANT :: any,
+				onClose = frames.close,
+			}, {
+				Content = React.createElement(DailyRewardsView),
+			}),
 		}),
 	})
 end

@@ -22,6 +22,13 @@
 --
 -- Structure-only, like Stack/Row/Grid/Slot: no visuals, not skin-resolved.
 --
+-- One wrinkle from the root ScreenGui's device-safe insets: the canvas is
+-- `1 / scale` of the *insetted* GUI region, while the scale itself is measured
+-- off the raw camera viewport. On a notched phone that leaves the canvas a few
+-- percent short of the reference — call it 684 usable units of height rather
+-- than 720. Nothing mounts that tall today; a full-height surface should budget
+-- for it rather than assume the whole 720.
+--
 -- The one thing this changes for feature code: inside the layer, offsets are in
 -- *scaled* units, not screen pixels. A screen-pixel measurement taken from
 -- outside (`AbsolutePosition` read by a different ScreenGui, a raw input

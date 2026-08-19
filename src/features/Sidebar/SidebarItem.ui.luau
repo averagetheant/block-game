@@ -28,6 +28,7 @@ type Props = {
 local DEFAULT_ICON_SIZE = Constants.DEFAULT_ICON_SIZE
 local DEFAULT_LABEL_SIZE = Constants.DEFAULT_LABEL_SIZE
 local LABEL_BOTTOM_INSET = Constants.LABEL_BOTTOM_INSET
+local LABEL_BLEED = Constants.LABEL_BLEED
 local TILT_MIN = Constants.HOVER_TILT_MIN_DEG
 local TILT_MAX = Constants.HOVER_TILT_MAX_DEG
 
@@ -104,6 +105,13 @@ return function(props: Props)
 		-- so it sits inside the icon's bounds rather than below them. Plain
 		-- (non-shadow) Text with a Miter UIStroke for readability over the
 		-- icon art. Sibling of Icon — does not inherit the rotation tween.
+		--
+		-- The box is wider than the icon by LABEL_BLEED on each side, because a
+		-- nav word at the body tier is: centring "Inventory" on 72px puts its
+		-- first letters off the left of a rail that sits near the screen edge.
+		-- `fit` caps the overflow at that box — a longer label than the rail
+		-- was designed for gives back a little text size instead of running
+		-- off the display.
 		Label = React.createElement(ui.Text, {
 			text = props.label,
 			textSize = labelSize,
@@ -112,7 +120,8 @@ return function(props: Props)
 			yAlignment = Enum.TextYAlignment.Bottom,
 			position = UDim2.new(0.5, 0, 1, -LABEL_BOTTOM_INSET),
 			anchorPoint = Vector2.new(0.5, 1),
-			size = UDim2.new(1, 0, 0, labelSize + 4),
+			size = UDim2.new(1, LABEL_BLEED * 2, 0, labelSize + 4),
+			fit = true,
 			zIndex = 2,
 		}),
 	})

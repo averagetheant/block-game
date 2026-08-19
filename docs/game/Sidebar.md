@@ -188,12 +188,13 @@ React.createElement(Sidebar.Item, {
 | `DEFAULT_LABEL_SIZE`     | `theme.textSizeRegular` (`32`) | Label `TextSize` (px). The shared ladder's body tier — a phone halves it to ~16px, so this is the floor rather than a starting point. |
 | `LABEL_STROKE_THICKNESS` | `2`  | Miter UIStroke thickness on the label. Set to `0` and update SidebarItem to drop the outline. |
 | `LABEL_BOTTOM_INSET`     | `0`  | Pixels between the label's bottom edge and the icon's bottom edge — keeps the label inside the icon. `0` sits it flush with the icon's bottom edge, still inside the art's visual bounds. |
+| `LABEL_BLEED`            | `40` | How far the label may run past each side of its icon (px). A nav word at the body tier is wider than a 72px square, so this is the declared box for that overflow: the label shrinks (`fit`) rather than grow past it, and `RAIL_MARGIN` is measured from it. |
 | `HOVER_TILT_MIN_DEG`     | `4`  | Minimum random tilt magnitude applied to the icon on hover (degrees). |
 | `HOVER_TILT_MAX_DEG`     | `12` | Maximum random tilt magnitude. Set to `0` (both) to disable the tilt entirely. |
 | `ITEM_SPACING`       | `12` | Vertical gap between sibling items (px). |
 | `PADDING`            | `12` | Outer Sidebar padding (px). |
 | `GROUP_GAP`          | `28` | Gap between the "menu" and "actions" clusters. |
-| `RAIL_MARGIN`        | `20` | Distance from the screen's left edge to the rail (px). |
+| `RAIL_MARGIN`        | `52` | Distance from the screen's left edge to the rail (px). Keep it ≥ `LABEL_BLEED`: at `20` the icons cleared the edge but every label wider than its icon hung off the side of the screen, worst on a phone where the margin is half as many device pixels and the display's rounded corners eat into it too. |
 | `WINDOW_SIZE`        | `820×600` | Default size of the Window an entry opens. Override per entry with `windowSize`. |
 | `Presentations.root` | `true` | The rail itself. Off = every registered entry goes away with it, code intact. |
 

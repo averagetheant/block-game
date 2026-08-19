@@ -1,6 +1,7 @@
 --!strict
 -- Progress toward the next checkpoint, drawn as a climb rather than a bar.
 --
+--   Storm in 4:33  the deadline for reaching the top of it
 --   ○              next zone
 --   │
 --   │
@@ -42,6 +43,11 @@ export type Props = {
 	to: number,
 	-- Rides beside the marker as it climbs. nil draws the marker alone.
 	label: string?,
+	-- Sits above the goal dot: what reaching it is a race against (the storm
+	-- clock). Setting it takes its band out of the *rail's* height rather than
+	-- growing the component, so the caller's box is still the caller's box.
+	goalLabel: string?,
+	goalColor: Color3?,
 	size: UDim2?,
 	position: UDim2?,
 	anchorPoint: Vector2?,
@@ -63,6 +69,24 @@ local LABEL_WIDTH = 260
 local LABEL_HEIGHT = 40
 local LABEL_GAP = 10
 local LABEL_TEXT_SIZE = 34
+
+-- The goal label's own band, above the top dot. It's a *reservation*: the rail
+-- below it loses this much height, so the component occupies exactly the box it
+-- was given whether or not there's a deadline to draw.
+--
+-- Above rather than beside, because "beside" is where the climbing marker's own
+-- readout ends up the moment the tower nears the target — the two labels would
+-- land on the same line at the one moment both matter.
+local GOAL_LABEL_HEIGHT = 34
+-- Enough air under it that the climbing marker's own readout — 40 tall and
+-- centred on a marker that ends up *at* the goal dot — still clears it on the
+-- one climb that reaches the target.
+local GOAL_LABEL_GAP = 20
+local GOAL_LABEL_TEXT_SIZE = 28
+-- How far past the rail's centre line the goal label may reach. It's
+-- right-aligned and hangs inward, so this is just enough to sit over the dot
+-- rather than beside it.
+local GOAL_LABEL_OVERHANG = 40
 
 local TRACK_COLOR = Color3.fromRGB(52, 56, 72)
 local DONE_COLOR = Color3.fromRGB(112, 214, 122)
@@ -131,6 +155,9 @@ return function(props: Props)
 		end
 	end, { progress } :: { any })
 
+	-- Height the goal label takes off the top of the rail, or 0 without one.
+	local band = if props.goalLabel then GOAL_LABEL_HEIGHT + GOAL_LABEL_GAP else 0
+
 	return React.createElement("Frame", {
 		Size = props.size or UDim2.new(0, TOWER_DOT + 6, 1, 0),
 		Position = props.position,
@@ -139,10 +166,24 @@ return function(props: Props)
 		BorderSizePixel = 0,
 		LayoutOrder = props.layoutOrder,
 	}, {
+		Deadline = if props.goalLabel
+			then React.createElement(ui.Text, {
+				text = props.goalLabel,
+				textSize = GOAL_LABEL_TEXT_SIZE,
+				weight = Enum.FontWeight.Heavy,
+				shadow = true,
+				color = props.goalColor,
+				xAlignment = Enum.TextXAlignment.Right,
+				size = UDim2.fromOffset(LABEL_WIDTH, GOAL_LABEL_HEIGHT),
+				position = UDim2.new(0.5, GOAL_LABEL_OVERHANG, 0, 0),
+				anchorPoint = Vector2.new(1, 0),
+			})
+			else nil,
+
 		-- Inset both ends by half a dot so nothing hangs off the edge.
 		Inner = React.createElement("Frame", {
-			Size = UDim2.new(1, 0, 1, -END_DOT),
-			Position = UDim2.fromOffset(0, EDGE),
+			Size = UDim2.new(1, 0, 1, -(END_DOT + band)),
+			Position = UDim2.fromOffset(0, EDGE + band),
 			BackgroundTransparency = 1,
 			BorderSizePixel = 0,
 		}, {

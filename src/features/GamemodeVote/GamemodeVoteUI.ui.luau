@@ -20,17 +20,31 @@ local theme = ui.theme
 -- Sized so a full ballot fits a narrow screen rather than so one panel looks its
 -- best: the row auto-sizes on X and is centered, so N panels take
 -- N * PANEL_WIDTH + (N-1) * contentSpacing and anything past the viewport is
--- simply off it. TowerGame's ballot is four (Classic plus three twists), which
--- at this width lands around 800px — comfortable on a phone in landscape.
-local PANEL_WIDTH = 190
--- Height follows the body stack, not the other way round: icon + name + a
--- two-line blurb + the Stack's gaps and inset, plus the voter strip. The blurb
--- is real copy a player reads to pick a mode, so it sits on the body tier and
--- wraps at this width rather than shrinking to fit on one line.
-local PANEL_HEIGHT = 310
+-- simply off it. TowerGame's ballot is four — Classic and PVP permanently, plus
+-- two rolled twists — which at this width lands just over 1000px, inside the
+-- 1280 reference on a phone in landscape. Five panels (1260) is the point where
+-- this needs revisiting.
+--
+-- 190 was too narrow for what the panel actually holds: at the body tier it
+-- fits about ten characters a line, so every blurb in TowerGame's ballot needed
+-- three or four lines to say itself and got two.
+local PANEL_WIDTH = 240
+-- Height follows the body stack, not the other way round: icon + name + blurb +
+-- the Stack's gaps and inset, plus the voter strip. The blurb is real copy a
+-- player reads to pick a mode, so it sits on the body tier and gets the rows it
+-- needs at this width rather than shrinking to fit on one line.
+local PANEL_HEIGHT = 370
 local ICON_SIZE = 78
-local NAME_HEIGHT = 40
-local BLURB_HEIGHT = 64
+-- Every row box below is `tier * rows + ROW_SLACK`, never the bare product. A
+-- box sized to exactly its rows has nowhere to put the pixel a line picks up
+-- when the viewport scale rounds it — and the row that no longer fits isn't
+-- squeezed, it's dropped, which is what ate the last line of these on a phone.
+-- `fit` on each label covers whatever the slack doesn't.
+local ROW_SLACK = 8
+-- Two rows: a mode name is a registered feature's copy, and "Lightning Storm"
+-- doesn't fit one line of a panel this wide.
+local NAME_HEIGHT = theme.textSizeRegular * 2 + ROW_SLACK
+local BLURB_HEIGHT = theme.textSizeRegular * 3 + ROW_SLACK
 local AVATAR_SIZE = 34
 -- The stamp. It starts oversized and slams down to 1 — a vote is a commitment
 -- and the screen should feel it, so this lands rather than fading in.
@@ -55,6 +69,21 @@ local WEIGHT_HEIGHT = 26
 -- is 0.8; pushing it further sinks the losers behind the winner.
 local LOST_TRANSPARENCY = 0.92
 
+-- Hover. Deliberately smaller than the kit's `theme.hoverScale` (1.06), which is
+-- tuned for a button: 6% of a 240x370 panel is a shove rather than a lift. 3% is
+-- about seven pixels across — enough to see which one you're pointing at, small
+-- enough that running the pointer along the row doesn't set the ballot rocking.
+local HOVER_SCALE = 1.03
+-- The press. A vote already lands hard (the stamp), so this is only the moment
+-- before it.
+local PRESS_SCALE = 0.98
+-- Glass under the pointer, against Panel's 0.8 default and LOST_TRANSPARENCY's
+-- 0.92. All three states then read on one axis: out, in, and the one you're
+-- about to pick.
+local HOVER_TRANSPARENCY = 0.72
+-- Where a lifted panel sits relative to its neighbours (all at 1).
+local HOVER_ZINDEX = 2
+
 export type Props = {
 	-- The ballot, in display order.
 	options: { Registry.Gamemode },
@@ -64,6 +93,12 @@ export type Props = {
 	-- anything more tags the stamp. One stamp either way — the row shows who is
 	-- on a panel, and a second headshot would read as a second player.
 	voteWeights: { [number]: number }?,
+	-- userId -> how many times that player has pressed a panel this poll. The
+	-- number itself means nothing to the screen; a *change* to it replays that
+	-- voter's slam. It's what makes pressing your own panel again do something,
+	-- now that doing so re-stamps the vote instead of taking it back — nothing
+	-- else about the stamp changes, so the animation is the whole feedback.
+	voteStamps: { [number]: number }?,
 	secondsLeft: number,
 	-- Set once the poll is resolved; until then the clock is what's shown.
 	winnerId: string?,
@@ -100,7 +135,14 @@ end
 -- fading in, because a vote is a commitment and the screen should feel it. The
 -- scale is driven by TweenService off a ref rather than by state, so the slam
 -- costs no re-renders and can't fight React over the value.
-local function Avatar(props: { userId: number, weight: number? })
+--
+-- `stamp` is the press count for this voter, and the slam is keyed to it rather
+-- than to mounting: pressing the panel you already hold re-stamps the vote
+-- (nothing is taken back), and that press moves nothing, so the animation is the
+-- entire feedback. Re-armed by setting the scale back before each tween — the
+-- previous one left it at 1, and a tween to the value it already holds is no
+-- animation at all.
+local function Avatar(props: { userId: number, weight: number?, stamp: number? })
 	local scaleRef = React.useRef(nil :: UIScale?)
 	local offsetX, offsetY, rotation = stampFor(props.userId)
 	local weight = props.weight or 1
@@ -110,6 +152,7 @@ local function Avatar(props: { userId: number, weight: number? })
 		if scale == nil then
 			return
 		end
+		scale.Scale = STAMP_SCALE_FROM
 		local tween = TweenService:Create(
 			scale,
 			TweenInfo.new(STAMP_SECONDS, Enum.EasingStyle.Quint, Enum.EasingDirection.Out),
@@ -120,7 +163,11 @@ local function Avatar(props: { userId: number, weight: number? })
 			tween:Cancel()
 			tween:Destroy()
 		end
-	end, {})
+		-- Defaulted rather than passed through: a nil in a Lua dependency array is
+		-- a *hole*, so it changes the array's length instead of its contents, and
+		-- that's not a comparison to ask React to make. nil means "no count for
+		-- this voter" (the story's stand-ins), which is a stable 0 here.
+	end, { props.stamp or 0 })
 
 	return React.createElement("ImageLabel", {
 		Size = UDim2.fromOffset(AVATAR_SIZE, AVATAR_SIZE),
@@ -166,23 +213,58 @@ local function Avatar(props: { userId: number, weight: number? })
 	})
 end
 
-local function optionPanel(props: {
+-- One mode on the ballot: the panel, and the button the panel is.
+--
+-- A component rather than a function returning elements, which is what it used
+-- to be — hover is state, and state needs a component to live in.
+local function OptionPanel(props: {
 	option: Registry.Gamemode,
 	voters: { number },
 	voteWeights: { [number]: number },
+	voteStamps: { [number]: number },
 	faded: boolean,
 	locked: boolean,
 	layoutOrder: number,
 	onVote: () -> (),
 }): any
+	-- The panel *is* the button, so it gets the kit's button state machine —
+	-- hover, press, and the same two cues every other clickable in the game
+	-- plays. Only the two scales are ours; see the constants.
+	local hover = ui.useHoverScale({
+		hoverScale = HOVER_SCALE,
+		pressScale = PRESS_SCALE,
+	})
+	-- A resolved poll unmounts the hit area, and a GuiObject destroyed under the
+	-- pointer never fires MouseLeave, so `hover` alone would leave whichever panel
+	-- you happened to be over lifted through the whole result.
+	local hovered = hover.isHovered and not props.locked
+
+	local isHovered = hover.isHovered
+	local onLeave = hover.onLeave
+	local locked = props.locked
+	React.useEffect(function()
+		-- Guarded on actually being hovered because `locked` flips for every panel
+		-- at once: an unguarded leave would fire the whole ballot's worth of
+		-- hover-out cues on the same frame as the winner. Reading `isHovered` from
+		-- the render this effect belongs to is the point — the effect runs on the
+		-- lock, and that render is when the pointer's position was last true.
+		if locked and isHovered then
+			onLeave()
+		end
+	end, { locked })
+
 	local avatars: { [string]: any } = {}
 	for _, userId in props.voters do
 		-- Keyed by user id so a voter's stamp is the *same* element across
 		-- re-renders and doesn't re-slam every time somebody else votes. Moving
-		-- to another panel is a real unmount, so that does stamp again.
+		-- to another panel is a real unmount, so that does stamp again — and
+		-- pressing the panel already held stamps again through `stamp`, which is
+		-- the one case where nothing about the element changes but the press still
+		-- has to be felt.
 		avatars[`Voter{userId}`] = React.createElement(Avatar, {
 			userId = userId,
 			weight = props.voteWeights[userId],
+			stamp = props.voteStamps[userId],
 		})
 	end
 
@@ -212,6 +294,7 @@ local function optionPanel(props: {
 				textSize = theme.textSizeRegular,
 				weight = Enum.FontWeight.Heavy,
 				shadow = true,
+				wrapped = true,
 				size = UDim2.new(1, 0, 0, NAME_HEIGHT),
 				layoutOrder = 2,
 			}),
@@ -247,15 +330,44 @@ local function optionPanel(props: {
 			BackgroundTransparency = 1,
 			Text = "",
 			ZIndex = 10,
+			[React.Event.MouseEnter] = hover.onEnter,
+			[React.Event.MouseLeave] = hover.onLeave,
+			[React.Event.MouseButton1Down] = hover.onPress,
+			[React.Event.MouseButton1Up] = hover.onRelease,
 			[React.Event.Activated] = props.onVote,
 		})
 	end
 
-	return React.createElement(ui.Panel, {
+	-- Inside the panel, so it scales the panel and everything on it together.
+	children.Scale = React.createElement("UIScale", {
+		Scale = 1,
+		ref = hover.scaleRef,
+	})
+
+	-- The slot, not the panel, is what the row measures.
+	--
+	-- A UIScale changes AbsoluteSize as well as what's drawn, so a panel that grew
+	-- inside the layout would push its neighbours apart and the whole ballot would
+	-- breathe every time the pointer crossed one. The slot holds the space at a
+	-- fixed size; the panel lifts inside it and overhangs by three or four pixels,
+	-- which the row's 15px gap has room for.
+	return React.createElement(ui.Slot, {
+		name = "Option",
 		size = UDim2.fromOffset(PANEL_WIDTH, PANEL_HEIGHT),
-		transparency = if props.faded then LOST_TRANSPARENCY else nil,
 		layoutOrder = props.layoutOrder,
-	}, children)
+		-- Over its neighbours while it's the one being pointed at, now that it
+		-- overhangs them. ZIndexBehavior is Sibling, so this carries the panel and
+		-- everything on it up together rather than only the slot.
+		zIndex = if hovered then HOVER_ZINDEX else 1,
+	}, {
+		Panel = React.createElement(ui.Panel, {
+			size = UDim2.fromScale(1, 1),
+			transparency = if props.faded
+				then LOST_TRANSPARENCY
+				elseif hovered then HOVER_TRANSPARENCY
+				else nil,
+		}, children),
+	})
 end
 
 return function(props: Props)
@@ -264,10 +376,11 @@ return function(props: Props)
 
 	local panels: { [string]: any } = {}
 	for index, option in props.options do
-		panels[option.id] = optionPanel({
+		panels[option.id] = React.createElement(OptionPanel, {
 			option = option,
 			voters = props.votersByOption[option.id] or {},
 			voteWeights = props.voteWeights or {},
+			voteStamps = props.voteStamps or {},
 			-- Once the winner is in, everything else steps back so the result is
 			-- the only thing lit.
 			faded = resolved and winnerId ~= option.id,

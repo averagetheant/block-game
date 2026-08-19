@@ -52,13 +52,19 @@ local R = 0.7 -- corner radius
 local SMOOTHING = 50 -- degrees; 0 (the default) is flat shading
 
 -- Mirrors Shapes.luau. Kept as literals rather than read from the module because
--- the command bar has no access to the Rojo-built tree before a sync.
+-- the command bar has no access to the Rojo-built tree before a sync — which
+-- means this table is a second source of truth and has to be edited alongside the
+-- first. `BlockBody` finds a union by `shape.name`, so a key here that disagrees
+-- with `Shapes.luau` hands a piece somebody else's shell.
+--
+-- S and Z were swapped in both files at the same time; see the note in
+-- `Shapes.luau` for which is which and why.
 local SHAPES = {
 	I = { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 3, 0 } },
 	O = { { 0, 0 }, { 1, 0 }, { 0, 1 }, { 1, 1 } },
 	T = { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 1, 1 } },
-	S = { { 1, 0 }, { 2, 0 }, { 0, 1 }, { 1, 1 } },
-	Z = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 2, 1 } },
+	Z = { { 1, 0 }, { 2, 0 }, { 0, 1 }, { 1, 1 } },
+	S = { { 0, 0 }, { 1, 0 }, { 1, 1 }, { 2, 1 } },
 	J = { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 0, 1 } },
 	L = { { 0, 0 }, { 1, 0 }, { 2, 0 }, { 2, 1 } },
 }

@@ -19,7 +19,7 @@ local GamemodeVote = require(ReplicatedStorage.Features.GamemodeVote)
 local CROWD = { 1, 2, 3, 4, 5, 6 }
 
 return {
-	summary = "The gamemode vote. Click a panel to drop your headshot on it; crowdVotes deals stand-ins across the ballot, winnerIndex shows the resolved state.",
+	summary = "The gamemode vote. Hover a panel to see it lift, click to drop your headshot on it, and click the same one again to re-stamp it — a vote moves but is never taken back. crowdVotes deals stand-ins across the ballot, winnerIndex shows the resolved state (which locks the panels and drops the hover with them).",
 	react = React,
 	reactRoblox = ReactRoblox,
 
@@ -38,6 +38,12 @@ return {
 		local c = props.controls
 		local options = GamemodeVote.list()
 		local myVote, setMyVote = React.useState(nil :: string?)
+		-- The press count the server keeps per voter. Kept here too, because the
+		-- behaviour worth checking in this story is the one with no other tell:
+		-- clicking the panel you already hold doesn't take the vote back, doesn't
+		-- move the headshot, and doesn't change anything else on screen — it just
+		-- lands the stamp again. Click a panel twice and watch for the slam.
+		local myStamps, setMyStamps = React.useState(0)
 
 		-- Deal the stand-ins round-robin so every panel has someone on it to
 		-- eyeball, then add your own click on top.
@@ -65,10 +71,17 @@ return {
 			options = options,
 			votersByOption = votersByOption,
 			voteWeights = voteWeights,
+			-- Only the local stand-in re-stamps here; the crowd is static.
+			voteStamps = { [0] = myStamps },
 			secondsLeft = c.secondsLeft,
 			winnerId = if winner then winner.id else nil,
 			onVote = function(optionId: string)
-				setMyVote(if myVote == optionId then nil else optionId)
+				-- Exactly what the server does: the press always lands on the panel
+				-- pressed, and every press counts as a fresh stamp.
+				setMyVote(optionId)
+				setMyStamps(function(previous)
+					return previous + 1
+				end)
 			end,
 		})
 	end,

@@ -21,11 +21,16 @@ return function(props: contract.PanelProps)
 		LayoutOrder = props.layoutOrder,
 		ZIndex = props.zIndex,
 	}, {
+		-- The flat surface is rounded either way — `rounded = false` would be
+		-- asking this skin to stop being itself — so the prop only ever confirms
+		-- what it already does. The stroke does honour the opt-out.
 		UICorner = React.createElement("UICorner", { CornerRadius = theme.cornerRadius }),
-		UIStroke = React.createElement("UIStroke", {
-			Thickness = props.strokeThickness or theme.strokeThickness,
-			Color = borderColor,
-		}),
+		UIStroke = if props.stroke == false
+			then nil
+			else React.createElement("UIStroke", {
+				Thickness = props.strokeThickness or theme.strokeThickness,
+				Color = borderColor,
+			}),
 		Content = if props.children
 			then React.createElement("Frame", {
 				Size = UDim2.fromScale(1, 1),

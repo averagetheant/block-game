@@ -3,17 +3,20 @@
 -- a dropdown here — including the phase, so the countdown and the final standings
 -- can be looked at without waiting out a three-minute match.
 --
--- `playerCount` is the one worth playing with: the standings board is sized for a
--- full lobby and holds that size at every count, so this is how you check the
--- empty seats read as seats rather than as a bug.
+-- `playerCount` is the one worth playing with: it fills the height rail down the
+-- right edge as well as the final standings, so this is how you check a full
+-- lobby's faces stay apart on the rail and a one-player match doesn't leave a
+-- lonely panel. `HeightRail.story` drives the rail on its own, with the scale and
+-- the pile-up on sliders of their own.
 --
--- Set `phase` to `results` and the live board and the top bar go away, leaving
--- the final standings alone in the middle — that's the game's behaviour, not a
--- story shortcut.
+-- Set `phase` to `results` and the rail and the top bar go away, leaving the
+-- final standings alone in the middle — that's the game's behaviour, not a story
+-- shortcut.
 --
 -- `showControls` is forced on by default because the touch control row is the
 -- part worth eyeballing in-editor; in game it only renders on touch devices.
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Features = ReplicatedStorage:WaitForChild("Features")
 
@@ -39,7 +42,8 @@ end
 
 -- Real user ids so `Players:GetPlayerByUserId` misses cleanly and the fallback
 -- name is exercised — the story has no other players in the place, which is
--- exactly the "left mid-match" case the view has to survive.
+-- exactly the "left mid-match" case the view has to survive. One of these seats
+-- is overwritten with the local player's own id below; the rest stay strangers.
 local ROSTER = {
 	{ userId = 1, name = "BlockFan42" },
 	{ userId = 2, name = "TowerGoblin" },
@@ -50,7 +54,7 @@ local ROSTER = {
 }
 
 return {
-	summary = "PVP HUD driven by controls. Phase picks between the countdown, the live board and the final standings; the clocks are sliders. No server needed.",
+	summary = "PVP HUD driven by controls. Phase picks between the countdown, the live round and the final standings; the clocks are sliders. One roster seat is handed your own user id, so the rail lights the face it would light in game. No server needed.",
 	react = React,
 	reactRoblox = ReactRoblox,
 
@@ -58,12 +62,12 @@ return {
 		phase = UILabs.Choose(PHASE_NAMES),
 		secondsLeft = UILabs.Slider(96, 0, PvpConstants.MATCH_SECONDS, 1),
 		playerCount = UILabs.Slider(4, 1, PvpConstants.MAX_LANES, 1),
-		myHeight = UILabs.Slider(42.5, 0, 400, 0.5),
-		-- Where the local player sits in the standings. Drives which row is lit
-		-- and which colour the place readout takes.
+		-- Where the local player sits in the standings. Drives which colour the
+		-- place readout takes, and — through `ROSTER` — which face on the rail is
+		-- lit and carries the reading in studs.
 		myRank = UILabs.Slider(2, 1, PvpConstants.MAX_LANES, 1),
 		-- A spectator, or a player who arrived after every seat was taken. The
-		-- height readout becomes "Watching" and the place goes blank.
+		-- place readout becomes "Watching" and the rail lights nobody.
 		playing = true,
 		holding = true,
 		pieceSecondsLeft = UILabs.Slider(12, 0, PvpConstants.PIECE_SECONDS, 1),
@@ -105,6 +109,17 @@ return {
 			})
 		end
 
+		-- One roster seat is handed the *real* local user id, because both surfaces
+		-- that mark "you" — the lit face on the rail and the gold edge on the final
+		-- standings — find it by matching `Players.LocalPlayer.UserId`. Without
+		-- this the story draws a HUD belonging to nobody, and the one thing the
+		-- rail is for (find yourself, then everyone else relative to you) can't be
+		-- looked at in-editor at all. `myRank` picks which seat.
+		local mine = if c.playing then standings[math.clamp(c.myRank, 1, #standings)] else nil
+		if mine then
+			mine.userId = Players.LocalPlayer.UserId
+		end
+
 		return React.createElement(PvpHUD, {
 			phase = phase,
 			secondsLeft = if phase == PvpConstants.PHASE.COUNTDOWN
@@ -114,7 +129,6 @@ return {
 			zoneId = ZONE_IDS[c.zone] or 1,
 			zoneRolling = c.zoneRolling,
 			standings = standings,
-			myHeight = if c.playing then c.myHeight else nil,
 			myRank = if c.playing then c.myRank else 0,
 			holding = c.holding,
 			pieceName = c.pieceName,

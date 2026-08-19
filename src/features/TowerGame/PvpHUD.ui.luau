@@ -6,9 +6,11 @@
 -- It replaces the classic HUD rather than sitting beside it: everything that one
 -- draws is about a turn queue and a storm, and neither exists here.
 --
---   top center     one bar — your height, the match clock, your place — with
---                  the zone reel under it
---   top right      the standings, every lane, tallest first
+--   top center     one bar — the match clock and your place — with the zone
+--                  reel under it
+--   right edge     the height rail: a headshot per lane, riding at the height
+--                  that lane has reached, yours lit and carrying the one
+--                  reading in studs
 --   right, above   the map toggle (the classic HUD's camera button, doing the
 --   the corner     PVP job: show the whole board instead of your own lane)
 --   bottom left    controls hint (fades out on its own)
@@ -22,10 +24,15 @@
 --
 -- **One surface per corner.** The clock and the stats line used to be two
 -- stacked panels, each with its own outline, which put a two-storey slab of grey
--- over the middle of the sky the towers grow into. They're one line now — your
--- height, the clock, your place — in one panel: the same three numbers in a
--- third of the height and one outline instead of two. The same rule retired the
--- per-row panels on the standings board.
+-- over the middle of the sky the towers grow into. They're one line now — the
+-- clock and your place — in one panel.
+--
+-- **The live standings are a rail, not a table.** A 268-wide board of six rows
+-- spent the right third of the sky answering "by how many studs?", which is a
+-- question nobody asks with a piece in the air. `HeightRail` answers the one
+-- they do ask — am I ahead, and of whom — as a column of faces on a shared
+-- scale, 52 wide. The *final* standings are still a table: the match is over,
+-- nothing is being aimed, and by then the exact number is the point.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -35,6 +42,7 @@ local Boil = require(ReplicatedStorage.Shared.Boil)
 local ui = Boil.ui
 local Constants = require(script.Parent.Constants)
 local ControlsHint = require(script.Parent.ControlsHint)
+local HeightRail = require(script.Parent.HeightRail)
 local PvpConstants = require(script.Parent.PvpConstants)
 local RadialTimer = require(script.Parent.RadialTimer)
 local SteerStick = require(script.Parent.SteerStick)
@@ -53,33 +61,21 @@ local CASH_HEIGHT = Constants.CASH_HEIGHT
 local TOP_MARGIN = 10
 local STACK_GAP = 6
 
--- The top bar: one line — your height, the match clock, your place. Stacking
--- the two smaller numbers under the clock cost another 26px of sky for
--- information that fits in the width the clock wasn't using.
+-- The top bar: one line — the match clock, with your place beside it. Your own
+-- height used to be its left third; it rides the rail's marker now, for the
+-- reason the classic HUD moved its readout onto the climb line — how high your
+-- tower is and where that puts you on the rail are the same fact, and answering
+-- it twice is two places for it to disagree.
 local COLUMN_WIDTH = 360
 local BAR_PAD = 6
 local BAR_ROW = 52
 local CLOCK_TEXT_SIZE = 44
 local STAT_TEXT_SIZE = 22
 local BAR_HEIGHT = BAR_PAD * 2 + BAR_ROW
-
--- The standings board. Sized for MAX_LANES rows so it never resizes as players
--- join or leave — a board that grew a row every time somebody arrived would
--- shuffle the whole right edge mid-match. The seats nobody is in are *drawn* as
--- empty seats rather than left as bare panel, so the reserved space reads as
--- part of the board instead of as a board that failed to fill.
-local BOARD_WIDTH = 268
-local BOARD_ROW = 36
-local BOARD_GAP = 3
-local BOARD_PAD = 8
-local BOARD_TITLE = 24
--- Rows + title + the gaps between them. The padding is added at render time
--- (see `board`), because it has to include the panel's stroke thickness and
--- that's a live theme value.
-local BOARD_CONTENT = BOARD_TITLE
-	+ BOARD_GAP
-	+ PvpConstants.MAX_LANES * BOARD_ROW
-	+ (PvpConstants.MAX_LANES - 1) * BOARD_GAP
+-- The box the place readout is drawn in, off the right end of the bar. The clock
+-- is centred on the panel rather than laid out beside it, so this is the ordinal
+-- alone and doesn't have to be balanced by anything on the left.
+local RANK_WIDTH = 120
 
 local CONTROL_GAP = 12
 local CONTROL_ROW_HEIGHT = 88
@@ -93,6 +89,32 @@ local CAMERA_BUTTON = 62
 -- readout beside it.
 local DIAL_SIZE = 74
 local FLANK_Y = TOP_MARGIN + BAR_HEIGHT / 2
+
+-- The height rail, down the right edge. The classic HUD's climb-rail geometry
+-- exactly — same inset, same top, same clearance over the corner — because it's
+-- the same furniture doing this mode's version of the same job, and a player
+-- switching modes between rounds shouldn't have to find it again.
+--
+-- Inset from the edge rather than flush to it because the reactions column opens
+-- down that edge, vertically centred. Hardcoded rather than read from that
+-- feature's constants: a feature can't name another feature, and the rail only
+-- needs to be clear of it.
+local RAIL_RIGHT = 96
+-- Clear of Roblox's own topbar, which owns the top strip at the true top of the
+-- display (the root ScreenGui sets IgnoreGuiInset, so y = 0 really is the top).
+local RAIL_TOP = 84
+-- Clear of the camera toggle and the cash counter stacked in the corner below.
+local RAIL_BOTTOM = CASH_HEIGHT + CAMERA_BUTTON + EDGE_MARGIN * 3
+-- Wide enough for the rail's own widest marker; it has to agree with RAIL_WIDTH
+-- in `HeightRail`. Stated here rather than read from there for the same reason
+-- the classic HUD states its own: the component owns how wide a face is, the HUD
+-- owns how much of the screen edge it hands over, and the two meet at a number.
+local RAIL_WIDTH = 52
+-- The whole band between the topbar and the corner, rather than a fixed height.
+-- The canvas is 720 units tall at 16:9 and about 2100 on a portrait phone — the
+-- same fixed rail would fill the first screen and sit in the top fifth of the
+-- second with nothing under it. Filling the band is both the biggest the rail can
+-- be and, since the margins at either end are close to equal, centred in it.
 
 local COUNTDOWN_TEXT_SIZE = 130
 
@@ -130,12 +152,11 @@ local PLACE_COLORS = {
 -- size is a smear.
 local CHIP_DARK = Color3.fromRGB(38, 42, 58)
 local CHIP_INK = Color3.fromRGB(20, 22, 32)
--- Row fills. Every row is drawn on the board's own glass rather than in a panel
--- of its own: six nested panels, each with its own 4px outline, is what made the
--- old board read as a spreadsheet.
+-- Row fills. Every row is drawn on the results panel's own glass rather than in
+-- a panel of its own: six nested panels, each with its own 4px outline, is what
+-- made the old board read as a spreadsheet.
 local ROW_FILL = Color3.fromRGB(16, 18, 28)
 local ROW_TRANSPARENCY = 0.5
-local EMPTY_TRANSPARENCY = 0.82
 local YOU_TRANSPARENCY = 0.8
 -- The winner's row on the results board, washed in the gold of its own medal.
 -- Denser than YOU_TRANSPARENCY on purpose: when the two rows are on screen
@@ -161,9 +182,11 @@ export type Props = {
 	zoneRolling: boolean?,
 	-- Every lane, tallest first.
 	standings: { Entry },
-	-- This player's own row, or nil when they aren't in the match (spectating, or
-	-- every seat was taken when they arrived).
-	myHeight: number?,
+	-- This player's place, or 0 when they aren't in the match (spectating, or
+	-- every seat was taken when they arrived). It's the whole of what the HUD
+	-- knows about them: their own height used to ride beside it as `myHeight`,
+	-- and now comes off their row in `standings` where the rail draws it, so the
+	-- face and the number can't be fed two different readings.
 	myRank: number,
 	-- Whether they're aiming a piece, what it is, and how long they have.
 	holding: boolean,
@@ -306,130 +329,6 @@ local function row(props: {
 	}, children)
 end
 
--- One row of the live board: place, face, name, height.
---
--- The text tiers here sit below the shared body floor on purpose. Six rows of a
--- full lobby have to fit down the side of the sky the towers are growing into,
--- and this board is a glanceable reference rather than copy — the number a
--- player actually plays against is their own, and that one is on the top bar at
--- full size.
-local function boardRow(entry: Entry, rank: number, you: boolean)
-	return row({
-		height = BOARD_ROW,
-		accent = you,
-		order = rank,
-		children = {
-			Row = React.createElement(ui.Row, {
-				size = UDim2.fromScale(1, 1),
-				gap = 7,
-				padding = 7,
-			}, {
-				Place = medal(rank, 22, 1),
-				Face = avatar(entry.userId, 24, 2),
-				Name = React.createElement(ui.Text, {
-					text = entry.name,
-					textSize = 22,
-					weight = if you then Enum.FontWeight.Heavy else Enum.FontWeight.Medium,
-					color = if you then YOU_COLOR else nil,
-					xAlignment = Enum.TextXAlignment.Left,
-					-- Shrinks rather than overflows: display names run long, and
-					-- the space they get is whatever the fixed cells leave.
-					fit = true,
-					minTextSize = 14,
-					size = UDim2.new(1, -125, 1, 0),
-					layoutOrder = 3,
-				}),
-				Height = React.createElement(ui.Text, {
-					text = string.format("%.0f", entry.height),
-					textSize = 24,
-					weight = Enum.FontWeight.Heavy,
-					xAlignment = Enum.TextXAlignment.Right,
-					size = UDim2.new(0, 46, 1, 0),
-					layoutOrder = 4,
-				}),
-			}),
-		},
-	})
-end
-
--- A seat nobody is in. Dimmer than a taken row and empty apart from its number,
--- so the reserved height reads as a seat rather than as the bottom of the board
--- falling off.
-local function emptyRow(rank: number)
-	return row({
-		height = BOARD_ROW,
-		accent = false,
-		order = rank,
-		transparency = EMPTY_TRANSPARENCY,
-		children = {
-			Row = React.createElement(ui.Row, {
-				size = UDim2.fromScale(1, 1),
-				gap = 7,
-				padding = 7,
-				horizontalAlignment = Enum.HorizontalAlignment.Left,
-			}, {
-				Place = React.createElement(ui.Text, {
-					text = tostring(rank),
-					textSize = 20,
-					weight = Enum.FontWeight.Bold,
-					color = MUTED_COLOR,
-					xAlignment = Enum.TextXAlignment.Center,
-					size = UDim2.new(0, 22, 1, 0),
-					layoutOrder = 1,
-				}),
-				Empty = React.createElement(ui.Text, {
-					text = "Empty lane",
-					textSize = 20,
-					weight = Enum.FontWeight.Medium,
-					color = MUTED_COLOR,
-					xAlignment = Enum.TextXAlignment.Left,
-					size = UDim2.new(1, -36, 1, 0),
-					layoutOrder = 2,
-				}),
-			}),
-		},
-	})
-end
-
--- The live board, top right. Always MAX_LANES rows tall, taken seats first.
-local function board(props: Props)
-	local rows: { [string]: any } = {
-		Title = React.createElement(ui.Text, {
-			text = "STANDINGS",
-			textSize = 20,
-			weight = Enum.FontWeight.Heavy,
-			color = MUTED_COLOR,
-			xAlignment = Enum.TextXAlignment.Center,
-			size = UDim2.new(1, 0, 0, BOARD_TITLE),
-			layoutOrder = 0,
-		}),
-	}
-	local userId = Players.LocalPlayer.UserId
-	for rank, entry in props.standings do
-		rows[`Row{rank}`] = boardRow(entry, rank, entry.userId == userId)
-	end
-	for rank = #props.standings + 1, PvpConstants.MAX_LANES do
-		rows[`Empty{rank}`] = emptyRow(rank)
-	end
-
-	-- Padded past the panel's own stroke, not just to it: a row laid flush
-	-- against a 4px outline crowds it however right the number is.
-	local pad = BOARD_PAD + ui.theme.strokeThickness
-
-	return React.createElement(ui.Panel, {
-		size = UDim2.fromOffset(BOARD_WIDTH, BOARD_CONTENT + pad * 2),
-		position = UDim2.new(1, -EDGE_MARGIN, 0, TOP_MARGIN),
-		anchorPoint = Vector2.new(1, 0),
-	}, {
-		List = React.createElement(ui.Stack, {
-			size = UDim2.fromScale(1, 1),
-			gap = BOARD_GAP,
-			padding = pad,
-			verticalAlignment = Enum.VerticalAlignment.Top,
-		}, rows),
-	})
-end
-
 -- One row of the final standings. The winner's is taller, gold, and says what it
 -- is; the rest are the same row a size down.
 local function resultRow(entry: Entry, rank: number, you: boolean)
@@ -568,7 +467,10 @@ local function centrepiece(props: Props)
 end
 
 return function(props: Props)
-	local playing = props.myHeight ~= nil
+	-- A place of 0 is the server saying this player has no lane — `myRank` is
+	-- found by looking them up in the same list the rail is drawn from, so the
+	-- two can't disagree about whether they're in the match.
+	local playing = props.myRank > 0
 	local canAct = props.holding and props.phase == PHASE.PLAYING
 	-- Once the clock stops, the results board says everything the top bar and the
 	-- live board were saying — so both go, and the last ten seconds are the towers
@@ -605,60 +507,53 @@ return function(props: Props)
 				size = UDim2.new(1, 0, 0, BAR_HEIGHT),
 				layoutOrder = 1,
 			}, {
-				-- Your height, the clock, your place. The clock is the middle
-				-- third and twice the tier of the two beside it: it's the thing
-				-- read constantly, they're what you check between pieces.
-				-- Inset sideways past the panel's stroke, but not vertically: the
-				-- bar is sized to its one row, and padding it top and bottom as
-				-- well would crop the clock rather than breathe around it.
-				Row = React.createElement(ui.Row, {
+				-- The clock, dead centre of the panel and twice the tier of the
+				-- place beside it: it's the number read constantly, the place is
+				-- what you check between pieces. Centred on the panel rather than
+				-- laid out in a row, so losing the height cell to the rail moved
+				-- nothing — the clock was already where it is now.
+				Time = React.createElement(ui.Text, {
+					-- The countdown phase counts *itself* down in the centre of the
+					-- screen, so the clock up here shows the match that's about to
+					-- start rather than a second number racing the first.
+					text = if props.phase == PHASE.COUNTDOWN
+						then clock(props.matchSeconds)
+						else clock(props.secondsLeft),
+					textSize = CLOCK_TEXT_SIZE,
+					weight = Enum.FontWeight.Heavy,
+					shadow = true,
+					color = if props.phase == PHASE.PLAYING and props.secondsLeft <= URGENT_SECONDS
+						then URGENT_COLOR
+						else nil,
+					xAlignment = Enum.TextXAlignment.Center,
+					-- The whole bar, and the place is drawn over the right end of
+					-- it rather than beside it. "2:14" at this tier is about a
+					-- third of the panel and centred in it, so the two never meet
+					-- — and giving the clock a box that stopped short of the place
+					-- would move the clock instead, which is the one readout on
+					-- this HUD that has to stay put.
 					size = UDim2.new(1, -(BAR_PAD + ui.theme.strokeThickness) * 2, 1, 0),
 					position = UDim2.fromScale(0.5, 0.5),
 					anchorPoint = Vector2.new(0.5, 0.5),
-					gap = 0,
-				}, {
-					Height = React.createElement(ui.Text, {
-						-- A spectator has no height of their own, and "0.0 studs"
-						-- would be a lie rather than an absence.
-						text = if playing
-							then `{string.format("%.1f", props.myHeight :: number)} studs`
-							else "Watching",
-						textSize = STAT_TEXT_SIZE,
-						weight = Enum.FontWeight.Bold,
-						color = MUTED_COLOR,
-						xAlignment = Enum.TextXAlignment.Left,
-						fit = true,
-						minTextSize = 16,
-						size = UDim2.new(0.32, 0, 1, 0),
-						layoutOrder = 1,
-					}),
-					Time = React.createElement(ui.Text, {
-						-- The countdown phase counts *itself* down in the centre of
-						-- the screen, so the clock up here shows the match that's
-						-- about to start rather than a second number racing the
-						-- first.
-						text = if props.phase == PHASE.COUNTDOWN
-							then clock(props.matchSeconds)
-							else clock(props.secondsLeft),
-						textSize = CLOCK_TEXT_SIZE,
-						weight = Enum.FontWeight.Heavy,
-						shadow = true,
-						color = if props.phase == PHASE.PLAYING and props.secondsLeft <= URGENT_SECONDS
-							then URGENT_COLOR
-							else nil,
-						xAlignment = Enum.TextXAlignment.Center,
-						size = UDim2.new(0.36, 0, 1, 0),
-						layoutOrder = 2,
-					}),
-					Rank = React.createElement(ui.Text, {
-						text = if playing then ordinal(props.myRank) else "",
-						textSize = STAT_TEXT_SIZE,
-						weight = Enum.FontWeight.Heavy,
-						color = PLACE_COLORS[props.myRank] or MUTED_COLOR,
-						xAlignment = Enum.TextXAlignment.Right,
-						size = UDim2.new(0.32, 0, 1, 0),
-						layoutOrder = 3,
-					}),
+				}),
+				-- Your place — or, for somebody with no lane, the fact that they
+				-- haven't got one. "Watching" rather than a blank, because an
+				-- empty corner reads as a HUD that failed to fill rather than as
+				-- an answer.
+				Rank = React.createElement(ui.Text, {
+					text = if playing then ordinal(props.myRank) else "Watching",
+					textSize = STAT_TEXT_SIZE,
+					weight = Enum.FontWeight.Heavy,
+					color = if playing then PLACE_COLORS[props.myRank] or MUTED_COLOR else MUTED_COLOR,
+					xAlignment = Enum.TextXAlignment.Right,
+					fit = true,
+					minTextSize = 16,
+					size = UDim2.new(0, RANK_WIDTH, 1, 0),
+					-- Inset past the panel's own stroke, not just to it: a readout
+					-- laid flush against a 4px outline crowds it however right the
+					-- number is.
+					position = UDim2.new(1, -(BAR_PAD + ui.theme.strokeThickness), 0.5, 0),
+					anchorPoint = Vector2.new(1, 0.5),
 				}),
 			}),
 
@@ -675,7 +570,18 @@ return function(props: Props)
 			}),
 		})
 
-		children.Board = board(props)
+		-- Every lane on one scale, down the right edge. It replaces the standings
+		-- board wholesale: same information, a fifth of the width, and it reads at
+		-- a glance instead of asking to be scanned row by row.
+		children.Rail = React.createElement(HeightRail, {
+			entries = props.standings,
+			-- nil while spectating, which is what draws the rail with no reading
+			-- and no trail on it rather than lighting somebody else's face.
+			youUserId = if playing then Players.LocalPlayer.UserId else nil,
+			size = UDim2.new(0, RAIL_WIDTH, 1, -(RAIL_TOP + RAIL_BOTTOM)),
+			position = UDim2.new(1, -RAIL_RIGHT, 0, RAIL_TOP),
+			anchorPoint = Vector2.new(1, 0),
+		})
 	end
 
 	-- The piece being aimed, named at the bottom where the player is already

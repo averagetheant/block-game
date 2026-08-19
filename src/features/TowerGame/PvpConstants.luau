@@ -194,7 +194,7 @@ local PvpConstants = {
 	-- Which surfaces this mode renders. Same convention as
 	-- `Constants.Presentations`; see docs/game/presentations.md.
 	Presentations = {
-		-- The PVP HUD (match clock, your height, the standings strip). Off means
+		-- The PVP HUD (match clock, your place, the height rail). Off means
 		-- the mode is playable but unnarrated, which is only useful for testing
 		-- the camera.
 		hud = true,

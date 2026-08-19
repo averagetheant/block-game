@@ -160,7 +160,9 @@ return function()
 		zoneId = state.zoneId,
 		zoneRolling = zoneRolling,
 		standings = standings,
-		myHeight = if mine then mine.height else nil,
+		-- 0 while spectating. The HUD reads this player's height off their row in
+		-- `standings` rather than taking it as a prop of its own, so there is one
+		-- number and one place it comes from.
 		myRank = PvpController.myRank(),
 		holding = mine ~= nil and mine.holding,
 		pieceName = pieceName,

@@ -425,15 +425,15 @@ neither has to know what the other draws. A single component that tried to be bo
 would be a file where every line asks which mode it's in.
 
 ```
-        ┌────────────────────────┐              ┌─────────────────┐
-        │ 42.5 studs  2:14   2nd │  (◕)         │    STANDINGS    │
-        └────────────────────────┘  drop        │ ➊ 👤 Goblin  87 │
-              Snowy Zone            clock       │ ➋ 👤 You     42 │ ← your row
-        ┌────────────────────┐                  │ ➌ 👤 Stack   38 │
-        │                    │  what it does,   │ 4  👤 Noot    21 │
-        │ Blocks are         │  for 10s after   │ 5   Empty lane  │
-        │ slippery!          │  the reel lands  │ 6   Empty lane  │
-        └────────────────────┘                  └─────────────────┘
+        ┌────────────────────────┐                              ╷
+        │      2:14        2nd   │  (◕)                         │
+        └────────────────────────┘  drop                   👤   │  the leader
+              Snowy Zone            clock                       │
+        ┌────────────────────┐                    42.5 studs 👤▐│  you — the one
+        │                    │  what it does,                👤▐│  reading in studs
+        │ Blocks are         │  for 10s after                👤▐│
+        │ slippery!          │  the reel lands                 ●   the ground
+        └────────────────────┘
 
                                                                      (🔍)
                                                               ┌─────────────┐
@@ -448,35 +448,78 @@ would be a file where every line asks which mode it's in.
   here at first: the counter wasn't rendered at all, and the hint was passed no
   position, so it fell to the frame's origin in the **top**-left under Roblox's own
   topbar.
-- **The top bar is one line and one panel.** Your height, the clock, your place:
-  the clock is the middle third at twice their tier, because it's the number read
-  constantly and they're what you check between pieces. It used to be two stacked
-  panels — a clock over a stats row, each with its own outline — spending 132px of
-  the sky the towers grow into on three numbers that fit in 64.
-- **The standings board is sized for a full lobby** and holds that size at every
-  player count. A board that grew a row every time somebody joined would shuffle
-  the whole right edge mid-match. The seats nobody is in are **drawn as empty
-  lanes**, so the reserved height reads as part of the board rather than as a board
-  that failed to fill.
-- **A row is a fill, not a panel.** Place disc (gold / silver / bronze for the top
-  three), headshot, name, height — all drawn on the board's own glass. Six nested
-  panels, each with its own 4px outline, is what made the old board read as a
-  spreadsheet.
-- **Your row is marked with a gold edge and a wash**, rather than painted gold: the
-  yellow gem surface at row height swamped the name it was meant to point at.
+- **The top bar is one line and one panel.** The clock, centred, with your place
+  over the right end of it. It used to be two stacked panels — a clock over a
+  stats row, each with its own outline — spending 132px of the sky the towers grow
+  into on three numbers that fit in 64.
+- **The live standings are a rail, not a table.** See
+  [The height rail](#the-height-rail) below. The board that used to sit top right
+  is gone: 268 units of the sky answering "by how many studs?", which is not a
+  question anybody asks with a piece in the air.
 - **The drop dial flanks the bar** rather than sitting in it — the same rule as the
   classic turn dial, for the same reason: a dial that comes and goes with every
   piece must not be able to resize the readout beside it.
 - **The countdown and the final standings are the only centred things**, and both
   are up while nothing is being aimed, so neither can cover a tower being built.
-- **At RESULTS the top bar and the live board go away.** The results panel says
+- **At RESULTS the top bar and the rail go away.** The results panel says
   everything they were saying, so the last ten seconds are the towers with one
   surface over them.
-- A spectator's height reads **"Watching"** rather than 0.0 studs, which would be a
-  lie rather than an absence.
+- A spectator's place reads **"Watching"** rather than a blank, and the rail lights
+  nobody — an empty corner reads as a HUD that failed to fill rather than as an
+  answer.
 - **The reel is the only animated thing in the column**, and it keeps the row
   height it had as a plain label. Its description card grows *downwards*, off the
   bottom of the column, where there is nothing to push around.
+
+### The height rail
+
+`HeightRail.ui.luau`, down the right edge — the PVP answer to the classic mode's
+climb line (`ProgressLine`), which measures one tower against a checkpoint.
+
+```
+         ╷            open top: the scale keeps growing
+         │
+     👤  │            the leader
+         │
+42.5 👤 ▐│            you — lit, gold-ringed, and the only reading in studs
+     👤 ▐│
+     👤 ▐│            the green trail ends at *your* marker
+         ●            the ground every lane started on
+```
+
+- **Only your own height is a number.** Everyone else is a position. That's the
+  question a player actually asks mid-match — am I ahead, and of whom — and the
+  one the old board answered in six rows of digits nobody had time to read.
+- **The ceiling grows, and only grows.** The rail opens at `BASE_MAX` (40 studs)
+  and steps up by `STEP` (40) whenever the tallest tower comes within `HEADROOM`
+  (0.8) of the top, so the pack spends the match in the middle of the rail rather
+  than squashed into the bottom of a scale drawn for the end of it. It never steps
+  back down: a bomb taking the leader's roof off would otherwise rescale the whole
+  board, and five other players would watch their own marker jump for something
+  that happened in a lane they can't reach. The ratchet is React state, and it
+  resets when the component unmounts — which is once per match, because `PvpView`
+  renders nothing at all between them.
+- **Faces are held `MIN_GAP` (22) apart**, in two passes. The first walks down
+  from the leader pushing collisions away from the top; on its own that dumps six
+  towers all sitting at 0 studs off the bottom of the component, which is every
+  match's first ten seconds. The second runs only when that happened and pushes
+  the overflowing stack back up off the ground dot.
+- **Ties break on user id**, not on whatever `table.sort` does with two equal
+  heights — six lanes at 0 studs is the opening of every match, and faces that
+  swapped places on a re-render would each tween to the other's spot for nothing.
+- **The top fades out instead of ending in a cap.** The classic rail's top is a
+  checkpoint, somewhere you can arrive, and it gets a dot; this one is wherever
+  the ceiling happens to be this minute, and a hard end reads as a finish line
+  nobody is racing to.
+- **It's sized in plain pixels, not `UDim2.new(0, w, 1, …)`** like the classic
+  rail, because the layout pass works in pixels — faces have to be held a real
+  distance apart, and a scale-relative box has none to measure. `CANVAS_HEIGHT`
+  budgets **684**, not the 720 reference: `ScaleLayer` sizes the canvas off the
+  insetted GUI region while measuring the scale off the raw viewport, and this is
+  the one surface in the HUD tall enough to notice the difference.
+- **The rail sorts its own input.** `PvpController.standings()` already hands it
+  over tallest-first, but the layout pass depends on the order and a display bug
+  is a bad way to find out the caller stopped promising it.
 
 ### The final standings
 
@@ -517,24 +560,30 @@ second scale layer, no breakpoints. `SteerStick` reads `AbsolutePosition` but on
 ever as a *ratio* against its own track, which is scale-free — see
 [layout-surfaces.md](layout-surfaces.md).
 
-**Landscape is clear at every size tested; portrait phones are not.** The scale
-clamps at `0.5` and the canvas comes out ~720–780 units wide instead of 1280, and
-this HUD spends its width from both edges at once — a 360-wide bar centred with
-the 74 drop dial flanking it, against a 268-wide standings board pinned right.
-Those meet when the canvas drops below **1124 units**:
+**Landscape is clear at every size tested; portrait is far better than it was.**
+The scale clamps at `0.5` and the canvas comes out ~720–780 units wide instead of
+1280. What used to break at that width was the 268-wide standings board pinned
+right meeting the centred 360-wide bar and its flanking dial — the dial sat over
+the board by 172 units at a 780 canvas. The board is gone. The rail that replaced
+it is 44 wide and starts at `RAIL_TOP` (84), *below* the band the top bar and the
+drop dial occupy (y = 5…79), so those two can't reach it at any width.
+
+What's left is your own studs readout, which hangs inward off your marker (~150
+units of drawn glyphs), against the zone reel's description card, which grows
+downward off the centre column and reaches `W/2 + 180`:
 
 | Canvas | What overlaps |
 | --- | --- |
 | 1280 and up | nothing |
 | 1558 (phone landscape) | nothing |
-| 780 (portrait, 390×844) | drop dial over the board by 172; top bar by 78 |
-| 720 (portrait, 360×800) | dial by 202, bar by 108, touch row over the camera toggle by 11 |
+| 780 (portrait, 390×844) | your studs readout over the zone card by ~68 — and only while your marker is level with the card |
+| 720 (portrait, 360×800) | the same by ~98; touch row over the camera toggle by 11 |
 
-Not fixed, because both fixes are decisions rather than plumbing: reflow the board
-below the top column (costs ~200 units of sky on every device, since the column
-grows while the zone reel is rolling), or lock the place to landscape with
-`ScreenOrientation`. The second is the honest one for a mode with a fixed side-on
-camera and a 578-wide thumb row, but it's a place-wide call.
+Both remaining cases need a tall tower *and* a portrait phone *and* the ten
+seconds the zone card is up, which is why it's on this list rather than fixed. The
+fix, if it's ever wanted, is the same one the old table pointed at: lock the place
+to landscape with `ScreenOrientation` — the honest answer for a mode with a fixed
+side-on camera and a 578-wide thumb row, but a place-wide call.
 
 Worth knowing either way: the camera toggle is 62 units, which is **31 device
 pixels** at the 0.5 floor — under the ~44px a thumb reliably hits. TURN and DROP
@@ -585,8 +634,10 @@ whether a hazard can reach across a lane boundary.
 | `PvpConstants.luau` | shared | Lane layout, the three clocks, the odds, the rewards, `PHASE`, `Presentations` |
 | `PvpLanes.luau` | shared | The one place a slot becomes a world X |
 | `PvpPackets.luau` | shared | ByteNet: one `State` packet carrying every lane |
-| `PvpHUD.ui.luau` | shared | Dumb HUD: clock, your height and place, standings, countdown, results |
+| `PvpHUD.ui.luau` | shared | Dumb HUD: clock, your place, the rail, countdown, results |
 | `PvpHUD.story.luau` | shared | UI Labs story — every prop on a slider, all three phases |
+| `HeightRail.ui.luau` | shared | The live standings: a face per lane on one growing scale |
+| `HeightRail.story.luau` | shared | UI Labs story — drive the ceiling, and pile every lane on the ground |
 | `ZoneReel.ui.luau` | shared | The zone line: spins through the names for the roll window, lands, says what the zone does |
 | `ZoneReel.story.luau` | shared | UI Labs story — `autoRoll` runs the spin/land/describe loop on its own |
 | `PvpService.server.luau` | server | The match: lanes, the poll, the zone clock, the standings, the payout |

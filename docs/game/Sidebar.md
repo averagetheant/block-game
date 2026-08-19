@@ -65,8 +65,9 @@ Who's on it, as shipped:
 | menu | 1 | Shop | `Store/Sidebar.luau` |
 | menu | 2 | Bag | `Store/Sidebar.luau` |
 | menu | 3 | Settings | `Settings/Sidebar.luau` |
-| actions | 1 | Nuke | `TowerGame/TowerProductsPresentation.client.luau` |
-| actions | 2 | Skip | `TowerGame/TowerProductsPresentation.client.luau` |
+| actions | 1 | Nuke *(classic only)* | `TowerGame/TowerProductsPresentation.client.luau` |
+| actions | 1 | Nuke Others *(PVP only)* | `TowerGame/TowerProductsPresentation.client.luau` |
+| actions | 2 | Skip *(classic only)* | `TowerGame/TowerProductsPresentation.client.luau` |
 
 ### Declarative entries (both realms)
 
@@ -127,12 +128,50 @@ realms disagreeing is harmless.
 | `frameId` | `string?` | UIShell frame to toggle. Defaults to `id` unless `onClick` is set. |
 | `windowTitle` / `titleVariant` / `windowSize` | — | Window chrome. Title defaults to `label`. |
 | `onClick` | `(() -> ())?` | Runs instead of opening a frame. Set one or the other, not both. |
+| `visible` | `(() -> boolean)?` | Whether the entry belongs on the rail right now. Called on every read; `nil` means always. |
+
+### Entries that come and go
+
+`visible` is for an entry that only applies to part of the game — a gamemode's
+own action button, something that unlocks. The owning feature keeps one static
+declaration and answers when it applies, rather than unregistering and
+re-registering the entry as the game changes.
+
+The rail only re-reads the registry on `Changed`, so a feature whose answer flips
+has to say so — nothing else can know it did:
+
+```lua
+Sidebar.registerEntry({
+    id = "TowerNukeOthers",
+    label = "Nuke Others",
+    group = "actions",
+    visible = function() return PvpController.isActive() end,
+    onClick = function() ... end,
+})
+
+PvpController.DataChanged:Connect(function()
+    -- On the edge, not on every packet: `refresh` re-renders the rail.
+    Sidebar.refresh()
+end)
+```
+
+Two entries with the same `order` in the same group are fine when their `visible`
+answers are mutually exclusive — that's how TowerGame swaps Nuke for Nuke Others
+without the rail's contents shifting under the player.
 
 ## Public API
 
 ```lua
 local Sidebar = require(ReplicatedStorage.Features.Sidebar)
 ```
+
+### `Sidebar.registerEntry(def)` / `Sidebar.refresh()`
+
+`registerEntry` puts an entry on the rail (see [The registry](#the-registry)).
+`refresh` tells a rail already on screen to re-read the registry — for a feature
+whose `visible` answer changed. Registering the same entry again would do it too,
+but it would also warn about a double registration and claim the entry itself had
+changed, which isn't what happened.
 
 ### `<Sidebar.UI items={…}>`
 

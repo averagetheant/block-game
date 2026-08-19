@@ -610,6 +610,57 @@ recorded per player via `TowerStatsService.recordPlayerHeight` — the classic
 `recordHeight` credits the whole room because there is one shared tower, and in
 PVP the tower is yours.
 
+## The Robux buttons
+
+The left rail's action cluster is mode-aware, because two of TowerGame's three
+action products mean something different — or nothing at all — once a match owns
+the board.
+
+| Rail entry | Classic | PVP |
+| ---------- | ------- | --- |
+| `TowerNuke` — "Nuke" | on the rail | hidden |
+| `TowerNukeOthers` — "Nuke Others" | hidden | on the rail |
+| `TowerNextCheckpoint` — "Skip" | on the rail | hidden |
+
+**Nuke and Nuke Others are one product** — same id (`PRODUCTS.NUKE`), same price,
+same "X bought Nuke!" announcement. Only the label and the target change:
+
+- **Classic** → `TowerService.nuke()`. One shared tower, and it goes.
+- **PVP** → `PvpService.nukeOthers(buyer)`. Six towers, and *every one but the
+  buyer's* goes. Nuking "the tower" is meaningless with six of them, and nuking
+  all six would include the one the buyer is trying to win with.
+
+Each lane is blown up by `TowerService.nukeLane(laneX, floorY)` — the same
+barrage, wreck and cleanup delay as the classic nuke, walked up that lane's own
+column instead of the arena's centre line. `NUKE_RADIUS` (60) is half
+`LANE_SPACING` (120), so a blast on the near edge of one lane stops short of the
+tower in the next: the buyer's lane is safe by geometry as well as by the loop
+that skips it. That's the same arithmetic that lets a bomb be safe in a match.
+
+**It only fires during `PLAYING`.** During `COUNTDOWN` there is nothing standing,
+and at `RESULTS` the heights are frozen and the standings are being read off the
+towers, so rearranging them then would make the board disagree with the panel over
+it. Both cases return `false`, which leaves the receipt undelivered for Roblox to
+re-deliver — the buyer gets what they paid for a moment later. So does the case
+where nobody else has a block up: a nuke that hits nothing isn't one.
+
+**The handler tries `nukeOthers` first and falls through to `TowerService.nuke`**
+rather than branching on "is a match running". Each call already knows whether it
+applies, and neither can fire in the other's mode: `nukeOthers` is false outside
+`PLAYING`, and a match runs *inside* the classic round break — exactly when
+`nuke()` refuses (`intermission`). A flag between them would be a third opinion,
+and a wrong one would defer the purchase forever.
+
+**Skip has no PVP twin.** A match has no checkpoints. Its handler needs no branch
+either — `clearStage` already refuses during the round break a match runs inside —
+so the entry is simply hidden, and a receipt re-delivered mid-match defers and is
+honoured once the round comes back.
+
+The rail is a list of static declarations; the entries say when they apply via
+`Sidebar`'s `visible` predicate, and `TowerProductsPresentation` calls
+`Sidebar.refresh()` on the edge where `PvpController.isActive()` flips. See
+[Sidebar.md](Sidebar.md) § "Entries that come and go".
+
 ## Testing it
 
 The mode is otherwise a full storm clock away — five minutes of classic play, then
@@ -640,7 +691,7 @@ whether a hazard can reach across a lane boundary.
 | `HeightRail.story.luau` | shared | UI Labs story — drive the ceiling, and pile every lane on the ground |
 | `ZoneReel.ui.luau` | shared | The zone line: spins through the names for the roll window, lands, says what the zone does |
 | `ZoneReel.story.luau` | shared | UI Labs story — `autoRoll` runs the spin/land/describe loop on its own |
-| `PvpService.server.luau` | server | The match: lanes, the poll, the zone clock, the standings, the payout |
+| `PvpService.server.luau` | server | The match: lanes, the poll, the zone clock, the standings, the payout, `nukeOthers` |
 | `PvpController.client.luau` | client | Match store + `myLane` / `laneOriginX` / `standings` |
 | `PvpView.client.luau` | client | Container: subscribes, runs the clocks, resolves names |
 | `PvpPresentation.client.luau` | client | Registers the HUD as a UIRegistry root |

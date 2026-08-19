@@ -2066,8 +2066,8 @@ the place or the purchase prompt throws.
 | 500 Coins | `3707809246` | currency | Store credits `coins` generically |
 | 1000 Coins | `3707809250` | currency | ” |
 | 10000 Coins | `3707809258` | currency | ” |
-| Nuke | `3707809217` | action | `TowerService.nuke()` — the tower, not the round |
-| Next Checkpoint | `3707809233` | action | `TowerService.clearStage()` |
+| Nuke | `3707809217` | action | `TowerService.nuke()` — the tower, not the round. In a PVP match, `PvpService.nukeOthers()` instead |
+| Next Checkpoint | `3707809233` | action | `TowerService.clearStage()`. Deferred while a PVP match is running |
 | Extend Storm | `3708160736` | action | `TowerService.extendStorm(EXTEND_STORM_SECONDS)` |
 
 The three bundles appear as cards in the shop's Robux tab. The actions never
@@ -2076,6 +2076,12 @@ own button instead: Nuke and Skip are rail entries registered by
 `TowerProductsPresentation` into the "actions" cluster (`assets.Icons.nuke` and
 `assets.Icons.arrowRightOutline`), and Extend Storm is a button on the HUD
 itself, beside the clock it buys.
+
+Both rail entries are **classic-only**. While a PVP match owns the board, Skip
+comes off the rail (a match has no checkpoints) and Nuke is replaced by a
+"Nuke Others" entry in the same seat — the same product id pointed at the only
+target a match has. See
+[TowerGamePvp.md § The Robux buttons](TowerGamePvp.md#the-robux-buttons).
 
 ### Extend Storm
 
@@ -2111,6 +2117,11 @@ the piece they're aiming; it's just reseated down to the floor it used to clear
 
 What the room loses is the climb above the last checkpoint floor, which is what a
 nuke is supposed to cost them.
+
+`TowerService.nukeLane(laneX, floorY)` is the same thing scoped to one lane —
+same barrage, same wreck, same cleanup delay, walked up that lane's own column.
+It exists for PVP, where routing the purchase through `nuke()` would take all six
+towers on the board including the buyer's.
 
 Taking the tower out of `blocks` **before** the blasts is load-bearing twice
 over, and it's what `breakTower` and the checkpoint demolition already do: the

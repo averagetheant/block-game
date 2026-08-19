@@ -109,7 +109,7 @@ return function(Store)
 	Store.registerProduct({
 		id = PRODUCTS.NUKE,
 		name = "Nuke",
-		description = "Blow the standing tower off the plane. The run keeps going — the climb doesn't.",
+		description = "Blow the standing tower off the plane — or, in a PVP match, every tower but your own. The run keeps going; the climb doesn't.",
 		icon = CASH_ICON,
 		group = "action",
 		order = 1,

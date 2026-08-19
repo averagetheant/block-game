@@ -48,6 +48,18 @@ export type Entry = {
 	-- Runs instead of opening a frame. An entry with both opens the frame and
 	-- then runs this, which is almost never what you want — pick one.
 	onClick: (() -> ())?,
+	-- Whether the entry belongs on the rail *right now*. Called every time the
+	-- rail reads the registry; nil means always, which is nearly every entry.
+	--
+	-- For an entry that only applies to part of the game — a gamemode's own
+	-- action button, something that unlocks — so the owning feature can take it
+	-- off the rail without unregistering and re-registering it, and without this
+	-- file learning what a gamemode is.
+	--
+	-- The rail only re-reads on `Changed`, so a feature whose answer here changes
+	-- has to say so: call `Sidebar.refresh()` when it flips. Nobody else can know
+	-- that it did.
+	visible: (() -> boolean)?,
 }
 
 local Registry = {}
@@ -63,6 +75,13 @@ function Registry.registerEntry(def: Entry)
 		warn(`[Sidebar] entry "{def.id}" already registered; overwriting`)
 	end
 	entries[def.id] = def
+	Registry.Changed:Fire()
+end
+
+-- Tell the rail to re-read the registry. For a feature whose `visible` answer
+-- depends on game state — the registry can't see that change, and the entry
+-- itself hasn't changed, so registering again would be a lie (and a warning).
+function Registry.refresh()
 	Registry.Changed:Fire()
 end
 
@@ -87,14 +106,19 @@ local function byOrder(a: Entry, b: Entry): boolean
 	return a.label < b.label
 end
 
--- Every entry in `group`, sorted. Returns a fresh list each call.
+-- Every entry in `group` that applies right now, sorted. Returns a fresh list
+-- each call.
 function Registry.list(group: Group?): { Entry }
 	local wanted = group or "menu"
 	local result: { Entry } = {}
 	for _, entry in entries do
-		if (entry.group or "menu") == wanted then
-			table.insert(result, entry)
+		if (entry.group or "menu") ~= wanted then
+			continue
 		end
+		if entry.visible and not entry.visible() then
+			continue
+		end
+		table.insert(result, entry)
 	end
 	table.sort(result, byOrder)
 	return result

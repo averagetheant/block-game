@@ -1,8 +1,9 @@
 -- What TowerGame's three Robux action products actually do.
 --
 -- The receipt itself is Store's business (one ProcessReceipt per game); this
--- only says what "Nuke" means. Keeping the handler here rather than in
--- Store.luau is deliberate: Store.luau loads on both realms and these call
+-- only says what "Nuke" means — including the fact that it means something
+-- different while a PVP match owns the board. Keeping the handler here rather
+-- than in Store.luau is deliberate: Store.luau loads on both realms and these call
 -- server code, and it keeps Store from ever learning that a nuke exists.
 --
 -- Every handler returns false when the game is mid-checkpoint. That's not a
@@ -19,6 +20,7 @@ local ServerScriptService = game:GetService("ServerScriptService")
 
 local Constants = require(ReplicatedStorage.Features.TowerGame.Constants)
 local Packets = require(ReplicatedStorage.Features.TowerGame.Packets)
+local PvpService = require(ServerScriptService.Features.TowerGame.PvpService)
 local StoreService = require(ServerScriptService.Features.Store.StoreService)
 local TowerService = require(ServerScriptService.Features.TowerGame.TowerService)
 
@@ -46,13 +48,34 @@ function TowerProductsService.Start()
 		return
 	end
 
+	-- Nuke means two different things depending on which mode owns the board, and
+	-- it's one product either way: same id, same price, same button. In the
+	-- classic run there is one tower and it's everyone's, so it goes. In a match
+	-- there are six and one of them belongs to the buyer, so the other five go —
+	-- see `PvpService.nukeOthers`. The rail says which one you're buying: the
+	-- entry reads "Nuke Others" during a match (see TowerProductsPresentation).
+	--
+	-- Tried in that order rather than branched on "is a match running", because
+	-- each call already knows whether it applies and neither can fire in the
+	-- other's mode: `nukeOthers` is false outside `PLAYING`, and a match runs
+	-- *inside* the classic round break, which is exactly when `TowerService.nuke`
+	-- refuses. Asking a flag instead would put a third opinion between them, and
+	-- a wrong one would silently defer the purchase forever.
 	StoreService.registerProductHandler(
 		Constants.PRODUCTS.NUKE,
-		announced(Constants.PRODUCTS.NUKE, function()
+		announced(Constants.PRODUCTS.NUKE, function(player)
+			if PvpService.nukeOthers(player) then
+				return true
+			end
 			return TowerService.nuke()
 		end)
 	)
 
+	-- No PVP branch, and none needed: a match has no checkpoints to skip, and it
+	-- runs inside the round break that `clearStage` already refuses to fire
+	-- during. The sidebar entry is hidden for the duration too, so the only way in
+	-- here mid-match is a re-delivered receipt — which defers again and is
+	-- honoured once the round comes back.
 	StoreService.registerProductHandler(
 		Constants.PRODUCTS.NEXT_CHECKPOINT,
 		announced(Constants.PRODUCTS.NEXT_CHECKPOINT, function()

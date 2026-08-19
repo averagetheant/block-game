@@ -16,6 +16,10 @@ Sidebar.Item = require(script.SidebarItem)
 Sidebar.Rail = require(script.SidebarRail)
 
 Sidebar.registerEntry = Sidebar.Registry.registerEntry
+-- For an entry whose `visible` answer changes with the game (see Registry.luau):
+-- the rail only re-reads the registry when it's told to, and the feature that
+-- owns the entry is the only thing that knows the answer moved.
+Sidebar.refresh = Sidebar.Registry.refresh
 
 ------------------------------------------------------------------------------
 -- Auto-discovery

@@ -697,6 +697,40 @@ function PvpService.isActive(): boolean
 	return phase ~= PHASE.OFF
 end
 
+-- The Nuke product, as it means something here: **every other lane on the board**
+-- goes up, and the buyer's tower is the one thing left standing.
+--
+-- It's the same purchase as the classic mode's — same product id, same price,
+-- same chat announcement — pointed at the only target a match has. Nuking "the
+-- tower" is meaningless with six of them, and nuking all six would include the
+-- one the buyer is trying to win with.
+--
+-- Only while pieces are being dealt. During the countdown there is nothing to
+-- blow up; at the results the heights are frozen and the standings are being read
+-- off the towers, so rearranging them then would make the board disagree with the
+-- panel over it. Both cases return false, which leaves the receipt undelivered —
+-- Roblox re-delivers it and the buyer gets what they paid for a moment later.
+--
+-- False again when nobody else has anything standing (a solo match, or six lanes
+-- that have all just been struck): a nuke that hits nothing isn't one, and the
+-- retry will land on the next lane to put a block up.
+function PvpService.nukeOthers(buyer: Player): boolean
+	if phase ~= PHASE.PLAYING then
+		return false
+	end
+
+	local hit = false
+	for _, lane in lanes do
+		if lane.player == buyer then
+			continue
+		end
+		-- `or hit` rather than a break: this is every other lane, not the first
+		-- one that happened to have blocks in it.
+		hit = TowerService.nukeLane(lane.x, lane.floorY) or hit
+	end
+	return hit
+end
+
 function PvpService.Start()
 	-- A leaver's lane is retired by the poll, which is where every other lane
 	-- change happens too. Nothing to bind here — but the hook has to exist for

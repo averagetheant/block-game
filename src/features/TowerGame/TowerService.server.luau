@@ -4308,6 +4308,86 @@ function TowerService.laneBlockCount(laneX: number): number
 	return count
 end
 
+-- `tearTowerLoose` for one lane: the blocks standing in it come out of the list,
+-- unanchored, and are handed back as wreckage for the caller to blast and then
+-- destroy. The other five lanes are untouched, which is the whole point.
+local function tearLaneLoose(laneX: number): { Block }
+	local debris: { Block } = {}
+	for index = #blocks, 1, -1 do
+		if blocks[index].laneX ~= laneX then
+			continue
+		end
+		local block = removeBlockAt(index)
+		if block.root.Parent ~= nil then
+			unanchorModel(block.model)
+		end
+		table.insert(debris, block)
+	end
+	return debris
+end
+
+-- The nuke, aimed at one lane.
+--
+-- `TowerService.nuke` above is the classic run's: one shared tower, measured off
+-- `state.height` and torn loose in its entirety. A match has six towers standing
+-- at once, so a purchase routed through that path would take every lane on the
+-- board — including the buyer's, which is the opposite of what they bought (see
+-- `PvpService.nukeOthers`).
+--
+-- Same barrage, same wreck, same cleanup delay, so a nuke looks like a nuke in
+-- either mode; only the column it walks up and the blocks it can reach change.
+-- Returns whether there was anything standing to blow up — an empty lane is not
+-- a nuke, and the caller uses the answer to decide whether the purchase landed.
+function TowerService.nukeLane(laneX: number, floorY: number): boolean
+	-- Measured before the blocks leave the list, for the reason `nuke` measures
+	-- first: the barrage is aimed at what was standing a moment ago.
+	local top = measureLane(laneX, floorY)
+	local debris = tearLaneLoose(laneX)
+	if #debris == 0 then
+		return false
+	end
+
+	task.spawn(function()
+		for rung = 1, Constants.NUKE_BLASTS do
+			local fraction = rung / Constants.NUKE_BLASTS
+			for column = 1, Constants.NUKE_BLASTS_ACROSS do
+				local spread = (column - 0.5) / Constants.NUKE_BLASTS_ACROSS * 2 - 1
+				local jitter = (math.random() * 2 - 1) * Constants.NUKE_BLAST_JITTER
+				blastAt(
+					Vector3.new(
+						-- Off the lane's own centre line, not the arena's. NUKE_RADIUS
+						-- (60) is half LANE_SPACING (120), so a blast on the near edge
+						-- of one lane stops short of the tower in the next — the same
+						-- arithmetic that keeps a bomb in its own lane.
+						laneX + math.clamp(spread + jitter, -1, 1) * Constants.STEER_LIMIT_X,
+						floorY + top * fraction,
+						Constants.PLANE_Z
+					),
+					Constants.NUKE_RADIUS,
+					Constants.NUKE_PRESSURE,
+					Constants.NUKE_IMPULSE,
+					nil,
+					debris
+				)
+			end
+			task.wait(Constants.NUKE_BLAST_INTERVAL)
+		end
+	end)
+
+	Sfx.playAtPosition("Explosion", Vector3.new(laneX, floorY + top / 2, Constants.PLANE_Z), Constants.EXPLOSION_VOLUME)
+
+	task.delay(
+		Constants.NUKE_BLASTS * Constants.NUKE_BLAST_INTERVAL + Constants.NUKE_WRECK_SECONDS,
+		function()
+			for _, block in debris do
+				block.model:Destroy()
+			end
+		end
+	)
+
+	return true
+end
+
 -- Take one lane off the board: the piece anyone is aiming over it, and every
 -- block standing in it. Used when a match ends and when a lane is retired.
 --
